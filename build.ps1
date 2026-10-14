@@ -11,9 +11,15 @@ $configuration = 'Release'
 $net_baseoutput = "dnSpy\dnSpy\bin\$configuration"
 $apphostpatcher_dir = "Build\AppHostPatcher"
 
-#
-# The reason we don't use dotnet build is that dotnet build doesn't support COM references yet https://github.com/dnSpy/dnSpy/issues/1053
-#
+# Engine selection:
+#   -NoMsbuild -> 'dotnet' CLI, resolves SDK 10.0.401 (C# 14). REQUIRED here:
+#                 VS2022 17.14's msbuild resolves SDK 9.0.317 (C# 13) and cannot
+#                 target net10.0-windows (the 'targeting .NET 10.0 is not
+#                 supported' error). build.cmd defaults to -NoMsbuild.
+#   default    -> 'msbuild'. Kept only for parity with upstream dnSpy.
+# The upstream COM-reference rationale (dnSpy/dnSpy#1053) does NOT apply to this
+# repo: the only COM-bearing project, ILSpy.AddIn.csproj, is not in dnSpy.sln,
+# so the actual build set has no COM references.
 
 function Build-NetFramework {
 	Write-Host 'Building .NET Framework x86 and x64 binaries'
@@ -84,6 +90,11 @@ function Build-SelfContainedNet {
 		msbuild -v:m -m -restore -t:Publish -p:Configuration=$configuration -p:TargetFramework=$net_tfm -p:RuntimeIdentifier=$rid -p:SelfContained=True
 		if ($LASTEXITCODE) { exit $LASTEXITCODE }
 	}
+
+    # 'dotnet publish' / 'msbuild -t:Publish' do not print the 'Build succeeded,
+    # 0 warnings, 0 errors' summary that 'dotnet build' emits, so this echo is the
+    # only explicit success marker for the publish stage in the log.
+    Write-Host "Self-contained .NET $arch publish succeeded"
 
     Write-Host "Patching self contained .NET $arch apphosts"
 

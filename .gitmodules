@@ -22,3 +22,6 @@
 	path = Extensions/dnSpy.Debugger/Mono.Debugger.Soft
 	url = https://github.com/dnSpyEx/Mono.Debugger.Soft.git
 	branch = dnSpy
+[submodule "Extensions/ILSpy32.Decompiler/ICSharpCode.Decompiler"]
+	path = Extensions/ILSpy32.Decompiler/ICSharpCode.Decompiler
+	url = https://github.com/icsharpcode/ILSpy.git

@@ -58,3 +58,14 @@ dotnet run -c Release -- path/to/assembly.dll --cs
 多个连续无变量名 catch、混合、裸 catch 六种形态）编译后反编译，输出全部为合法 VB：
 `Catch ex1 As ...` 且变量名在方法内唯一；`dnSpy.AsmEditor.x.dll` 全量回归
 `ok=1278 failed=0`。
+
+### 索引器参数提取（2026-10-31）
+
+**改进**：`ILSpyEnvironmentProvider32.GetParametersForProperty` 原返回空数组。现按
+ILSpy 3.2 上游方式实现——读取 `PropertyDeclaration` 上的 Mono.Cecil `PropertyReference`
+注解，用 `CSharpDecompiler.ConvertType` 把参数类型转成 C# AST，并映射 `out`/`ref` 修饰符。
+
+**验证**：用 `testsrc/IndexerShapes.cs`（单参数、多参数、只读索引器）反编译，输出正确 VB：
+`Public Default Property Item(index As Integer) As Integer`、
+`Public ReadOnly Default Property Item(name As String, index As Integer) As Integer`。
+`dnSpy.AsmEditor.x.dll` 全量回归 `ok=1278 failed=0`。

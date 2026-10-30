@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>ccverify</AssemblyName>
+    <RootNamespace>CcVerify</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <!-- Prefer the locally built CodeConverter package over nuget.org -->
+    <RestoreSources>D:\Codebase\CodeConverter\CodeConverter\bin\Release;https://api.nuget.org/v3/index.json</RestoreSources>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- ILSpy32 decompiler extension (same reflection host as vbverify) -->
+    <Reference Include="dnSpy.Decompiler.ILSpy32.x">
+      <HintPath>..\..\..\dnSpy\dnSpy\bin\Release\net10.0-windows\dnSpy.Decompiler.ILSpy32.x.dll</HintPath>
+    </Reference>
+    <Reference Include="ILSpy32.Decompiler">
+      <HintPath>..\..\..\dnSpy\dnSpy\bin\Release\net10.0-windows\ILSpy32.Decompiler.dll</HintPath>
+    </Reference>
+    <Reference Include="dnSpy.Contracts.Logic">
+      <HintPath>..\..\..\dnSpy\dnSpy\bin\Release\net10.0-windows\dnSpy.Contracts.Logic.dll</HintPath>
+    </Reference>
+    <Reference Include="dnlib">
+      <HintPath>..\..\..\dnSpy\dnSpy\bin\Release\net10.0-windows\dnlib.dll</HintPath>
+    </Reference>
+    <!-- CodeConverter (Roslyn C#->VB) -->
+    <PackageReference Include="ICSharpCode.CodeConverter" Version="10.0.1" />
+  </ItemGroup>
+</Project>

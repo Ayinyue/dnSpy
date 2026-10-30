@@ -18,6 +18,14 @@ using TypeSystem = ICSharpCode.NRefactory.TypeSystem;
 using CS = ICSharpCode.Decompiler.CSharp.Syntax;
 using VB = ICSharpCode.NRefactory.VB;
 
+// This file is a direct port of the ILSpy 3.2 VB converter, which predates
+// nullable reference type annotations. The converter freely mixes C# AST,
+// Mono.Cecil and VB AST objects whose nullability cannot be inferred, so the
+// whole file runs in the oblivious (legacy) nullable context. The public
+// IEnvironmentProvider contract implemented by our own code lives in a
+// separate nullable-enabled file (ILSpyEnvironmentProvider32.cs).
+#nullable disable
+
 namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 	public interface IEnvironmentProvider
 	{

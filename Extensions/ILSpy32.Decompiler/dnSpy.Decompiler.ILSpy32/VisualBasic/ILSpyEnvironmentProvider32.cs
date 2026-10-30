@@ -3,9 +3,8 @@
 //
 // ILSpyEnvironmentProvider adapted for the ILSpy 3.2 engine. The 3.2 engine
 // annotates its C# AST nodes with Mono.Cecil references (TypeReference,
-// MethodReference, ...), so this provider reads those annotations directly.
-// Indexer parameter extraction (GetParametersForProperty) is not implemented
-// yet; ordinary properties are unaffected.
+// MethodReference, PropertyReference, ...), so this provider reads those
+// annotations directly.
 
 using System;
 using System.Linq;
@@ -55,7 +54,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			return null;
 		}
 
-		public IType ResolveType(AstType type, TypeDeclaration entity = null) =>
+		public IType ResolveType(AstType type, TypeDeclaration? entity = null) =>
 			SpecialType.UnknownType;
 
 		public bool IsMethodGroup(CS.Expression expression) {
@@ -70,9 +69,25 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			expression.Annotation<EventDefinition>() is not null;
 
 		public CS.ParameterDeclaration[] GetParametersForProperty(CS.PropertyDeclaration property) {
-			// Indexer parameters are not extracted yet. Ordinary properties have no
-			// parameters, so returning an empty array is correct for them.
-			return Array.Empty<CS.ParameterDeclaration>();
+			// ILSpy 3.2 annotates property/indexer declarations with a Mono.Cecil
+			// PropertyReference. Reuse the engine's ConvertType to build C# AST
+			// parameter declarations (same path as the upstream provider).
+			var propInfo = property.Annotation<PropertyReference>();
+			if (propInfo is null)
+				return Array.Empty<CS.ParameterDeclaration>();
+			return propInfo.Parameters.Select(p => new CS.ParameterDeclaration(
+				ICSharpCode.Decompiler.CSharp.CSharpDecompiler.ConvertType(p.ParameterType),
+				p.Name,
+				GetModifiers(p)
+			)).ToArray();
+		}
+
+		static CS.ParameterModifier GetModifiers(ParameterDefinition p) {
+			if (p.IsOut && p.IsIn)
+				return CS.ParameterModifier.Ref;
+			if (p.IsOut)
+				return CS.ParameterModifier.Out;
+			return CS.ParameterModifier.None;
 		}
 	}
 }

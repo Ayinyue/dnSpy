@@ -43,6 +43,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		Stack<TypeDeclaration> types;
 		Stack<MemberInfo> members;
 		readonly ModuleDef module;
+		int catchVariableCount;
 
 		enum ConvertedStatementKind {
 			None,
@@ -1430,8 +1431,17 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		{
 			var clause = new CatchBlock();
 
-			if (!catchClause.Type.IsNull)
+			if (!catchClause.Type.IsNull) {
 				clause.ExceptionType = (AstType)catchClause.Type.AcceptVisitor(this, data);
+				// VB requires a variable name in "Catch ex As Exception". C# 6 allows
+				// "catch (Exception)" without a variable, which the 3.2 engine emits
+				// with an empty VariableNameToken. Generate a unique name in that case,
+				// otherwise NRefactory's OutputVisitor asserts (and the output would be
+				// invalid VB anyway).
+				if (catchClause.VariableNameToken.IsNull) {
+					clause.ExceptionVariable = Identifier.Create(catchClause.Annotations, "ex" + (++catchVariableCount));
+				}
+			}
 			if (!catchClause.VariableNameToken.IsNull)
 				clause.ExceptionVariable = Identifier.Create(catchClause.VariableNameToken.Annotations, catchClause.VariableName);
 			if (!catchClause.Condition.IsNull)

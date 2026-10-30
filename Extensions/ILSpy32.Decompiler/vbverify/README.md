@@ -42,3 +42,19 @@ dotnet run -c Release -- path/to/assembly.dll --cs
 期间发现并修复了引擎级 bug：`IntroduceUsingDeclarations` 在 dnlib→cecil 桥接场景下
 对不在 `RequiredNamespacesSuperset` 中的命名空间触发 `Debug.Assert` 崩溃。
 修复见 `engine.patch`（追加该文件的 diff）。
+
+### Catch 子句隐式变量修复（2026-10-31）
+
+**现象**：C# 6 允许 `catch (Exception)` 省略变量名，ILSpy 3.2 引擎对这类子句产出空的
+`VariableNameToken`；而 VB 语法要求 `Catch <var> As <Type>`。转换后
+`CatchBlock.ExceptionVariable` 为 null，触发 NRefactory `OutputVisitor.VisitCatchBlock`
+断言（`!catchBlock.ExceptionVariable.IsNull`），并使 AsmEditor 全量回归失败。
+
+**修复**：`CSharpToVBConverter32.VisitCatchClause` 在 `ExceptionType` 非空但
+`VariableNameToken` 为空时，生成递增的隐式变量名 `ex1`/`ex2`/...（`catchVariableCount`）。
+裸 `catch`（无类型）不生成变量名，保持 VB 的 `Catch`。
+
+**验证**：用 `testsrc/CatchShapes.cs`（覆盖命名 catch、无变量名 catch、`When` 过滤器、
+多个连续无变量名 catch、混合、裸 catch 六种形态）编译后反编译，输出全部为合法 VB：
+`Catch ex1 As ...` 且变量名在方法内唯一；`dnSpy.AsmEditor.x.dll` 全量回归
+`ok=1278 failed=0`。

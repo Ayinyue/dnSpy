@@ -1,0 +1,140 @@
+// Copyright (c) 2011 AlphaSierraPapa for the SharpDevelop Team
+// Copyright (c) 2014-2019 de4dot@gmail.com
+//
+// Visual Basic decompiler backed by the ILSpy 3.2 engine. It reuses the dnlib-to-cecil
+// bridge and the shared engine cache from CSharpDecompiler32, asks the 3.2 engine for a
+// C# SyntaxTree, converts it to a VB AST with CSharpToVBConverter32, then renders the VB
+// AST through OutputVisitor + VBTextOutputFormatter32.
+
+using System;
+using System.Runtime.CompilerServices;
+using dnlib.DotNet;
+using dnSpy.Contracts.Decompiler;
+using dnSpy.Contracts.Text;
+using dnSpy.Decompiler.ILSpy32.Common;
+using dnSpy.Decompiler.ILSpy32.CSharp;
+using dnSpy.Decompiler.ILSpy32.Settings;
+using ICSharpCode.NRefactory.VB;
+using ICSharpCode.NRefactory.VB.Ast;
+using Mono.Cecil;
+
+namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
+	sealed class VBDecompiler32 : DecompilerBase {
+		static readonly Guid THE_GUID = new Guid("9C5E4C7A-1F2B-4E6D-9A30-8B7D2E5F6A41");
+
+		readonly DecompilerSettings32 settings;
+		readonly string uniqueNameUI;
+
+		public VBDecompiler32(DecompilerSettings32 settings, string uniqueNameUI) {
+			this.settings = settings ?? throw new ArgumentNullException(nameof(settings));
+			this.uniqueNameUI = uniqueNameUI ?? throw new ArgumentNullException(nameof(uniqueNameUI));
+		}
+
+		public override DecompilerSettingsBase Settings => settings;
+		public override string ContentTypeString => "VB ILSpy";
+		public override string GenericNameUI => DecompilerConstants.GENERIC_NAMEUI_VISUALBASIC;
+		public override string UniqueNameUI => uniqueNameUI;
+		public override double OrderUI => DecompilerConstants.VISUALBASIC_ILSPY_ORDERUI + 0.5;
+		public override Guid GenericGuid => DecompilerConstants.LANGUAGE_VISUALBASIC;
+		public override Guid UniqueGuid => THE_GUID;
+		public override string FileExtension => ".vb";
+		public override string? ProjectFileExtension => ".vbproj";
+
+		public override void WriteCommentBegin(IDecompilerOutput output, bool addSpace) {
+			if (addSpace)
+				output.Write("' ", BoxedTextColor.Comment);
+			else
+				output.Write("'", BoxedTextColor.Comment);
+		}
+
+		public override void WriteCommentEnd(IDecompilerOutput output, bool addSpace) { }
+
+		public override void Decompile(MethodDef method, IDecompilerOutput output, DecompilationContext ctx) =>
+			DecompileMember(method, output, ctx);
+
+		public override void Decompile(PropertyDef property, IDecompilerOutput output, DecompilationContext ctx) =>
+			DecompileMember(property, output, ctx);
+
+		public override void Decompile(FieldDef field, IDecompilerOutput output, DecompilationContext ctx) =>
+			DecompileMember(field, output, ctx);
+
+		public override void Decompile(EventDef ev, IDecompilerOutput output, DecompilationContext ctx) =>
+			DecompileMember(ev, output, ctx);
+
+		public override void Decompile(TypeDef type, IDecompilerOutput output, DecompilationContext ctx) {
+			if (type is null || output is null || ctx is null)
+				throw new ArgumentNullException();
+			var cecilType = TryGetCecil(type.Module, type.MDToken.Raw) as TypeDefinition;
+			if (cecilType is null) {
+				WriteNote(output, "' ILSpy 3.2: cannot bridge this module (no in-memory snapshot available).");
+				return;
+			}
+			DecompileCore(type.Module, output, ctx, d => d.DecompileType(new ICSharpCode.Decompiler.TypeSystem.FullTypeName(cecilType.FullName)));
+		}
+
+		void DecompileMember(IMDTokenProvider? member, IDecompilerOutput output, DecompilationContext ctx) {
+			if (member is null || output is null || ctx is null)
+				throw new ArgumentNullException();
+			var module = (member as IMemberDef)?.Module;
+			if (module is null) {
+				WriteNote(output, "' ILSpy 3.2: member has no module.");
+				return;
+			}
+			var cecilMember = TryGetCecil(module, member.MDToken.Raw) as IMemberDefinition;
+			if (cecilMember is null) {
+				WriteNote(output, "' ILSpy 3.2: cannot bridge this module (no in-memory snapshot available).");
+				return;
+			}
+			DecompileCore(module, output, ctx, d => d.Decompile(cecilMember));
+		}
+
+		static IMemberDefinition? TryGetCecil(ModuleDef module, uint rawToken) {
+			var cecilModule = DnlibCecilBridge.TryGetModule(module);
+			if (cecilModule is null)
+				return null;
+			return DnlibCecilBridge.TryGetMember(cecilModule, rawToken);
+		}
+
+		void DecompileCore(ModuleDef module, IDecompilerOutput output, DecompilationContext ctx, Func<ICSharpCode.Decompiler.CSharp.CSharpDecompiler, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree> decompile) {
+			ctx.CancellationToken.ThrowIfCancellationRequested();
+			var cecilModule = DnlibCecilBridge.TryGetModule(module);
+			if (cecilModule is null) {
+				WriteNote(output, "' ILSpy 3.2: cannot bridge this module.");
+				return;
+			}
+			ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree csharpUnit;
+			try {
+				lock (CSharpDecompiler32.engineLock) {
+					if (!CSharpDecompiler32.engineCache.TryGetValue(cecilModule, out var engine)) {
+						engine = new ICSharpCode.Decompiler.CSharp.CSharpDecompiler(cecilModule, settings.EngineSettings);
+						CSharpDecompiler32.engineCache.Add(cecilModule, engine);
+					}
+					csharpUnit = decompile(engine);
+				}
+			}
+			catch (OperationCanceledException) {
+				throw;
+			}
+			catch (Exception ex) {
+				WriteNote(output, "' ILSpy 3.2 VB decompilation failed: " + ex.GetType().Name + ": " + ex.Message);
+				return;
+			}
+
+			try {
+				var converter = new CSharpToVBConverter32(module, new ILSpyEnvironmentProvider32());
+				var unit = (CompilationUnit)csharpUnit.AcceptVisitor(converter, null);
+				var outputFormatter = new VBTextOutputFormatter32(output);
+				var formattingPolicy = new VBFormattingOptions {
+					NumberFormatter = ICSharpCode.NRefactory.NumberFormatter.GetVBInstance(hex: false, upper: true),
+				};
+				unit.AcceptVisitor(new OutputVisitor(outputFormatter, formattingPolicy), null);
+			}
+			catch (Exception ex) {
+				WriteNote(output, "' ILSpy 3.2 VB conversion failed: " + ex.GetType().Name + ": " + ex.Message);
+			}
+		}
+
+		static void WriteNote(IDecompilerOutput output, string text) =>
+			output.Write(text, null, DecompilerReferenceFlags.None, BoxedTextColor.Text);
+	}
+}

@@ -14,12 +14,12 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
+    <!-- The VB converter is compiled by default. Set -p:EnableILSpy32VB=false to
+         exclude it (e.g. while iterating on the C# path only). -->
+    <EnableILSpy32VB>true</EnableILSpy32VB>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- The VB converter is a work in progress: it still needs adaptation to 3.2's AST
-         (pattern matching, TextLocation, a few node shapes). Enable with
-         -p:EnableILSpy32VB=true to compile it. -->
     <Compile Remove="VisualBasic\**\*.cs" Condition=" '$(EnableILSpy32VB)' != 'true' " />
   </ItemGroup>
 

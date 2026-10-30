@@ -8,10 +8,12 @@ using System.Text;
 using dnlib.DotNet;
 using dnSpy.Contracts.Decompiler;
 using dnSpy.Contracts.Text;
-using ICSharpCode.NRefactory.PatternMatching;
+using dnSpy.Decompiler.ILSpy32.Common;
+using ICSharpCode.Decompiler.CSharp.Syntax.PatternMatching;
 using ICSharpCode.NRefactory.TypeSystem;
 using ICSharpCode.NRefactory.VB;
 using ICSharpCode.NRefactory.VB.Ast;
+using Mono.Cecil;
 using TypeSystem = ICSharpCode.NRefactory.TypeSystem;
 using CS = ICSharpCode.Decompiler.CSharp.Syntax;
 using VB = ICSharpCode.NRefactory.VB;
@@ -213,7 +215,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitBaseReferenceExpression(CS.BaseReferenceExpression baseReferenceExpression, object data)
 		{
-			InstanceExpression result = new InstanceExpression(InstanceExpressionType.MyBase, baseReferenceExpression.StartLocation);
+			InstanceExpression result = new InstanceExpression(InstanceExpressionType.MyBase, ToNRefactoryLocation(baseReferenceExpression.StartLocation));
 
 			return EndNode(baseReferenceExpression, result);
 		}
@@ -663,7 +665,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitThisReferenceExpression(CS.ThisReferenceExpression thisReferenceExpression, object data)
 		{
-			InstanceExpression result = new InstanceExpression(InstanceExpressionType.Me, thisReferenceExpression.StartLocation);
+			InstanceExpression result = new InstanceExpression(InstanceExpressionType.Me, ToNRefactoryLocation(thisReferenceExpression.StartLocation));
 			return EndNode(thisReferenceExpression, result);
 		}
 
@@ -877,9 +879,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		{
 			var newNamespace = new NamespaceDeclaration();
 
-			foreach (var id in namespaceDeclaration.IdentifierTypes) {
-				var newId = new Identifier(BoxedTextColor.Namespace, id.Name, TextLocation.Empty);
-				CopyAnnotations(id, newId);
+			foreach (var name in namespaceDeclaration.Identifiers) {
+				var newId = new Identifier(BoxedTextColor.Namespace, name, ICSharpCode.NRefactory.TextLocation.Empty);
 				newNamespace.Identifiers.Add(newId);
 			}
 			ConvertMembers(namespaceDeclaration, newNamespace, CS.NamespaceDeclaration.MemberRole, NamespaceDeclaration.MemberRole);
@@ -979,7 +980,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			var imports = new ImportsStatement();
 
 			var clause = new AliasImportsClause() {
-				Name = Identifier.Create(usingAliasDeclaration.AliasToken.Annotations, usingAliasDeclaration.Alias),
+				Name = Identifier.Create(usingAliasDeclaration.GetChildByRole(CS.UsingAliasDeclaration.AliasRole).Annotations, usingAliasDeclaration.Alias),
 				Alias = (AstType)usingAliasDeclaration.Import.AcceptVisitor(this, data)
 			};
 
@@ -1010,8 +1011,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		{
 			var block = new BlockStatement();
 			blocks.Push(block);
-			block.HiddenStart = ICSharpCode.Decompiler.Ast.NRefactoryExtensions.GetAllRecursiveILSpans(blockStatement.HiddenStart);
-			block.HiddenEnd = ICSharpCode.Decompiler.Ast.NRefactoryExtensions.GetAllRecursiveILSpans(blockStatement.HiddenEnd);
+			block.HiddenStart = new System.Collections.Generic.List<dnSpy.Contracts.Decompiler.ILSpan>();
+			block.HiddenEnd = new System.Collections.Generic.List<dnSpy.Contracts.Decompiler.ILSpan>();
 			ConvertNodes(blockStatement, block.Statements);
 			blocks.Pop();
 			return EndNode(blockStatement, block);
@@ -1162,10 +1163,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					Type = (AstType)foreachStatement.VariableType.AcceptVisitor(this, data)
 				}
 			};
-			stmt.HiddenInitializer = ICSharpCode.Decompiler.Ast.NRefactoryExtensions.GetAllRecursiveILSpans(foreachStatement.HiddenInitializer);
-			stmt.HiddenGetEnumeratorILSpans = ICSharpCode.Decompiler.Ast.NRefactoryExtensions.GetAllRecursiveILSpans(foreachStatement.HiddenGetEnumeratorNode);
-			stmt.HiddenMoveNextILSpans = ICSharpCode.Decompiler.Ast.NRefactoryExtensions.GetAllRecursiveILSpans(foreachStatement.HiddenMoveNextNode);
-			stmt.HiddenGetCurrentILSpans = ICSharpCode.Decompiler.Ast.NRefactoryExtensions.GetAllRecursiveILSpans(foreachStatement.HiddenGetCurrentNode);
+			stmt.HiddenInitializer = new System.Collections.Generic.List<dnSpy.Contracts.Decompiler.ILSpan>();
+			stmt.HiddenGetEnumeratorILSpans = new System.Collections.Generic.List<dnSpy.Contracts.Decompiler.ILSpan>();
+			stmt.HiddenMoveNextILSpans = new System.Collections.Generic.List<dnSpy.Contracts.Decompiler.ILSpan>();
+			stmt.HiddenGetCurrentILSpans = new System.Collections.Generic.List<dnSpy.Contracts.Decompiler.ILSpan>();
 
 			return EndNode(foreachStatement, stmt);
 		}
@@ -1178,11 +1179,11 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 			CS.AstNode counterLoop = new CS.ForStatement() {
 				Initializers = {
-					new NamedNode(
+					new CS.PatternMatching.NamedNode(
 						"iteratorVar",
-						new Choice {
+						new CS.PatternMatching.Choice {
 							new CS.VariableDeclarationStatement {
-								Type = new Choice {
+								Type = new CS.PatternMatching.Choice {
 									new CS.PrimitiveType("long"),
 									new CS.PrimitiveType("ulong"),
 									new CS.PrimitiveType("int"),
@@ -1193,7 +1194,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 									new CS.PrimitiveType("byte")
 								},
 								Variables = {
-									new AnyNode()
+									new CS.PatternMatching.AnyNode()
 								}
 							},
 							new CS.ExpressionStatement(
@@ -1201,26 +1202,26 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 							)
 						})
 				},
-				Condition = new NamedNode(
+				Condition = new CS.PatternMatching.NamedNode(
 					"condition",
 					new CS.BinaryOperatorExpression {
-						Left = new NamedNode("ident", new CS.IdentifierExpression(Pattern.AnyString)),
+						Left = new CS.PatternMatching.NamedNode("ident", new CS.IdentifierExpression(Pattern.AnyString)),
 						Operator = CS.BinaryOperatorType.Any,
-						Right = new AnyNode("endExpr")
+						Right = new CS.PatternMatching.AnyNode("endExpr")
 					}),
 				Iterators = {
 					new CS.ExpressionStatement(
-						new NamedNode(
+						new CS.PatternMatching.NamedNode(
 							"increment",
 							new CS.AssignmentExpression {
-								Left = new Backreference("ident"),
+								Left = new CS.PatternMatching.Backreference("ident"),
 								Operator = CS.AssignmentOperatorType.Any,
-								Right = new NamedNode("factor", new AnyNode())
+								Right = new CS.PatternMatching.NamedNode("factor", new CS.PatternMatching.AnyNode())
 							}
 						)
 					)
 				},
-				EmbeddedStatement = new NamedNode("body", new AnyNode())
+				EmbeddedStatement = new CS.PatternMatching.NamedNode("body", new CS.PatternMatching.AnyNode())
 			};
 
 			var match = counterLoop.Match(forStatement);
@@ -1384,7 +1385,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		{
 			var stmt = new SelectStatement() { Expression = (Expression)switchStatement.Expression.AcceptVisitor(this, data) };
 			ConvertNodes(switchStatement.SwitchSections, stmt.Cases);
-			stmt.HiddenEnd = ICSharpCode.Decompiler.Ast.NRefactoryExtensions.GetAllRecursiveILSpans(switchStatement.HiddenEnd);
+			stmt.HiddenEnd = new System.Collections.Generic.List<dnSpy.Contracts.Decompiler.ILSpan>();
 
 			return EndNode(switchStatement, stmt);
 		}
@@ -1525,8 +1526,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			Identifier identifier;
 			var result = new InvocationExpression(
 				new MemberAccessExpression() {
-					Target = instExpr = new InstanceExpression(constructorInitializer.ConstructorInitializerType == CS.ConstructorInitializerType.This ? InstanceExpressionType.Me : InstanceExpressionType.MyBase, TextLocation.Empty),
-					MemberName = identifier = new Identifier(BoxedTextColor.Keyword, "New", TextLocation.Empty)
+					Target = instExpr = new InstanceExpression(constructorInitializer.ConstructorInitializerType == CS.ConstructorInitializerType.This ? InstanceExpressionType.Me : InstanceExpressionType.MyBase, ICSharpCode.NRefactory.TextLocation.Empty),
+					MemberName = identifier = new Identifier(BoxedTextColor.Keyword, "New", ICSharpCode.NRefactory.TextLocation.Empty)
 				}
 			);
 			var ctor = constructorInitializer.Annotation<dnlib.DotNet.IMethod>();
@@ -1662,7 +1663,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			if (!decl.Setter.IsNull) {
 				Identifier id;
 				decl.Setter.Parameters.Add(new ParameterDeclaration() {
-				                           	Name = id = new Identifier(BoxedTextColor.Parameter, "value", TextLocation.Empty),
+				                           	Name = id = new Identifier(BoxedTextColor.Parameter, "value", ICSharpCode.NRefactory.TextLocation.Empty),
 				                           	Type = (AstType)indexerDeclaration.ReturnType.AcceptVisitor(this, data),
 				                           });
 				var method = decl.Setter.Annotation<MethodDef>();
@@ -1735,7 +1736,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				if (methodDeclaration.IsExtensionMethod) {
 					AttributeBlock block = new AttributeBlock();
 					var attrRef = module.UpdateRowId(module.CorLibTypes.GetTypeRef("System.Runtime.CompilerServices", "ExtensionAttribute"));
-					block.Attributes.Add(new Ast.Attribute() { Type = CreateType(attrRef) });
+					block.Attributes.Add(new VB.Ast.Attribute() { Type = CreateType(attrRef) });
 					result.Attributes.Add(block);
 				}
 
@@ -1970,12 +1971,16 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			}
 		}
 
-		StringBuilder createTypeStringBuilder = new StringBuilder();
 		AstType CreateType(ITypeDefOrRef type) {
-			//TODO: Use full namespace with Global if necessary, else add an Imports statement and don't use a namespace
-			var options = Decompiler.Ast.ConvertTypeOptions.IncludeNamespace;
-			var astType = Decompiler.Ast.AstBuilder.ConvertType(type, createTypeStringBuilder, null, options);
-			return (AstType)astType.AcceptVisitor(this, null);
+			// The ILSpy 3.2 engine works on cecil, so bridge the dnlib type reference to
+			// cecil and reuse CSharpDecompiler.ConvertType (which understands generics,
+			// nested types, arrays, pointers, etc.). The resulting C# AstType is then
+			// converted to VB. If the bridge fails, fall back to a name-based AstType.
+			var cecilType = DnlibCecilBridge.TryGetTypeReference(module, type);
+			if (cecilType is null)
+				return AstType.FromName(type.FullName, BoxedTextColor.Type);
+			var csAstType = ICSharpCode.Decompiler.CSharp.CSharpDecompiler.ConvertType(cecilType);
+			return (AstType)csAstType.AcceptVisitor(this, null);
 		}
 
 		void CreateImplementsClausesForMethod(CS.MethodDeclaration orig, MethodDeclaration result) {
@@ -2051,7 +2056,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			var pattern = new CS.AssignmentExpression() {
 				Left = new CS.IdentifierExpression("EntryPoint"),
 				Operator = CS.AssignmentOperatorType.Assign,
-				Right = new AnyNode("alias")
+				Right = new CS.PatternMatching.AnyNode("alias")
 			};
 
 			var result = arguments
@@ -2071,10 +2076,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			var pattern = new CS.AssignmentExpression() {
 				Left = new CS.IdentifierExpression("CharSet"),
 				Operator = CS.AssignmentOperatorType.Assign,
-				Right = new NamedNode(
+				Right = new CS.PatternMatching.NamedNode(
 					"modifier",
 					new CS.MemberReferenceExpression() {
-						Target = new CS.TypeReferenceExpression { Type = new AnyNode() },
+						Target = new CS.TypeReferenceExpression { Type = new CS.PatternMatching.AnyNode() },
 						MemberName = Pattern.AnyString
 					})
 			};
@@ -2225,7 +2230,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			if ((parameterDeclaration.ParameterModifier & CS.ParameterModifier.Out) == CS.ParameterModifier.Out) {
 				AttributeBlock block = new AttributeBlock();
 				var attrRef = module.UpdateRowId(module.CorLibTypes.GetTypeRef("System.Runtime.InteropServices", "OutAttribute"));
-				block.Attributes.Add(new Ast.Attribute() { Type = CreateType(attrRef) });
+				block.Attributes.Add(new VB.Ast.Attribute() { Type = CreateType(attrRef) });
 				param.Attributes.Add(block);
 			}
 			param.Name = Identifier.Create(parameterDeclaration.NameToken.Annotations, parameterDeclaration.Name);
@@ -2243,7 +2248,6 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				case CS.ParameterModifier.None:
 				case CS.ParameterModifier.This:
 					return Modifiers.None;
-				case CS.ParameterModifier.In:
 				case CS.ParameterModifier.Ref:
 				case CS.ParameterModifier.Out:
 					return Modifiers.ByRef;
@@ -2275,7 +2279,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			if (!decl.Setter.IsNull) {
 				Identifier id;
 				decl.Setter.Parameters.Add(new ParameterDeclaration() {
-				                           	Name = id = new Identifier(BoxedTextColor.Parameter, "value", TextLocation.Empty),
+				                           	Name = id = new Identifier(BoxedTextColor.Parameter, "value", ICSharpCode.NRefactory.TextLocation.Empty),
 				                           	Type = (AstType)propertyDeclaration.ReturnType.AcceptVisitor(this, data),
 				                           });
 				var method = decl.Setter.Annotation<MethodDef>();
@@ -2290,7 +2294,17 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				decl.Modifiers |= Modifiers.Iterator;
 			}
 
-			ConvertNodes(propertyDeclaration.Variables, decl.Variables);
+			// ILSpy 3.2 stores automatic-property initializers in PropertyDeclaration.Initializer
+			// (there is no Variables collection). Surface it as a VB auto-property initializer.
+			if (!propertyDeclaration.Initializer.IsNull) {
+				var v = new VariableDeclaratorWithTypeAndInitializer();
+				v.Type = decl.ReturnType;
+				v.Identifiers.Add(new VariableIdentifier() {
+					Name = Identifier.Create(propertyDeclaration.NameToken.Annotations, propertyDeclaration.Name)
+				});
+				v.Initializer = (Expression)propertyDeclaration.Initializer.AcceptVisitor(this, data);
+				decl.Variables.Add(v);
+			}
 			ConvertNodes(provider.GetParametersForProperty(propertyDeclaration), decl.Parameters);
 
 			return EndNode(propertyDeclaration, decl);
@@ -2479,7 +2493,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		public AstNode VisitTypeParameterDeclaration(CS.TypeParameterDeclaration typeParameterDeclaration, object data)
 		{
 			var param = new TypeParameterDeclaration() {
-				Variance = typeParameterDeclaration.Variance,
+				Variance = (VarianceModifier)typeParameterDeclaration.Variance,
 				NameToken = Identifier.Create(typeParameterDeclaration.NameToken.Annotations, typeParameterDeclaration.Name)
 			};
 			param.NameToken.AddAnnotation(typeParameterDeclaration.Annotation<object>());
@@ -2509,7 +2523,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				var convertedModifiers = ConvertModifiers(mod.Modifier, mod.Parent);
 				VBModifierToken token = null;
 				if (convertedModifiers != Modifiers.None) {
-					token = new VBModifierToken(TextLocation.Empty, convertedModifiers);
+					token = new VBModifierToken(ICSharpCode.NRefactory.TextLocation.Empty, convertedModifiers);
 					return EndNode(cSharpTokenNode, token);
 				}
 				return EndNode(cSharpTokenNode, token);
@@ -2599,7 +2613,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitIdentifier(CS.Identifier identifier, object data)
 		{
-			var ident = Identifier.Create(identifier.Annotations, identifier.Name, identifier.StartLocation);
+			var ident = Identifier.Create(identifier.Annotations, identifier.Name, ToNRefactoryLocation(identifier.StartLocation));
 
 			return EndNode(identifier, ident);
 		}
@@ -2620,7 +2634,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			}
 		}
 
-		void ConvertMembers<T, S, M>(CS.AstNode parent, T result, CS.Role<S> sourceRole, CS.Role<M> targetRole) where T : VB.AstNode where S : CS.AstNode where M : VB.AstNode
+		void ConvertMembers<T, S, M>(CS.AstNode parent, T result, CS.Role<S> sourceRole, ICSharpCode.NRefactory.Role<M> targetRole) where T : VB.AstNode where S : CS.AstNode where M : VB.AstNode
 		{
 			foreach (var node in parent.Children) {
 				if (node.Role == CS.Roles.Comment) {
@@ -2646,6 +2660,11 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 			return result;
 		}
+
+		// ILSpy 3.2 uses its own TextLocation struct; the VB AST uses the
+		// NRefactory one. Both are line/column structs, convert field by field.
+		static ICSharpCode.NRefactory.TextLocation ToNRefactoryLocation(CS.TextLocation loc) =>
+			new ICSharpCode.NRefactory.TextLocation(loc.Line, loc.Column);
 
 		void CopyAnnotations<T>(CS.AstNode node, T result) where T : VB.AstNode
 		{
@@ -2700,7 +2719,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			foreach (CS.Comment c in node.GetChildrenByRole(CS.Roles.Comment).Reverse()) {
 				if (c.IsDocumentation)
 					continue;
-				result.InsertChildAfter(null, new Comment(c.Content) { References = c.References }, AstNode.Roles.Comment);
+				result.InsertChildAfter(null, new Comment(c.Content), AstNode.Roles.Comment);
 			}
 		}
 

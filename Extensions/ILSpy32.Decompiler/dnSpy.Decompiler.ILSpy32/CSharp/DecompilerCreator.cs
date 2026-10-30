@@ -21,12 +21,14 @@ using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using dnSpy.Contracts.Decompiler;
 using dnSpy.Decompiler.ILSpy32.Settings;
+using dnSpy.Decompiler.ILSpy32.VisualBasic;
 
 namespace dnSpy.Decompiler.ILSpy32.CSharp {
 	[Export(typeof(IDecompilerCreator))]
 	sealed class DecompilerCreator : IDecompilerCreator {
 		public IEnumerable<IDecompiler> Create() {
 			yield return new CSharpDecompiler32(new DecompilerSettings32(), "C# (ILSpy 3.2)");
+			yield return new VBDecompiler32(new DecompilerSettings32(), "Visual Basic (ILSpy 3.2)");
 		}
 	}
 }

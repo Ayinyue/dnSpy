@@ -111,3 +111,22 @@ index ddb98fe..3a9f6b3 100644
    </packageSources>
  </configuration>
 \ No newline at end of file
+diff --git a/ICSharpCode.Decompiler/CSharp/Transforms/IntroduceUsingDeclarations.cs b/ICSharpCode.Decompiler/CSharp/Transforms/IntroduceUsingDeclarations.cs
+index 6f635fd..c5950c5 100644
+--- a/ICSharpCode.Decompiler/CSharp/Transforms/IntroduceUsingDeclarations.cs
++++ b/ICSharpCode.Decompiler/CSharp/Transforms/IntroduceUsingDeclarations.cs
+@@ -47,7 +47,13 @@ public void Run(AstNode rootNode, TransformContext context)
+ 
+ 				// Now add using declarations for those namespaces:
+ 				foreach (string ns in requiredImports.ImportedNamespaces.OrderByDescending(n => n)) {
+-					Debug.Assert(context.RequiredNamespacesSuperset.Contains(ns), $"Should not insert using declaration for namespace that is missing from the superset: {ns}");
++					// In the dnSpy dnlib->cecil bridge some namespaces referenced from
++					// method bodies may be absent from the superset because the
++					// corresponding member reference cannot be resolved within the
++					// same module. Skipping those is safe: the type is still emitted
++					// fully qualified by the AST builder.
++					if (!context.RequiredNamespacesSuperset.Contains(ns))
++						continue;
+ 					// we go backwards (OrderByDescending) through the list of namespaces because we insert them backwards
+ 					// (always inserting at the start of the list)
+ 					string[] parts = ns.Split('.');

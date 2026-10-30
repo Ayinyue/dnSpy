@@ -38,8 +38,8 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 
 		// CSharpDecompiler is not thread-safe and building its type system is costly, so one
 		// instance is cached per bridged module and all decompilation is serialized.
-		static readonly ConditionalWeakTable<ModuleDefinition, ICSharpCode.Decompiler.CSharp.CSharpDecompiler> engineCache = new ConditionalWeakTable<ModuleDefinition, ICSharpCode.Decompiler.CSharp.CSharpDecompiler>();
-		static readonly object engineLock = new object();
+		internal static readonly ConditionalWeakTable<ModuleDefinition, ICSharpCode.Decompiler.CSharp.CSharpDecompiler> engineCache = new ConditionalWeakTable<ModuleDefinition, ICSharpCode.Decompiler.CSharp.CSharpDecompiler>();
+		internal static readonly object engineLock = new object();
 
 		public CSharpDecompiler32(DecompilerSettings32 settings, string uniqueNameUI) {
 			this.settings = settings ?? throw new ArgumentNullException(nameof(settings));

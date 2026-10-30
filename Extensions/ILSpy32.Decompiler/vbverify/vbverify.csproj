@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>vbverify</AssemblyName>
+    <RootNamespace>VbVerify</RootNamespace>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- dnSpy contracts & dnlib (from the built dnSpy output) -->
+    <Reference Include="dnSpy.Contracts.Logic">
+      <HintPath>..\dnSpy\dnSpy\bin\Release\net10.0-windows\dnSpy.Contracts.Logic.dll</HintPath>
+    </Reference>
+    <Reference Include="dnlib">
+      <HintPath>..\dnSpy\dnSpy\bin\Release\net10.0-windows\dnlib.dll</HintPath>
+    </Reference>
+    <!-- ILSpy32 decompiler extension -->
+    <Reference Include="dnSpy.Decompiler.ILSpy32.x">
+      <HintPath>..\dnSpy\dnSpy\bin\Release\net10.0-windows\dnSpy.Decompiler.ILSpy32.x.dll</HintPath>
+    </Reference>
+    <!-- ILSpy 3.2 engine + VB AST -->
+    <Reference Include="ILSpy32.Decompiler">
+      <HintPath>..\dnSpy\dnSpy\bin\Release\net10.0-windows\ILSpy32.Decompiler.dll</HintPath>
+    </Reference>
+    <Reference Include="ICSharpCode.NRefactory.VB32">
+      <HintPath>..\dnSpy\dnSpy\bin\Release\net10.0-windows\ICSharpCode.NRefactory.VB32.dll</HintPath>
+    </Reference>
+    <Reference Include="ICSharpCode.NRefactory.VB">
+      <HintPath>..\dnSpy\dnSpy\bin\Release\net10.0-windows\ICSharpCode.NRefactory.VB.dll</HintPath>
+    </Reference>
+    <Reference Include="ICSharpCode.NRefactory.CSharp">
+      <HintPath>..\dnSpy\dnSpy\bin\Release\net10.0-windows\ICSharpCode.NRefactory.CSharp.dll</HintPath>
+    </Reference>
+    <Reference Include="Mono.Cecil">
+      <HintPath>..\dnSpy\dnSpy\bin\Release\net10.0-windows\Mono.Cecil.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>

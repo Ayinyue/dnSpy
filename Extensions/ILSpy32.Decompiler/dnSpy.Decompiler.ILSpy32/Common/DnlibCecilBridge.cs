@@ -163,5 +163,24 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 				return null;
 			}
 		}
+
+		/// <summary>
+		/// Maps a dnlib <see cref="ITypeDefOrRef"/> to the equivalent cecil
+		/// <see cref="TypeReference"/>, or null if it cannot be bridged.
+		/// TypeDef / TypeRef / TypeSpec tokens all resolve through cecil's metadata.
+		/// </summary>
+		public static TypeReference? TryGetTypeReference(ModuleDef module, ITypeDefOrRef type) {
+			if (module is null || type is null)
+				return null;
+			var cecilModule = TryGetModule(module);
+			if (cecilModule is null)
+				return null;
+			try {
+				return cecilModule.LookupToken((int)type.MDToken.Raw) as TypeReference;
+			}
+			catch {
+				return null;
+			}
+		}
 	}
 }

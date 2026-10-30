@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <Import Project="..\..\..\DnSpyCommon.props" />
+
+  <PropertyGroup>
+    <Copyright>$(DnSpyAssemblyCopyright)</Copyright>
+    <Version>$(DnSpyAssemblyVersion)</Version>
+    <InformationalVersion>$(DnSpyAssemblyInformationalVersion)</InformationalVersion>
+
+    <AssemblyName>ICSharpCode.NRefactory.VB32</AssemblyName>
+    <SignAssembly>True</SignAssembly>
+    <AssemblyOriginatorKeyFile>..\..\..\dnSpy.snk</AssemblyOriginatorKeyFile>
+    <OutputPath>..\..\..\dnSpy\dnSpy\bin\$(Configuration)\$(TargetFramework)\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <!-- The VB AST, OutputVisitor and IOutputFormatter are engine-independent. We compile the
+       same sources as the 2.3 engine's NRefactory.VB, minus CSharpToVBConverterVisitor.cs
+       (which consumes the OLD C# AST). The ILSpy 3.2 converter lives in the extension project. -->
+  <ItemGroup>
+    <Compile Include="OutputVisitor.cs" />
+    <Compile Include="..\..\ILSpy.Decompiler\ICSharpCode.Decompiler\NRefactory.VB\ICSharpCode.NRefactory.VB\**\*.cs"
+             Exclude="..\..\ILSpy.Decompiler\ICSharpCode.Decompiler\NRefactory.VB\ICSharpCode.NRefactory.VB\Visitors\CSharpToVBConverterVisitor.cs;..\..\ILSpy.Decompiler\ICSharpCode.Decompiler\NRefactory.VB\ICSharpCode.NRefactory.VB\OutputVisitor\OutputVisitor.cs;..\..\ILSpy.Decompiler\ICSharpCode.Decompiler\NRefactory.VB\ICSharpCode.NRefactory.VB\Properties\AssemblyInfo.cs;..\..\ILSpy.Decompiler\ICSharpCode.Decompiler\NRefactory.VB\ICSharpCode.NRefactory.VB\obj\**\*.cs;..\..\ILSpy.Decompiler\ICSharpCode.Decompiler\NRefactory.VB\ICSharpCode.NRefactory.VB\bin\**\*.cs"
+             LinkBase="NRefactoryVB" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\ILSpy.Decompiler\NRefactory\ICSharpCode.NRefactory\ICSharpCode.NRefactory.csproj" />
+    <ProjectReference Include="..\..\ILSpy.Decompiler\NRefactory\ICSharpCode.NRefactory.CSharp\ICSharpCode.NRefactory.CSharp.csproj" />
+    <ProjectReference Include="..\..\..\dnSpy\dnSpy.Contracts.Logic\dnSpy.Contracts.Logic.csproj" />
+  </ItemGroup>
+
+</Project>

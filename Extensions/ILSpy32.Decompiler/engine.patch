@@ -38,21 +38,24 @@ index 5a12e5c..a437e3e 100644
  						output.Write(") ");
  					}
 diff --git a/ICSharpCode.Decompiler/ICSharpCode.Decompiler.csproj b/ICSharpCode.Decompiler/ICSharpCode.Decompiler.csproj
-index 5f868a2..bb8ba1b 100644
+index 5f868a2..787898e 100644
 --- a/ICSharpCode.Decompiler/ICSharpCode.Decompiler.csproj
 +++ b/ICSharpCode.Decompiler/ICSharpCode.Decompiler.csproj
-@@ -3,8 +3,8 @@
+@@ -3,8 +3,11 @@
    <Import Sdk="Microsoft.NET.Sdk" Project="Sdk.props" />
  
    <PropertyGroup>
 -    <TargetFramework Condition=" '$(OS)' != 'Windows_NT' ">netstandard2.0</TargetFramework>
 -    <TargetFrameworks Condition=" '$(OS)' == 'Windows_NT' ">netstandard2.0;net46;net45</TargetFrameworks>
++    <!-- Single target: the engine is 2018 code and does not compile against the .NET 10 BCL
++         (Enumerable.Zip / ToHashSet / MaxBy collide with its own CollectionExtensions).
++         Consumers pin this TFM via SetTargetFramework on their ProjectReference. -->
 +    <TargetFramework>netstandard2.0</TargetFramework>
 +    <AssemblyName>ILSpy32.Decompiler</AssemblyName>
  
      <Description>IL decompiler engine</Description>
      <Company>ic#code</Company>
-@@ -23,7 +23,7 @@
+@@ -23,7 +26,7 @@
    
    <!-- HACK: Disable package generation on Unix due to tooling issues. -->
    <PropertyGroup Condition=" '$(OS)' == 'Windows_NT' ">
@@ -61,7 +64,7 @@ index 5f868a2..bb8ba1b 100644
      <IncludeSymbolsInPackage>true</IncludeSymbolsInPackage>
      <NuspecFile>ICSharpCode.Decompiler.nuspec</NuspecFile>
      <NuspecProperties>Configuration=$(Configuration)</NuspecProperties>
-@@ -49,10 +49,13 @@
+@@ -49,10 +52,13 @@
    </PropertyGroup>
  
    <ItemGroup>

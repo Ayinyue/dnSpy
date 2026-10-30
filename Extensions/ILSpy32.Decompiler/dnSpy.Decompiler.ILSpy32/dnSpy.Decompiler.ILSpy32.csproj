@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+
+  <Import Project="..\..\..\DnSpyCommon.props" />
+
+  <PropertyGroup>
+    <Copyright>$(DnSpyAssemblyCopyright)</Copyright>
+    <Version>$(DnSpyAssemblyVersion)</Version>
+    <InformationalVersion>$(DnSpyAssemblyInformationalVersion)</InformationalVersion>
+
+    <AssemblyName>dnSpy.Decompiler.ILSpy32.x</AssemblyName>
+    <SignAssembly>True</SignAssembly>
+    <AssemblyOriginatorKeyFile>..\..\..\dnSpy.snk</AssemblyOriginatorKeyFile>
+    <OutputPath>..\..\..\dnSpy\dnSpy\bin\$(Configuration)\$(TargetFramework)\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Nullable>enable</Nullable>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The VB converter is a work in progress: it still needs adaptation to 3.2's AST
+         (pattern matching, TextLocation, a few node shapes). Enable with
+         -p:EnableILSpy32VB=true to compile it. -->
+    <Compile Remove="VisualBasic\**\*.cs" Condition=" '$(EnableILSpy32VB)' != 'true' " />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\dnSpy\dnSpy.Contracts.DnSpy\dnSpy.Contracts.DnSpy.csproj" />
+    <ProjectReference Include="..\..\..\dnSpy\dnSpy.Contracts.Logic\dnSpy.Contracts.Logic.csproj" />
+    <ProjectReference Include="..\..\..\dnSpy\dnSpy.Decompiler\dnSpy.Decompiler.csproj" />
+    <!-- Pin the referenced TFM: build.ps1 passes -f net10.0-windows, and that global property
+         would otherwise be handed to this netstandard2.0-only project. -->
+    <ProjectReference Include="..\ICSharpCode.Decompiler\ICSharpCode.Decompiler\ICSharpCode.Decompiler.csproj"
+                      SetTargetFramework="TargetFramework=netstandard2.0" />
+    <!-- VB AST + OutputVisitor + IOutputFormatter, compiled without the old engine. -->
+    <ProjectReference Include="..\ICSharpCode.NRefactory.VB32\ICSharpCode.NRefactory.VB32.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Mono.Cecil">
+      <HintPath>$(MSBuildThisFileDirectory)..\..\..\..\..\ILSPY\ILSPY\ICSharpCode.ILSpyCmd\bin\Release\net10.0\Mono.Cecil.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

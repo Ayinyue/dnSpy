@@ -23,6 +23,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using dnlib.DotNet;
+using dnlib.DotNet.Writer;
 using Mono.Cecil;
 
 namespace dnSpy.Decompiler.ILSpy32.Common {
@@ -76,12 +77,27 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			string? location = (module as ModuleDefMD)?.Location;
 			var stream = new MemoryStream();
 			try {
-				// Serializing the (already dnlib-loaded) module gives cecil well-formed bytes.
-				module.Write(stream);
+				// dnlib's writer reorders the TypeDef table by default (nested types are
+				// emitted after the top-level types), which invalidates every MDToken
+				// captured from the dnlib module. The engine addresses types and members
+				// through those tokens (LookupToken), so a plain Write silently maps a
+				// token to the wrong definition. PreserveRids keeps the original RIDs.
+				var options = new ModuleWriterOptions(module);
+				options.MetadataOptions.Flags |= MetadataFlags.PreserveRids;
+				module.Write(stream, options);
 			}
 			catch {
+				// Modules with pending edits can contain row counts that cannot be
+				// written with preserved RIDs; fall back to a normal write.
 				stream.Dispose();
-				return null;
+				stream = new MemoryStream();
+				try {
+					module.Write(stream);
+				}
+				catch {
+					stream.Dispose();
+					return null;
+				}
 			}
 			stream.Position = 0;
 			try {

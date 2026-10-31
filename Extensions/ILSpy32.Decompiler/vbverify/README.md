@@ -33,6 +33,10 @@ dotnet run -c Release -- path/to/assembly.dll --cs
 
 ## 验证记录（2026-10-31）
 
+> ⚠️ **口径说明**：下表的「类型数」只统计 `Decompile()` **未抛异常**的数量。
+> 3.2 的反编译器会吞掉异常并写失败注释，因此该数字**不等于**正确输出数。
+> 真实正确率（含降级识别）见 `../baseline/README.md`。
+
 | 程序集 | 类型数 | VB | C# |
 |---|---|---|---|
 | dnSpy.Contracts.Logic.dll | 84 public | 84/84 | — |

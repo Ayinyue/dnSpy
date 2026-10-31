@@ -76,7 +76,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				WriteNote(output, "// ILSpy 3.2: cannot bridge this module (no in-memory snapshot available).");
 				return;
 			}
-			DecompileCore(type.Module, output, ctx, d => d.DecompileTypeAsString(new ICSharpCode.Decompiler.TypeSystem.FullTypeName(cecilType.FullName)));
+			DecompileCore(type.Module, output, ctx, d => d.DecompileTypeAsString(new ICSharpCode.Decompiler.TypeSystem.FullTypeName(Common.TypeNameHelper.ToReflectionName(cecilType.FullName))));
 		}
 
 		void DecompileMember(IMDTokenProvider? member, IDecompilerOutput output, DecompilationContext ctx) {

@@ -193,6 +193,13 @@ value = (dictionary([key]))                        ' 同一个实例
    MemberReference 注解，而反编译产物没有该注解 → 永远检测不到 `DllImport`，
    走不到已有的 `ExternalMethodDeclaration` 分支。改为回退到语法名后正确输出 `Declare ... Lib`。
 
+7. **`++`/`--` 被输出成不存在的辅助函数**（`__PostIncrement(x)` 等）。VB 没有自增运算符：
+   语句位置输出 `x += 1`；表达式位置前缀形式提升更新后重读目标，后缀形式先用
+   `Dim __tmp_N = x` 保存旧值（输出器因此支持省略 `As` 的声明）；循环条件内保持原样，
+   因为提升会改变执行次数。
+8. **表达式体属性丢值**（`uint Start => start;`）。值在 `PropertyDeclaration.ExpressionBody`，
+   而访问器体是空的 `return;`，既丢值又是 Get 内的非法语句。
+
 修复后的语法错误文件数：
 
 | 程序集 | 语言 | 语法错误文件 |
@@ -219,12 +226,12 @@ Contracts.Logic（84 个 public 类型）的首次结果：**54 个文件编译�
 
 | 次数 | 诊断 | 说明 |
 |---|---|---|
-| 18 | `BC30451 '__PostIncrement' is not declared` | 转换器把 `++/--` 表达式输出成对未定义辅助函数的调用 |
+| ~~18~~ **0** | ~~`BC30451 '__PostIncrement' is not declared`~~ | 已修：语句位置 `x += 1`，表达式位置用临时变量 |
+| ~~12~~ **0** | ~~`BC30654 'Return' statement in a Function must return a value`~~ | 已修：表达式体属性从 `ExpressionBody` 重建 |
 | 18 | `BC30258 Classes can inherit only from other classes` | `Inherits` 目标不是类型 |
 | 15 | `BC30662 Attribute 'NullableAttribute' cannot be applied` | 特性目标不匹配 |
 | 15 | `BC30456 'Contracts' is not a member of 'dnSpy.Contracts.DnSpy'` | 命名空间被同名类型遮蔽，需要 `Global.` |
 | 12 | `BC30002 Type '_GetCustomAttributes_d__9' is not defined` | 重命名后的类型引用未全部一致 |
-| 12 | `BC30654 'Return' statement in a Function must return a value` | 裸 `Return` 出现在 Function 中 |
 | 11 | `BC31409 'Equals' must be declared 'Overloads'` | 缺少 Overloads |
 
 这些都是「语义正确性」层面的后续工作，不影响「能否产出代码」。

@@ -99,6 +99,8 @@ namespace EngineBaseline {
 					return RunDump(args.Skip(1).ToArray());
 				case "compare":
 					return RunCompare(args.Skip(1).ToArray());
+				case "validate":
+					return RunValidate(args.Skip(1).ToArray());
 				default:
 					Console.WriteLine("[FAIL] Unknown command: " + args[0]);
 					PrintUsage();
@@ -124,7 +126,12 @@ namespace EngineBaseline {
 
   baseline compare --a <dirA> --b <dirB> --out <report.md> [--top N]
 
-      Writes a markdown report: identical / different / failed categories.");
+      Writes a markdown report: identical / different / failed categories.
+
+  baseline validate --dir <dir> --lang cs|vb [--out <report.md>] [--top N]
+
+      Parses every 'ok' entry with Roslyn and reports syntax errors. This is a
+      syntax-only check: it catches malformed output, not wrong semantics.");
 		}
 
 		// ---------------------------------------------------------------- dump
@@ -502,6 +509,97 @@ namespace EngineBaseline {
 			if (a.Length != b.Length)
 				return label + " line " + (n + 1) + ": <end>";
 			return label + ": <no line diff>";
+		}
+
+		// ----------------------------------------------------------- validate
+
+		static int RunValidate(string[] args) {
+			string dir = null, lang = null, outPath = null, onlyFile = null;
+			int top = 10;
+			for (int i = 0; i < args.Length; i++) {
+				switch (args[i]) {
+				case "--dir": dir = Next(args, ref i); break;
+				case "--lang": lang = Next(args, ref i); break;
+				case "--out": outPath = Next(args, ref i); break;
+				case "--top": top = int.Parse(Next(args, ref i)); break;
+				case "--file": onlyFile = Next(args, ref i); break;
+				default: throw new ArgumentException("Unknown option: " + args[i]);
+				}
+			}
+			if (dir is null || lang is null) throw new ArgumentException("--dir and --lang are required");
+			bool vb = lang == "vb";
+
+			var entries = ReadSummary(dir).Values.Where(e => e.Status == "ok")
+				.OrderBy(e => e.FileName, StringComparer.Ordinal).ToList();
+			if (onlyFile is not null)
+				entries = entries.Where(e => e.FullName == onlyFile || e.FileName == onlyFile).ToList();
+			int badFiles = 0, badDiagnostics = 0;
+			var byId = new Dictionary<string, int>(StringComparer.Ordinal);
+			var sampleMessage = new Dictionary<string, string>(StringComparer.Ordinal);
+			var samples = new List<string>();
+
+			foreach (var e in entries) {
+				var text = ReadEntry(dir, e);
+				var tree = vb
+					? Microsoft.CodeAnalysis.VisualBasic.VisualBasicSyntaxTree.ParseText(text)
+					: Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(text);
+				var errors = tree.GetDiagnostics()
+					.Where(d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error)
+					.ToList();
+				if (errors.Count == 0) continue;
+				badFiles++;
+				badDiagnostics += errors.Count;
+				if (onlyFile is not null) {
+					foreach (var d in errors)
+						Console.WriteLine("  line " + (d.Location.GetLineSpan().StartLinePosition.Line + 1) +
+							": " + d.Id + " " + d.GetMessage());
+				}
+				foreach (var g in errors.GroupBy(d => d.Id)) {
+					byId[g.Key] = (byId.TryGetValue(g.Key, out var n) ? n : 0) + 1;
+					if (!sampleMessage.ContainsKey(g.Key))
+						sampleMessage[g.Key] = g.First().GetMessage();
+				}
+				if (samples.Count < top) {
+					var first = errors[0];
+					int line = first.Location.GetLineSpan().StartLinePosition.Line + 1;
+					samples.Add(e.FullName + " :: " + first.Id + " " + first.GetMessage() + " (line " + line + ")");
+				}
+			}
+
+			var report = new StringBuilder();
+			report.AppendLine("# Syntax validation");
+			report.AppendLine();
+			report.AppendLine("- dir: `" + dir + "`");
+			report.AppendLine("- language: " + lang);
+			report.AppendLine("- files checked: " + entries.Count);
+			report.AppendLine("- files with syntax errors: " + badFiles);
+			report.AppendLine("- error diagnostics: " + badDiagnostics);
+			report.AppendLine();
+			if (byId.Count > 0) {
+				report.AppendLine("| Count | Diagnostic | Message |");
+				report.AppendLine("|---|---|---|");
+				foreach (var kv in byId.OrderByDescending(k => k.Value))
+					report.AppendLine("| " + kv.Value + " | `" + kv.Key + "` | " +
+						sampleMessage.GetValueOrDefault(kv.Key, "").Replace("|", "\\|") + " |");
+				report.AppendLine();
+				report.AppendLine("## Samples");
+				report.AppendLine();
+				foreach (var s in samples)
+					report.AppendLine("- " + s);
+			}
+
+			if (outPath is not null) {
+				Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath))!);
+				File.WriteAllText(outPath, report.ToString(), new UTF8Encoding(false));
+			}
+			Console.WriteLine("[RESULT] validate lang=" + lang + " checked=" + entries.Count +
+				" badFiles=" + badFiles + " diagnostics=" + badDiagnostics);
+			foreach (var kv in byId.OrderByDescending(k => k.Value).Take(10))
+				Console.WriteLine("  " + kv.Value + "x " + kv.Key + " " + sampleMessage.GetValueOrDefault(kv.Key, ""));
+			foreach (var s in samples.Take(5))
+				Console.WriteLine("  " + s);
+			if (outPath is not null) Console.WriteLine("[OK] Report: " + Path.GetFullPath(outPath));
+			return badFiles == 0 ? 0 : 2;
 		}
 
 		static string Truncate(string s, int max) =>

@@ -21,6 +21,16 @@
     <Reference Include="dnlib">
       <HintPath>..\..\..\dnSpy\dnSpy\bin\Release\net10.0-windows\dnlib.dll</HintPath>
     </Reference>
+    <!-- Roslyn: syntax-only validation of the dumped output. -->
+    <Reference Include="Microsoft.CodeAnalysis">
+      <HintPath>..\..\..\dnSpy\dnSpy\bin\Release\net10.0-windows\Microsoft.CodeAnalysis.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.CodeAnalysis.VisualBasic">
+      <HintPath>..\..\..\dnSpy\dnSpy\bin\Release\net10.0-windows\Microsoft.CodeAnalysis.VisualBasic.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.CodeAnalysis.CSharp">
+      <HintPath>..\..\..\dnSpy\dnSpy\bin\Release\net10.0-windows\Microsoft.CodeAnalysis.CSharp.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
 </Project>

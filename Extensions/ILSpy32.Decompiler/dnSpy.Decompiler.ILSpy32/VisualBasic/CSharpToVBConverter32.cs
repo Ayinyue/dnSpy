@@ -53,6 +53,17 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		readonly ModuleDef module;
 		int catchVariableCount;
 
+		/// <summary>
+		/// Per-switch labels used to translate "goto case" / "goto default". VB has no such
+		/// statement, but it allows GoTo to a label inside a Case block.
+		/// </summary>
+		sealed class SwitchLabelMap {
+			public readonly Dictionary<CS.SwitchSection, string> BySection = new Dictionary<CS.SwitchSection, string>();
+			public readonly Dictionary<string, string> ByCaseValue = new Dictionary<string, string>(StringComparer.Ordinal);
+			public string DefaultLabel;
+		}
+		readonly Stack<SwitchLabelMap> switchLabelMaps;
+
 		enum ConvertedStatementKind {
 			None,
 			While,
@@ -71,6 +82,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			this.blocks = new Stack<BlockStatement>();
 			this.types = new Stack<TypeDeclaration>();
 			this.members = new Stack<MemberInfo>();
+			this.switchLabelMaps = new Stack<SwitchLabelMap>();
 		}
 
 		public AstNode VisitAnonymousMethodExpression(CS.AnonymousMethodExpression anonymousMethodExpression, object data)
@@ -459,7 +471,16 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitIndexerExpression(CS.IndexerExpression indexerExpression, object data)
 		{
-			var expr = new InvocationExpression((Expression)indexerExpression.Target.AcceptVisitor(this, data));
+			Expression target = (Expression)indexerExpression.Target.AcceptVisitor(this, data);
+			// VB rejects indexing a base reference directly ("MyBase(i)"); base indexers must
+			// be accessed through the Item property: "MyBase.Item(i)".
+			if (indexerExpression.Target is CS.BaseReferenceExpression) {
+				target = new MemberAccessExpression {
+					Target = target,
+					MemberName = Identifier.Create((object)null, "Item")
+				};
+			}
+			var expr = new InvocationExpression(target);
 			ConvertNodes(indexerExpression.Arguments, expr.Arguments);
 			return EndNode(indexerExpression, expr);
 		}
@@ -530,6 +551,16 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitNamedExpression(CS.NamedExpression namedExpression, object data)
 		{
+			// Attribute arguments use "Name := value" in VB. The ".Name = value" form
+			// (FieldInitializerExpression) is only valid inside an object initializer, and
+			// emitting it inside "<...>" makes the VB parser fall back to XML literals.
+			if (namedExpression.Parent is CS.Attribute) {
+				return EndNode(namedExpression, new NamedArgumentExpression {
+					Identifier = Identifier.Create(namedExpression.NameToken.Annotations, namedExpression.Name),
+					Expression = (Expression)namedExpression.Expression.AcceptVisitor(this, data)
+				});
+			}
+
 			Expression expr = new FieldInitializerExpression {
 				IsKey = true,
 				Identifier = Identifier.Create(namedExpression.NameToken.Annotations, namedExpression.Name),
@@ -1379,12 +1410,25 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitGotoCaseStatement(CS.GotoCaseStatement gotoCaseStatement, object data)
 		{
-			throw new NotImplementedException();
+			if (switchLabelMaps.Count > 0) {
+				var key = gotoCaseStatement.LabelExpression.ToString();
+				if (switchLabelMaps.Peek().ByCaseValue.TryGetValue(key, out var label))
+					return EndNode(gotoCaseStatement, new GoToStatement { Label = MakeLabelExpression(label) });
+			}
+			throw new NotImplementedException("VB output for 'goto case' outside a switch");
 		}
 
 		public AstNode VisitGotoDefaultStatement(CS.GotoDefaultStatement gotoDefaultStatement, object data)
 		{
-			throw new NotImplementedException();
+			if (switchLabelMaps.Count > 0 && switchLabelMaps.Peek().DefaultLabel is string label)
+				return EndNode(gotoDefaultStatement, new GoToStatement { Label = MakeLabelExpression(label) });
+			throw new NotImplementedException("VB output for 'goto default' outside a switch");
+		}
+
+		static Expression MakeLabelExpression(string name) {
+			var ident = new IdentifierExpression();
+			ident.Identifier = Identifier.Create((object)null, name);
+			return ident;
 		}
 
 		public AstNode VisitGotoStatement(CS.GotoStatement gotoStatement, object data)
@@ -1428,7 +1472,36 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		public AstNode VisitSwitchStatement(CS.SwitchStatement switchStatement, object data)
 		{
 			var stmt = new SelectStatement() { Expression = (Expression)switchStatement.Expression.AcceptVisitor(this, data) };
-			ConvertNodes(switchStatement.SwitchSections, stmt.Cases);
+
+			// "goto case"/"goto default" only need labels when they actually occur; adding a
+			// label to every switch would change the output of the whole corpus for nothing.
+			var sections = switchStatement.SwitchSections.ToList();
+			bool needsLabels = switchStatement.Descendants.Any(n => n is CS.GotoCaseStatement || n is CS.GotoDefaultStatement);
+			if (needsLabels) {
+				var map = new SwitchLabelMap();
+				for (int i = 0; i < sections.Count; i++) {
+					var section = sections[i];
+					string label = "__case_" + (i + 1);
+					map.BySection[section] = label;
+					foreach (var caseLabel in section.CaseLabels) {
+						if (caseLabel.Expression.IsNull)
+							map.DefaultLabel = label;
+						else
+							map.ByCaseValue[caseLabel.Expression.ToString()] = label;
+					}
+				}
+				switchLabelMaps.Push(map);
+			}
+			try {
+				// VB requires "Case Else" to be the last section, while C# allows default
+				// anywhere. Reordering is safe: the default branch only runs when no case matches.
+				foreach (var section in sections.OrderBy(s => s.CaseLabels.Any(l => l.Expression.IsNull) ? 1 : 0))
+					stmt.Cases.Add((CaseStatement)section.AcceptVisitor(this, data));
+			}
+			finally {
+				if (needsLabels)
+					switchLabelMaps.Pop();
+			}
 			stmt.HiddenEnd = new System.Collections.Generic.List<dnSpy.Contracts.Decompiler.ILSpan>();
 
 			return EndNode(switchStatement, stmt);
@@ -1446,6 +1519,14 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			}
 			if (caseStmt.Body.LastOrDefault() is ExitStatement && ((ExitStatement)caseStmt.Body.LastOrDefault()).ExitKind == ExitKind.Select)
 				caseStmt.Body.LastOrDefault().Remove();
+			if (switchLabelMaps.Count > 0 && switchLabelMaps.Peek().BySection.TryGetValue(switchSection, out var labelStatement)) {
+				var labelDecl = new LabelDeclarationStatement { Label = MakeLabelExpression(labelStatement) };
+				var first = caseStmt.Body.FirstOrDefault();
+				if (first is null)
+					caseStmt.Body.Add(labelDecl);
+				else
+					caseStmt.Body.Statements.InsertBefore(first, labelDecl);
+			}
 			return EndNode(switchSection, caseStmt);
 		}
 

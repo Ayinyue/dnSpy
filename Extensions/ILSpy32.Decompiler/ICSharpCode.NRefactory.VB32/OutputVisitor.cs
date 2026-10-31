@@ -1156,6 +1156,31 @@ namespace ICSharpCode.NRefactory.VB {
 			WriteIdentifier(identifier.Name, data, identifierRole, nsRef);
 		}
 
+		static bool IsValidIdentifier(string identifier)
+		{
+			if (string.IsNullOrEmpty(identifier))
+				return false;
+			if (!(char.IsLetter(identifier[0]) || identifier[0] == '_'))
+				return false;
+			foreach (var c in identifier) {
+				if (!(char.IsLetterOrDigit(c) || c == '_'))
+					return false;
+			}
+			return true;
+		}
+
+		static string SanitizeIdentifier(string identifier)
+		{
+			var sb = new System.Text.StringBuilder(identifier.Length);
+			foreach (var c in identifier)
+				sb.Append(char.IsLetterOrDigit(c) || c == '_' ? c : '_');
+			if (sb.Length == 0)
+				return "_";
+			if (!(char.IsLetter(sb[0]) || sb[0] == '_'))
+				sb.Insert(0, '_');
+			return sb.ToString();
+		}
+
 		void WriteIdentifier(string identifier, object data, Role<Identifier> identifierRole = null, object extraData = null)
 		{
 			WriteSpecialsUpToRole(identifierRole ?? AstNode.Roles.Identifier);
@@ -1163,10 +1188,18 @@ namespace ICSharpCode.NRefactory.VB {
 			if (lastWritten == LastWritten.KeywordOrIdentifier)
 				Space(); // this space is not strictly required, so we call Space()
 
-			if (IsKeyword(identifier, containerStack.Peek()))
-				formatter.WriteIdentifier("[" + identifier + "]", data, extraData);
+			// Compiler-generated names contain characters that VB identifiers cannot hold
+			// (<get_X>d__1). Bracketing does NOT help ("[<x>]" is still invalid), so the name
+			// is rewritten with '_' for every invalid character. The mapping is deterministic,
+			// so declarations and references stay consistent.
+			var name = IsValidIdentifier(identifier) ? identifier : SanitizeIdentifier(identifier);
+			// "_" cannot be used even bracketed: VB reads it as a line continuation.
+			if (name == "_")
+				name = "__";
+			if (IsKeyword(name, containerStack.Peek()))
+				formatter.WriteIdentifier("[" + name + "]", data, extraData);
 			else
-				formatter.WriteIdentifier(identifier, data, extraData);
+				formatter.WriteIdentifier(name, data, extraData);
 
 			lastWritten = LastWritten.KeywordOrIdentifier;
 		}
@@ -1293,7 +1326,7 @@ namespace ICSharpCode.NRefactory.VB {
 		#region IsKeyword Test
 		static readonly HashSet<string> unconditionalKeywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
 			"AddHandler", "AddressOf", "Alias", "And", "AndAlso", "As", "Boolean", "ByRef", "Byte",
-			"ByVal", "Call", "Case", "Catch", "CBool", "CByte", "CChar", "CInt", "Class", "CLng",
+			"ByVal", "Call", "Case", "Catch", "CBool", "CByte", "CChar", "CInt", "Char", "Class", "CLng",
 			"CObj", "Const", "Continue", "CSByte", "CShort", "CSng", "CStr", "CType", "CUInt",
 			"CULng", "CUShort", "Date", "Decimal", "Declare", "Default", "Delegate", "Dim",
 			"DirectCast", "Do", "Double", "Each", "Else", "ElseIf", "End", "EndIf", "Enum", "Erase",
@@ -2302,7 +2335,14 @@ namespace ICSharpCode.NRefactory.VB {
 		public object VisitNamedArgumentExpression(NamedArgumentExpression namedArgumentExpression, object data)
 		{
 			DebugExpression(namedArgumentExpression);
-			throw new NotImplementedException();
+			StartNode(namedArgumentExpression);
+
+			namedArgumentExpression.Identifier.AcceptVisitor(this, data);
+			WriteToken(":=", NamedArgumentExpression.Roles.Assign, BoxedTextColor.Operator);
+			Space();
+			namedArgumentExpression.Expression.AcceptVisitor(this, data);
+
+			return EndNode(namedArgumentExpression);
 		}
 		
 		public object VisitConditionalExpression(ConditionalExpression conditionalExpression, object data)

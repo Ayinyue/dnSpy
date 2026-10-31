@@ -36,6 +36,13 @@ dotnet run -c Release -- compare --a out/core-vb-contracts --b out/v32-vb-contra
     --out out/report-vb-contracts.md
 ```
 
+# 语法验证（Roslyn 解析，只查语法，不做语义/引用解析）
+dotnet run -c Release -- validate --dir out/v32-vb-contracts --lang vb \n    --out out/syntax-vb-contracts.md
+
+# 单个类型的全部诊断（排查用）
+dotnet run -c Release -- validate --dir out/v32-vb-asm --lang vb \n    --file "dnSpy.AsmEditor.Compiler.ModulePatcher"
+```
+
 选项：
 
 | 选项 | 说明 |
@@ -44,6 +51,8 @@ dotnet run -c Release -- compare --a out/core-vb-contracts --b out/v32-vb-contra
 | `--all` | 含 internal / 编译器生成类型（默认只取 public 非 enum/interface）|
 | `--max N` | 只处理前 N 个类型（冒烟）|
 | `--dnspy-dir <dir>` | 显式指定 dnSpy 输出目录（默认取 `--asm` 所在目录）|
+| `validate --dir <dir>` | 对某次 dump 的结果做语法验证 |
+| `validate --file <name>` | 只验证一个类型并打印全部诊断 |
 
 输出：每个类型一个 `.txt`、`summary.tsv`（类型 / 状态 / 长度 / 文件 / 原因）、
 `_meta.txt`（引擎与程序集信息）；`compare` 生成 markdown 报告。
@@ -62,7 +71,7 @@ dotnet run -c Release -- compare --a out/core-vb-contracts --b out/v32-vb-contra
 |---|---|---|---|---|
 | dnSpy.Contracts.Logic.dll（84 public） | VB | 84 ok | 38 ok / 46 degraded | **84 ok / 0 degraded** |
 | dnSpy.Contracts.Logic.dll（84 public） | C# | 84 ok | 44 ok / 40 degraded | **84 ok / 0 degraded** |
-| dnSpy.AsmEditor.x.dll（1278 all） | VB | — | 659 ok / 619 degraded | **1235 ok / 43 degraded** |
+| dnSpy.AsmEditor.x.dll（1278 all） | VB | — | 659 ok / 619 degraded | **1278 ok / 0 degraded** |
 | dnSpy.AsmEditor.x.dll（1278 all） | C# | — | — | **1278 ok / 0 degraded** |
 
 > 注意：修复前的数字才是「真实正确率」，`vbverify` 此前报的 1278/1278 是异常计数。
@@ -152,6 +161,40 @@ value = (dictionary([key]))                        ' 同一个实例
 - 复合赋值（`x = (y += 1)`）与 `return` 位置——值不是右值，暂未处理
 
 这些位置在当前样本（AsmEditor 1278 类型）中未出现；若后续样本命中，需要各自单独处理。
+
+## 语法验证（2026-10-31 新增）
+
+`validate` 用 Roslyn 对每个 `ok` 输出做**纯语法解析**。它与 `ok` 是互补的两个指标：
+`ok` 只说明「产出了真实反编译文本」，`validate` 才能发现文本本身不合法。
+
+首次运行（修复前）：AsmEditor VB **342 / 1278 个文件有语法错误（27.7%）**。
+
+它一次性暴露了四类此前完全不可见的问题：
+
+1. **属性命名参数用了 C# 语法**（`.Header = "..."`）。VB 要求 `Name := value` 且不能有
+   前导点；错误写法让解析器跌进 XML 字面量模式，一个错误可级联出上百条诊断。
+   修复：`VisitNamedExpression` 在父节点是 `CS.Attribute` 时改产 `NamedArgumentExpression`，
+   同时补上 VB 输出器里 `VisitNamedArgumentExpression` 的桩实现。
+2. **编译器生成名含 `<` `>`**（`<get_ModifiedObjects>d__15`）。方括号转义无效
+   （`[<x>]` 仍非法，已用 VB 编译器实测），改为把非法字符替换成 `_`。
+3. **`_` 不能作标识符**（`[_]` 同样非法，VB 视其为续行符），重命名为 `__`。
+4. **`Char` 漏在关键字表外**，导致枚举成员/属性名未加方括号。
+
+修复后的语法错误文件数：
+
+| 程序集 | 语言 | 语法错误文件 |
+|---|---|---|
+| AsmEditor（1278） | VB | **8（0.63%）** |
+| dnSpy.dll（3266） | VB | **145（4.4%）** |
+| Contracts.Logic（84） | VB | **1（1.2%）** |
+
+### 剩余已知形态（未修）
+
+- `New T(...).Method()` 单独成句（VB 需要 `Call`）。dnSpy.dll 的 BC30035 主要来自这里。
+- 无方法体的 P/Invoke / abstract 声明缺少 `End Function`（应改写成 `Declare` 形式）。
+- 超出范围的整数字面量（BC30036）。
+
+这些都需要各自的转换策略，且当前已不影响「是否产出代码」。
 
 ## 诊断开关
 

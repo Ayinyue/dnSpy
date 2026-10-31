@@ -33,13 +33,27 @@ namespace dnSpy.Decompiler.ILSpy32.Settings {
 
 		public ICSharpCode.Decompiler.DecompilerSettings EngineSettings { get; }
 
-		public DecompilerSettings32() {
+		public DecompilerSettings32() : this(vbCompatibility: false) {
+		}
+
+		/// <param name="vbCompatibility">
+		/// When true, the engine is asked to avoid AST forms the VB converter cannot
+		/// represent. The C# decompiler keeps the original engine settings.
+		/// </param>
+		public DecompilerSettings32(bool vbCompatibility) {
 			EngineSettings = new ICSharpCode.Decompiler.DecompilerSettings();
 			// The VB converter (ported from the 2.3 era) has no visitors for tuple or
 			// interpolated-string AST nodes, so ask the engine to emit legacy forms.
 			try {
 				EngineSettings.TupleTypes = false;
 				EngineSettings.StringInterpolation = false;
+				if (vbCompatibility) {
+					// The VB AST has no null-propagation node. With ?. enabled the engine
+					// wraps member-access targets in UnaryOperatorExpression(NullConditional),
+					// which the converter cannot express. Disabling it makes the engine emit
+					// "a != null ? a.b : null" instead, which the converter already handles.
+					EngineSettings.NullPropagation = false;
+				}
 			}
 			catch {
 				// settings API differs slightly between engine versions; ignore

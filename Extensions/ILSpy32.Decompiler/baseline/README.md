@@ -60,9 +60,9 @@ dotnet run -c Release -- compare --a out/core-vb-contracts --b out/v32-vb-contra
 
 | 程序集 | 语言 | 2.3 引擎 | 3.2 修复前 | 3.2 修复后 |
 |---|---|---|---|---|
-| dnSpy.Contracts.Logic.dll（84 public） | VB | 84 ok | 38 ok / 46 degraded | **71 ok / 13 degraded** |
+| dnSpy.Contracts.Logic.dll（84 public） | VB | 84 ok | 38 ok / 46 degraded | **77 ok / 7 degraded** |
 | dnSpy.Contracts.Logic.dll（84 public） | C# | 84 ok | 44 ok / 40 degraded | **84 ok / 0 degraded** |
-| dnSpy.AsmEditor.x.dll（1278 all） | VB | — | 659 ok / 619 degraded | **983 ok / 295 degraded** |
+| dnSpy.AsmEditor.x.dll（1278 all） | VB | — | 659 ok / 619 degraded | **1157 ok / 121 degraded** |
 | dnSpy.AsmEditor.x.dll（1278 all） | C# | — | — | **1278 ok / 0 degraded** |
 
 > 注意：修复前的数字才是「真实正确率」，`vbverify` 此前报的 1278/1278 是异常计数。
@@ -95,16 +95,38 @@ cecil  0x0200001E      = dnSpy.Contracts.Utilities.NuGetPackageLocator/NuGetPack
 
 修复：`Common.TypeNameHelper.ToReflectionName()` 统一把 `/` 换成 `+`（C# / VB 两条路径都用）。
 
-## 剩余缺口（VB，AsmEditor 1278 类型，295 例）
+## 后续又修复的两处 VB 缺口
+
+### 3. `UnaryOperatorType` 未映射（173 例）
+
+VB AST 没有空传播节点，无法表达 C# 的 `?.`。改成让引擎产出兼容形式：VB 的
+`DecompilerSettings32(vbCompatibility: true)` 关闭 `EngineSettings.NullPropagation`，
+引擎输出 `a != null ? a.b : null`，转换器已有的条件表达式路径即可处理。
+
+由于 C# 与 VB 共用引擎缓存，缓存键改为「模块 + 设置」（
+`CSharpDecompiler32.GetOrCreateEngine`），否则 VB 的设置会污染 C# 的输出。
+
+### 4. `Node is already used in another tree`（63 例）
+
+`VisitPropertyDeclaration` 为自动属性初始化器创建声明符时执行了
+`v.Type = decl.ReturnType`，把已经挂在属性节点上的同一个 `AstType` 再挂给声明符，
+违反 NRefactory 的单父约束。输出器在该声明符父节点为属性时本来就忽略 `Type`
+（只写 `= 初始化值`），所以直接删除该赋值即可。
+
+## 剩余缺口（VB，AsmEditor 1278 类型，121 例）
 
 | 次数 | 原因 |
 |---|---|
-| 173 | `Exception: Invalid value for UnaryOperatorType`（`NullConditional` 等未映射）|
-| 63 | `ArgumentException: Node is already used in another tree` |
-| 36 | `VB output for out-var declarations is not implemented` |
-| 23 | `NotImplementedException`（查询表达式 / goto case 等）|
+| 90 | `VB output for out-var declarations is not implemented` |
+| 31 | `NotImplementedException`（查询表达式 / goto case 等）|
 
 C# 侧在当前样本上已无降级。
+
+## 诊断开关
+
+失败注释默认只写一行（异常类型 + 消息）。设置 `DNSPY_ILSPY32_DIAG=1` 会把完整调用栈
+追加进注释（单行 ` | ` 分隔），用于定位转换器内部失败——转换器吞掉所有异常，这是唯一的
+栈来源。默认不生效，不影响正常输出。
 
 ## 局限
 

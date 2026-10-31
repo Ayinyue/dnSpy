@@ -28,7 +28,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 	sealed class DecompilerCreator : IDecompilerCreator {
 		public IEnumerable<IDecompiler> Create() {
 			yield return new CSharpDecompiler32(new DecompilerSettings32(), "C# (ILSpy 3.2)");
-			yield return new VBDecompiler32(new DecompilerSettings32(), "Visual Basic (ILSpy 3.2)");
+			yield return new VBDecompiler32(new DecompilerSettings32(vbCompatibility: true), "Visual Basic (ILSpy 3.2)");
 		}
 	}
 }

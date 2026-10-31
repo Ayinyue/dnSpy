@@ -18,6 +18,7 @@
 */
 
 using System;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using dnlib.DotNet;
 using dnSpy.Contracts.Decompiler;
@@ -36,10 +37,33 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		readonly DecompilerSettings32 settings;
 		readonly string uniqueNameUI;
 
-		// CSharpDecompiler is not thread-safe and building its type system is costly, so one
-		// instance is cached per bridged module and all decompilation is serialized.
-		internal static readonly ConditionalWeakTable<ModuleDefinition, ICSharpCode.Decompiler.CSharp.CSharpDecompiler> engineCache = new ConditionalWeakTable<ModuleDefinition, ICSharpCode.Decompiler.CSharp.CSharpDecompiler>();
+		// CSharpDecompiler is not thread-safe and building its type system is costly, so
+		// instances are cached per bridged module and per engine settings. The C# and VB
+		// decompilers configure the engine differently (VB disables null-propagation), and
+		// the engine reads its settings when it is constructed, so they cannot share one.
+		static readonly ConditionalWeakTable<ModuleDefinition, Dictionary<DecompilerSettings32, ICSharpCode.Decompiler.CSharp.CSharpDecompiler>> engineCache = new ConditionalWeakTable<ModuleDefinition, Dictionary<DecompilerSettings32, ICSharpCode.Decompiler.CSharp.CSharpDecompiler>>();
 		internal static readonly object engineLock = new object();
+
+		internal static ICSharpCode.Decompiler.CSharp.CSharpDecompiler GetOrCreateEngine(ModuleDefinition cecilModule, DecompilerSettings32 settings) {
+			var engines = engineCache.GetOrCreateValue(cecilModule);
+			if (!engines.TryGetValue(settings, out var engine)) {
+				engine = new ICSharpCode.Decompiler.CSharp.CSharpDecompiler(cecilModule, settings.EngineSettings);
+				engines.Add(settings, engine);
+			}
+			return engine;
+		}
+
+		/// <summary>
+		/// Formats an exception for the failure note written into the output.
+		/// Set <c>DNSPY_ILSPY32_DIAG=1</c> to include the stack trace, which is the only
+		/// way to locate failures in the VB converter: it catches everything internally.
+		/// Off by default, so normal notes stay one line.
+		/// </summary>
+		internal static string DescribeException(Exception ex) {
+			if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1")
+				return ex.ToString().Replace("\r", "").Replace("\n", " | ");
+			return ex.GetType().Name + ": " + ex.Message;
+		}
 
 		public CSharpDecompiler32(DecompilerSettings32 settings, string uniqueNameUI) {
 			this.settings = settings ?? throw new ArgumentNullException(nameof(settings));
@@ -112,10 +136,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			string text;
 			try {
 				lock (engineLock) {
-					if (!engineCache.TryGetValue(cecilModule, out var engine)) {
-						engine = new ICSharpCode.Decompiler.CSharp.CSharpDecompiler(cecilModule, settings.EngineSettings);
-						engineCache.Add(cecilModule, engine);
-					}
+					var engine = GetOrCreateEngine(cecilModule, settings);
 					text = decompile(engine);
 				}
 			}
@@ -123,7 +144,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				throw;
 			}
 			catch (Exception ex) {
-				WriteNote(output, "// ILSpy 3.2 decompilation failed: " + ex.GetType().Name + ": " + ex.Message);
+				WriteNote(output, "// ILSpy 3.2 decompilation failed: " + DescribeException(ex));
 				return;
 			}
 			output.Write(text, null, DecompilerReferenceFlags.None, BoxedTextColor.Text);

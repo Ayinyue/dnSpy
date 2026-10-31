@@ -105,10 +105,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree csharpUnit;
 			try {
 				lock (CSharpDecompiler32.engineLock) {
-					if (!CSharpDecompiler32.engineCache.TryGetValue(cecilModule, out var engine)) {
-						engine = new ICSharpCode.Decompiler.CSharp.CSharpDecompiler(cecilModule, settings.EngineSettings);
-						CSharpDecompiler32.engineCache.Add(cecilModule, engine);
-					}
+					var engine = CSharpDecompiler32.GetOrCreateEngine(cecilModule, settings);
 					csharpUnit = decompile(engine);
 				}
 			}
@@ -116,7 +113,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				throw;
 			}
 			catch (Exception ex) {
-				WriteNote(output, "' ILSpy 3.2 VB decompilation failed: " + ex.GetType().Name + ": " + ex.Message);
+				WriteNote(output, "' ILSpy 3.2 VB decompilation failed: " + CSharpDecompiler32.DescribeException(ex));
 				return;
 			}
 
@@ -130,7 +127,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				unit.AcceptVisitor(new OutputVisitor(outputFormatter, formattingPolicy), null);
 			}
 			catch (Exception ex) {
-				WriteNote(output, "' ILSpy 3.2 VB conversion failed: " + ex.GetType().Name + ": " + ex.Message);
+				WriteNote(output, "' ILSpy 3.2 VB conversion failed: " + CSharpDecompiler32.DescribeException(ex));
 			}
 		}
 

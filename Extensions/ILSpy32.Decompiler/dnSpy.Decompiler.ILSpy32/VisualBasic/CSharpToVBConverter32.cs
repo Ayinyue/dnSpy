@@ -2323,7 +2323,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			// (there is no Variables collection). Surface it as a VB auto-property initializer.
 			if (!propertyDeclaration.Initializer.IsNull) {
 				var v = new VariableDeclaratorWithTypeAndInitializer();
-				v.Type = decl.ReturnType;
+				// Do NOT assign decl.ReturnType here: that AstType is already attached to the
+				// property, and an AstNode can only have one parent ("Node is already used in
+				// another tree"). The output visitor ignores the declarator's Type when its
+				// parent is a PropertyDeclaration and writes "= initializer" only.
 				v.Identifiers.Add(new VariableIdentifier() {
 					Name = Identifier.Create(propertyDeclaration.NameToken.Annotations, propertyDeclaration.Name)
 				});

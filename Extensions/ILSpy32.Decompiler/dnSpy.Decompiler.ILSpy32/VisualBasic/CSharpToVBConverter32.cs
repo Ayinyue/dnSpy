@@ -53,6 +53,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		readonly ModuleDef module;
 		int catchVariableCount;
 		int unusedObjectCounter;
+		int incrementTempCounter;
 
 		/// <summary>
 		/// Per-switch labels used to translate "goto case" / "goto default". VB has no such
@@ -268,6 +269,54 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					return true;
 			}
 			return true;
+		}
+
+		// VB has no ++/--. A standalone "x++;" becomes "x += 1". In an expression the value
+		// matters: prefix yields the new value (re-read the target after hoisting the update),
+		// postfix yields the old one (copy to a temporary first). When hoisting is unsafe the
+		// old helper call is kept, even though no such helper exists - it is at least visible.
+		Expression ConvertIncrement(CS.UnaryOperatorExpression unaryOperatorExpression, object data, bool increment, bool postfix) {
+			var target = (Expression)unaryOperatorExpression.Expression.AcceptVisitor(this, data);
+			var op = increment ? AssignmentOperatorType.Add : AssignmentOperatorType.Subtract;
+			var assign = new AssignmentExpression((Expression)target.Clone(), op, new PrimitiveExpression(1));
+
+			if (unaryOperatorExpression.Parent is CS.ExpressionStatement)
+				return assign;
+
+			if (blocks.Count == 0 || !CanHoistAssignment(unaryOperatorExpression))
+				return MakeIncrementHelperCall(increment, postfix, (Expression)target.Clone());
+
+			string tempName = null;
+			if (postfix) {
+				tempName = "__tmp_" + (++incrementTempCounter);
+				var decl = new LocalDeclarationStatement();
+				decl.Modifiers = Modifiers.Dim;
+				var variable = new VariableDeclaratorWithTypeAndInitializer();
+				variable.Identifiers.Add(new VariableIdentifier() {
+					Name = Identifier.Create((object)null, tempName)
+				});
+				variable.Initializer = (Expression)target.Clone();
+				decl.Variables.Add(variable);
+				blocks.Peek().Add(decl);
+			}
+			blocks.Peek().Add(new ExpressionStatement(assign));
+			return tempName is null ? (Expression)target.Clone() : MakeIdentifierExpression(tempName);
+		}
+
+		static Expression MakeIncrementHelperCall(bool increment, bool postfix, Expression argument) {
+			string name = increment
+				? (postfix ? "__PostIncrement" : "__Increment")
+				: (postfix ? "__PostDecrement" : "__Decrement");
+			var invocation = new InvocationExpression();
+			invocation.Target = new IdentifierExpression() { Identifier = Identifier.Create(BoxedTextColor.Keyword, name) };
+			invocation.Arguments.Add(argument);
+			return invocation;
+		}
+
+		static Expression MakeIdentifierExpression(string name) {
+			var identifier = new IdentifierExpression();
+			identifier.Identifier = Identifier.Create((object)null, name);
+			return identifier;
 		}
 
 		public AstNode VisitBaseReferenceExpression(CS.BaseReferenceExpression baseReferenceExpression, object data)
@@ -783,24 +832,16 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					};
 					break;
 				case CS.UnaryOperatorType.Increment:
-					expr = new InvocationExpression();
-					((InvocationExpression)expr).Target = new IdentifierExpression() { Identifier = Identifier.Create(BoxedTextColor.Keyword, "__Increment") };
-					((InvocationExpression)expr).Arguments.Add((Expression)unaryOperatorExpression.Expression.AcceptVisitor(this, data));
+					expr = ConvertIncrement(unaryOperatorExpression, data, true, false);
 					break;
 				case CS.UnaryOperatorType.PostIncrement:
-					expr = new InvocationExpression();
-					((InvocationExpression)expr).Target = new IdentifierExpression() { Identifier = Identifier.Create(BoxedTextColor.Keyword, "__PostIncrement") };
-					((InvocationExpression)expr).Arguments.Add((Expression)unaryOperatorExpression.Expression.AcceptVisitor(this, data));
+					expr = ConvertIncrement(unaryOperatorExpression, data, true, true);
 					break;
 				case CS.UnaryOperatorType.Decrement:
-					expr = new InvocationExpression();
-					((InvocationExpression)expr).Target = new IdentifierExpression() { Identifier = Identifier.Create(BoxedTextColor.Keyword, "__Decrement") };
-					((InvocationExpression)expr).Arguments.Add((Expression)unaryOperatorExpression.Expression.AcceptVisitor(this, data));
+					expr = ConvertIncrement(unaryOperatorExpression, data, false, false);
 					break;
 				case CS.UnaryOperatorType.PostDecrement:
-					expr = new InvocationExpression();
-					((InvocationExpression)expr).Target = new IdentifierExpression() { Identifier = Identifier.Create(BoxedTextColor.Keyword, "__PostDecrement") };
-					((InvocationExpression)expr).Arguments.Add((Expression)unaryOperatorExpression.Expression.AcceptVisitor(this, data));
+					expr = ConvertIncrement(unaryOperatorExpression, data, false, true);
 					break;
 				case CS.UnaryOperatorType.AddressOf:
 					expr = new UnaryOperatorExpression() {
@@ -1685,6 +1726,19 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			ConvertNodes(accessor.Attributes, result.Attributes);
 			ConvertNodes(accessor.ModifierTokens, result.ModifierTokens);
 			result.Body = (BlockStatement)accessor.Body.AcceptVisitor(this, data);
+
+			// "uint Start => start;" keeps its value in PropertyDeclaration.ExpressionBody.
+			// The synthesized accessor body is then just "return;", which VB rejects inside
+			// a Get and which silently loses the value.
+			if (accessor.Parent is CS.PropertyDeclaration property && !property.ExpressionBody.IsNull
+					&& (result.Body is null || result.Body.Statements.Count == 0
+						|| (result.Body.Statements.Count == 1
+							&& result.Body.FirstOrDefault() is ReturnStatement emptyReturn
+							&& emptyReturn.Expression.IsNull))) {
+				var body = new BlockStatement();
+				body.Add(new ReturnStatement((Expression)property.ExpressionBody.AcceptVisitor(this, data)));
+				result.Body = body;
+			}
 
 			return EndNode(accessor, result);
 		}

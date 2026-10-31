@@ -2810,10 +2810,14 @@ namespace ICSharpCode.NRefactory.VB {
 					Space();
 				DebugStart(variableDeclaratorWithTypeAndInitializer);
 				WriteCommaSeparatedList(variableDeclaratorWithTypeAndInitializer.Identifiers);
-				if (lastWritten != LastWritten.Whitespace)
-					Space();
-				WriteKeyword("As");
-				variableDeclaratorWithTypeAndInitializer.Type.AcceptVisitor(this, data);
+				// A missing type means "Dim x = expr" (type inferred by the compiler); the
+				// converter uses it for temporaries whose type it cannot name.
+				if (!variableDeclaratorWithTypeAndInitializer.Type.IsNull) {
+					if (lastWritten != LastWritten.Whitespace)
+						Space();
+					WriteKeyword("As");
+					variableDeclaratorWithTypeAndInitializer.Type.AcceptVisitor(this, data);
+				}
 				if (!variableDeclaratorWithTypeAndInitializer.Initializer.IsNull) {
 					Space();
 					WriteToken("=", VariableDeclarator.Roles.Assign, BoxedTextColor.Operator);

@@ -219,7 +219,42 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			}
 
 			var expr = new AssignmentExpression(left, op, right);
+
+			// VB has no assignment expression. Emitted in expression position, "a = (b = c)"
+			// would be parsed as a comparison. Hoist the assignment into the enclosing block
+			// and yield the assigned value instead. Only the plain assignment operator is
+			// handled: the value of a compound assignment cannot be expressed this way.
+			// Statement positions must keep the normal path, including unbraced bodies such
+			// as "if (c) x = y;": hoisting there would make the assignment unconditional.
+			if (op == AssignmentOperatorType.Assign
+					&& !(assignmentExpression.Parent is CS.Statement)
+					&& CanHoistAssignment(assignmentExpression)
+					&& blocks.Count > 0) {
+				blocks.Peek().Add(new ExpressionStatement(expr));
+				// The value of "target = value" is the value that was stored, so re-read the
+				// target. Cloning the right-hand side instead would evaluate it twice and, for
+				// "x = (y = new T())", produce two different objects.
+				return EndNode(assignmentExpression, (Expression)left.Clone());
+			}
+
 			return EndNode(assignmentExpression, expr);
+		}
+
+		// Hoisting is only safe when the assignment is evaluated once per execution of the
+		// statement being converted. Stop at the nearest block: a lambda body belongs to
+		// another scope, and a loop condition/iterator is re-evaluated on every iteration
+		// (hoisting "while ((line = Read()) != null)" would read only once).
+		static bool CanHoistAssignment(CS.AstNode node) {
+			for (var parent = node.Parent; parent != null; parent = parent.Parent) {
+				if (parent is CS.LambdaExpression || parent is CS.AnonymousMethodExpression)
+					return false;
+				if (parent is CS.WhileStatement || parent is CS.DoWhileStatement
+						|| parent is CS.ForStatement || parent is CS.ForeachStatement)
+					return false;
+				if (parent is CS.BlockStatement)
+					return true;
+			}
+			return true;
 		}
 
 		public AstNode VisitBaseReferenceExpression(CS.BaseReferenceExpression baseReferenceExpression, object data)

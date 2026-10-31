@@ -101,6 +101,8 @@ namespace EngineBaseline {
 					return RunCompare(args.Skip(1).ToArray());
 				case "validate":
 					return RunValidate(args.Skip(1).ToArray());
+				case "compile":
+					return RunCompile(args.Skip(1).ToArray());
 				default:
 					Console.WriteLine("[FAIL] Unknown command: " + args[0]);
 					PrintUsage();
@@ -131,7 +133,14 @@ namespace EngineBaseline {
   baseline validate --dir <dir> --lang cs|vb [--out <report.md>] [--top N]
 
       Parses every 'ok' entry with Roslyn and reports syntax errors. This is a
-      syntax-only check: it catches malformed output, not wrong semantics.");
+      syntax-only check: it catches malformed output, not wrong semantics.
+
+  baseline compile --dir <dir> --lang cs|vb --refs <dir> [--out <report.md>] [--top N]
+
+      Semantic compilation of every 'ok' entry against the assemblies in --refs
+      (plus the running runtime). Accessibility diagnostics are reported
+      separately because a decompiled type always lives in a different assembly
+      than the members it uses, so internal access shows up as a false positive.");
 		}
 
 		// ---------------------------------------------------------------- dump
@@ -596,6 +605,122 @@ namespace EngineBaseline {
 				" badFiles=" + badFiles + " diagnostics=" + badDiagnostics);
 			foreach (var kv in byId.OrderByDescending(k => k.Value).Take(10))
 				Console.WriteLine("  " + kv.Value + "x " + kv.Key + " " + sampleMessage.GetValueOrDefault(kv.Key, ""));
+			foreach (var s in samples.Take(5))
+				Console.WriteLine("  " + s);
+			if (outPath is not null) Console.WriteLine("[OK] Report: " + Path.GetFullPath(outPath));
+			return badFiles == 0 ? 0 : 2;
+		}
+
+		// ------------------------------------------------------------ compile
+
+		// A decompiled type always ends up in a different assembly than the members it
+		// references, so internal members look inaccessible. Report those separately.
+		static readonly HashSet<string> accessibilityNoise = new HashSet<string>(StringComparer.Ordinal) {
+			"CS0122", "CS0050", "CS0051", "BC30390", "BC30500", "BC30508"
+		};
+		static bool IsAccessibilityNoise(string id) => accessibilityNoise.Contains(id);
+
+		static int RunCompile(string[] args) {
+			string dir = null, lang = null, outPath = null, refsDir = null;
+			int top = 10, max = int.MaxValue;
+			for (int i = 0; i < args.Length; i++) {
+				switch (args[i]) {
+				case "--dir": dir = Next(args, ref i); break;
+				case "--lang": lang = Next(args, ref i); break;
+				case "--out": outPath = Next(args, ref i); break;
+				case "--refs": refsDir = Next(args, ref i); break;
+				case "--top": top = int.Parse(Next(args, ref i)); break;
+				case "--max": max = int.Parse(Next(args, ref i)); break;
+				default: throw new ArgumentException("Unknown option: " + args[i]);
+				}
+			}
+			if (dir is null || lang is null || refsDir is null)
+				throw new ArgumentException("--dir, --lang and --refs are required");
+			bool vb = lang == "vb";
+
+			var refs = new List<Microsoft.CodeAnalysis.MetadataReference>();
+			var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			if (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") is string tpa) {
+				foreach (var path in tpa.Split(Path.PathSeparator)) {
+					if (!File.Exists(path) || !seen.Add(path)) continue;
+					try { refs.Add(Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(path)); } catch { }
+				}
+			}
+			foreach (var path in Directory.EnumerateFiles(refsDir, "*.dll", SearchOption.TopDirectoryOnly)) {
+				if (!seen.Add(path)) continue;
+				try { refs.Add(Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(path)); } catch { }
+			}
+
+			var entries = ReadSummary(dir).Values.Where(e => e.Status == "ok")
+				.OrderBy(e => e.FileName, StringComparer.Ordinal).Take(max).ToList();
+			int badFiles = 0, noiseOnlyFiles = 0;
+			var byId = new Dictionary<string, int>(StringComparer.Ordinal);
+			var msg = new Dictionary<string, string>(StringComparer.Ordinal);
+			var samples = new List<string>();
+
+			foreach (var e in entries) {
+				var text = ReadEntry(dir, e);
+				var tree = vb
+					? Microsoft.CodeAnalysis.VisualBasic.VisualBasicSyntaxTree.ParseText(text)
+					: Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(text);
+				Microsoft.CodeAnalysis.Compilation compilation = vb
+					? Microsoft.CodeAnalysis.VisualBasic.VisualBasicCompilation.Create(
+						"dump_" + e.FileName, new[] { tree }, refs,
+						new Microsoft.CodeAnalysis.VisualBasic.VisualBasicCompilationOptions(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary))
+					: Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create(
+						"dump_" + e.FileName, new[] { tree }, refs,
+						new Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary));
+
+				var errors = compilation.GetDiagnostics()
+					.Where(d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error)
+					.ToList();
+				if (errors.Count == 0) continue;
+				badFiles++;
+				if (errors.All(d => IsAccessibilityNoise(d.Id)))
+					noiseOnlyFiles++;
+				foreach (var g in errors.GroupBy(d => d.Id)) {
+					byId[g.Key] = (byId.TryGetValue(g.Key, out var n) ? n : 0) + 1;
+					if (!msg.ContainsKey(g.Key)) msg[g.Key] = g.First().GetMessage();
+				}
+				if (samples.Count < top) {
+					var first = errors.FirstOrDefault(d => !IsAccessibilityNoise(d.Id)) ?? errors[0];
+					int line = first.Location.GetLineSpan().StartLinePosition.Line + 1;
+					samples.Add(e.FullName + " :: " + first.Id + " " + first.GetMessage() + " (line " + line + ")");
+				}
+			}
+
+			var report = new StringBuilder();
+			report.AppendLine("# Semantic compile validation");
+			report.AppendLine();
+			report.AppendLine("- dir: `" + dir + "`");
+			report.AppendLine("- language: " + lang);
+			report.AppendLine("- files compiled: " + entries.Count);
+			report.AppendLine("- references: " + refs.Count);
+			report.AppendLine("- files with errors: " + badFiles);
+			report.AppendLine("- of which only accessibility noise: " + noiseOnlyFiles);
+			report.AppendLine();
+			if (byId.Count > 0) {
+				report.AppendLine("| Count | Diagnostic | Message |");
+				report.AppendLine("|---|---|---|");
+				foreach (var kv in byId.OrderByDescending(k => k.Value))
+					report.AppendLine("| " + kv.Value + " | `" + kv.Key + "`" +
+						(IsAccessibilityNoise(kv.Key) ? " (noise)" : "") + " | " +
+						msg.GetValueOrDefault(kv.Key, "").Replace("|", "\\|") + " |");
+				report.AppendLine();
+				report.AppendLine("## Samples");
+				report.AppendLine();
+				foreach (var s in samples)
+					report.AppendLine("- " + s);
+			}
+			if (outPath is not null) {
+				Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath))!);
+				File.WriteAllText(outPath, report.ToString(), new UTF8Encoding(false));
+			}
+			Console.WriteLine("[RESULT] compile lang=" + lang + " files=" + entries.Count +
+				" badFiles=" + badFiles + " noiseOnly=" + noiseOnlyFiles);
+			foreach (var kv in byId.OrderByDescending(k => k.Value).Take(10))
+				Console.WriteLine("  " + kv.Value + "x " + kv.Key +
+					(IsAccessibilityNoise(kv.Key) ? " (noise)" : "") + " " + msg.GetValueOrDefault(kv.Key, ""));
 			foreach (var s in samples.Take(5))
 				Console.WriteLine("  " + s);
 			if (outPath is not null) Console.WriteLine("[OK] Report: " + Path.GetFullPath(outPath));

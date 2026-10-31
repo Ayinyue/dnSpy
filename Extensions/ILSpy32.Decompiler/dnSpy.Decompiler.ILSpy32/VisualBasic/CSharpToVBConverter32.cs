@@ -2765,8 +2765,30 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		public AstNode VisitInterpolation(CS.Interpolation interpolation, object data) =>
 			throw new NotSupportedException("VB output for interpolated strings is not implemented");
 
-		public AstNode VisitOutVarDeclarationExpression(CS.OutVarDeclarationExpression outVarDeclarationExpression, object data) =>
-			throw new NotSupportedException("VB output for out-var declarations is not implemented");
+		public AstNode VisitOutVarDeclarationExpression(CS.OutVarDeclarationExpression outVarDeclarationExpression, object data)
+		{
+			// C# 7 "M(out var x)" has no VB equivalent. Hoist "Dim x As T" in front of the
+			// statement being converted and pass x by reference: VB derives ByRef from the
+			// parameter signature and needs no out/ref keyword.
+			// ILSpy 3.2 writes the inferred type explicitly (not "var"), so no type inference
+			// is needed here. The declaration is added to the enclosing block while that block
+			// has not yet received the statement being converted, which keeps the right order.
+			string name = outVarDeclarationExpression.Variable.Name;
+			var decl = new LocalDeclarationStatement();
+			decl.Modifiers = Modifiers.Dim;
+			var variable = new VariableDeclaratorWithTypeAndInitializer();
+			variable.Type = (AstType)outVarDeclarationExpression.Type.AcceptVisitor(this, data);
+			variable.Identifiers.Add(new VariableIdentifier() {
+				Name = Identifier.Create(outVarDeclarationExpression.Variable.NameToken.Annotations, name)
+			});
+			decl.Variables.Add(variable);
+			if (blocks.Count > 0)
+				blocks.Peek().Add(decl);
+
+			var expr = new IdentifierExpression();
+			expr.Identifier = Identifier.Create(outVarDeclarationExpression.Variable.NameToken.Annotations, name);
+			return EndNode(outVarDeclarationExpression, expr);
+		}
 
 		public AstNode VisitThrowExpression(CS.ThrowExpression throwExpression, object data) =>
 			throw new NotSupportedException("VB output for throw expressions is not implemented");

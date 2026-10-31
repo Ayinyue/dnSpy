@@ -60,9 +60,9 @@ dotnet run -c Release -- compare --a out/core-vb-contracts --b out/v32-vb-contra
 
 | 程序集 | 语言 | 2.3 引擎 | 3.2 修复前 | 3.2 修复后 |
 |---|---|---|---|---|
-| dnSpy.Contracts.Logic.dll（84 public） | VB | 84 ok | 38 ok / 46 degraded | **77 ok / 7 degraded** |
+| dnSpy.Contracts.Logic.dll（84 public） | VB | 84 ok | 38 ok / 46 degraded | **84 ok / 0 degraded** |
 | dnSpy.Contracts.Logic.dll（84 public） | C# | 84 ok | 44 ok / 40 degraded | **84 ok / 0 degraded** |
-| dnSpy.AsmEditor.x.dll（1278 all） | VB | — | 659 ok / 619 degraded | **1157 ok / 121 degraded** |
+| dnSpy.AsmEditor.x.dll（1278 all） | VB | — | 659 ok / 619 degraded | **1235 ok / 43 degraded** |
 | dnSpy.AsmEditor.x.dll（1278 all） | C# | — | — | **1278 ok / 0 degraded** |
 
 > 注意：修复前的数字才是「真实正确率」，`vbverify` 此前报的 1278/1278 是异常计数。
@@ -113,14 +113,33 @@ VB AST 没有空传播节点，无法表达 C# 的 `?.`。改成让引擎产出�
 违反 NRefactory 的单父约束。输出器在该声明符父节点为属性时本来就忽略 `Type`
 （只写 `= 初始化值`），所以直接删除该赋值即可。
 
-## 剩余缺口（VB，AsmEditor 1278 类型，121 例）
+### 5. out-var 声明（90 例）
+
+`M(out var x)` 在 VB 无对应语法。转换器现在把 `Dim x As T` 提升到当前语句之前，
+参数位置改用 `x`（VB 按参数签名自动按引用传递，不需要 out/ref 关键字）。
+ILSpy 3.2 写出的是**显式类型**而非 `var`，因此无需类型推断。
+
+## 剩余缺口（VB，AsmEditor 1278 类型，43 例）
 
 | 次数 | 原因 |
 |---|---|
-| 90 | `VB output for out-var declarations is not implemented` |
-| 31 | `NotImplementedException`（查询表达式 / goto case 等）|
+| 43 | `NotImplementedException`（查询表达式 / `goto case` / 指针相关等）|
 
 C# 侧在当前样本上已无降级。
+
+## 已知正确性局限（不体现为失败）
+
+`ok` 只表示「产出了真实反编译文本」，**不代表语义一定正确**。目前已知一类：
+
+```csharp
+value = (dictionary[key] = new List<TypeDef>());   // C# 链式赋值
+```
+```vb
+value = (dictionary([key]) = New List(Of TypeDef)())   ' 错误：VB 里这是比较
+```
+
+赋值出现在表达式位置时，转换器沿用 2.3 时代的做法输出 `=`，在 VB 里会被解析为比较。
+这类问题需要“把内层赋值提升为语句、返回右值”的语句级改写，属后续增量。
 
 ## 诊断开关
 

@@ -52,6 +52,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		Stack<MemberInfo> members;
 		readonly ModuleDef module;
 		int catchVariableCount;
+		int unusedObjectCounter;
 
 		/// <summary>
 		/// Per-switch labels used to translate "goto case" / "goto default". VB has no such
@@ -1189,9 +1190,50 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		public AstNode VisitExpressionStatement(CS.ExpressionStatement expressionStatement, object data)
 		{
 			var node = expressionStatement.Expression.AcceptVisitor(this, data);
-			if (node is Expression)
-				node = new ExpressionStatement((Expression)node);
+			if (node is Expression) {
+				// VB rejects a statement that begins with New. A call chain can use "Call":
+				// "Call New T().M()". A bare "New T()" cannot ("Call New T()" is BC30454),
+				// so it becomes a local: "Dim __unused_obj_1 As T = New T()".
+				if (expressionStatement.Expression is CS.InvocationExpression invocation
+						&& NeedsCallKeyword(invocation.Target))
+					node = new CallStatement { Expression = (Expression)node };
+				else if (expressionStatement.Expression is CS.ObjectCreateExpression && node is ObjectCreationExpression created)
+					node = CreateDiscardedObjectDeclaration(created);
+				else
+					node = new ExpressionStatement((Expression)node);
+			}
 			return EndNode(expressionStatement, node);
+		}
+
+		LocalDeclarationStatement CreateDiscardedObjectDeclaration(ObjectCreationExpression created) {
+			// The object is constructed for its side effects and immediately discarded, which
+			// matches C# semantics; VB simply has no statement form for it.
+			var decl = new LocalDeclarationStatement();
+			decl.Modifiers = Modifiers.Dim;
+			var variable = new VariableDeclaratorWithTypeAndInitializer();
+			variable.Type = (AstType)created.Type.Clone();
+			variable.Identifiers.Add(new VariableIdentifier() {
+				Name = Identifier.Create((object)null, "__unused_obj_" + (++unusedObjectCounter))
+			});
+			variable.Initializer = created;
+			decl.Variables.Add(variable);
+			return decl;
+		}
+
+		// VB parses these at statement start as statements, not expressions: "New T()" and
+		// the conditional "If(c, a, b)". The Call keyword forces expression parsing.
+		static bool NeedsCallKeyword(CS.Expression expression) {
+			var current = expression;
+			while (current != null) {
+				if (current is CS.ObjectCreateExpression || current is CS.ConditionalExpression)
+					return true;
+				if (current is CS.MemberReferenceExpression member) { current = member.Target; continue; }
+				if (current is CS.ParenthesizedExpression parenthesized) { current = parenthesized.Expression; continue; }
+				if (current is CS.InvocationExpression invocation) { current = invocation.Target; continue; }
+				if (current is CS.IndexerExpression indexer) { current = indexer.Target; continue; }
+				return false;
+			}
+			return false;
 		}
 
 		public AstNode VisitFixedStatement(CS.FixedStatement fixedStatement, object data)
@@ -2816,10 +2858,36 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				result.AddAnnotation(ann);
 		}
 
+		static string NormalizeAttributeName(string name) {
+			if (string.IsNullOrEmpty(name))
+				return string.Empty;
+			int ctor = name.IndexOf("::", StringComparison.Ordinal);
+			if (ctor >= 0)
+				name = name.Substring(0, ctor);
+			int dot = name.LastIndexOf('.');
+			if (dot >= 0)
+				name = name.Substring(dot + 1);
+			// ILSpy writes the attribute type without the "Attribute" suffix
+			// ("System.Runtime.InteropServices.DllImport"), so compare the bare names.
+			const string suffix = "Attribute";
+			if (name.Length > suffix.Length && name.EndsWith(suffix, StringComparison.Ordinal))
+				name = name.Substring(0, name.Length - suffix.Length);
+			return name;
+		}
+
 		bool HasAttribute(CS.AstNodeCollection<CS.AttributeSection> attributes, string name, out CS.Attribute foundAttribute)
 		{
 			foreach (var attr in attributes.SelectMany(a => a.Attributes)) {
-				if (provider.GetTypeNameForAttribute(attr) == name) {
+				// The provider resolves the attribute through a MemberReference annotation, but
+				// decompiled type nodes carry no such annotation (see the DateTime note), so the
+				// name came back empty and P/Invoke methods were emitted as bodyless Function
+				// declarations. Fall back to the attribute type as written in the C# output.
+				// Try both the annotation-derived name and the syntactic type: the annotation can
+				// be the attribute constructor ("...DllImportAttribute::.ctor(System.String)").
+				var resolved = provider.GetTypeNameForAttribute(attr);
+				var syntactic = attr.Type?.ToString();
+				if (NormalizeAttributeName(resolved) == NormalizeAttributeName(name)
+						|| NormalizeAttributeName(syntactic) == NormalizeAttributeName(name)) {
 					foundAttribute = attr;
 					return true;
 				}

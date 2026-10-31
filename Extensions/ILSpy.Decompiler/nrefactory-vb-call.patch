@@ -1,0 +1,68 @@
+diff --git a/NRefactory.VB/ICSharpCode.NRefactory.VB/Ast/Statements/CallStatement.cs b/NRefactory.VB/ICSharpCode.NRefactory.VB/Ast/Statements/CallStatement.cs
+new file mode 100644
+index 000000000..d4b5367e7
+--- /dev/null
++++ b/NRefactory.VB/ICSharpCode.NRefactory.VB/Ast/Statements/CallStatement.cs
+@@ -0,0 +1,27 @@
++// Copyright (c) AlphaSierraPapa for the SharpDevelop Team (for details please see \doc\copyright.txt)
++// This code is distributed under MIT X11 license (for details please see \doc\license.txt)
++
++namespace ICSharpCode.NRefactory.VB.Ast
++{
++	/// <summary>
++	/// Call Expression
++	/// </summary>
++	public class CallStatement : Statement
++	{
++		public Expression Expression {
++			get { return GetChildByRole(Roles.Expression); }
++			set { SetChildByRole(Roles.Expression, value); }
++		}
++
++		public override S AcceptVisitor<T, S>(IAstVisitor<T, S> visitor, T data)
++		{
++			return visitor.VisitCallStatement(this, data);
++		}
++
++		protected internal override bool DoMatch(AstNode other, ICSharpCode.NRefactory.PatternMatching.Match match)
++		{
++			CallStatement o = other as CallStatement;
++			return o != null && this.Expression.DoMatch(o.Expression, match);
++		}
++	}
++}
+diff --git a/NRefactory.VB/ICSharpCode.NRefactory.VB/IAstVisitor.cs b/NRefactory.VB/ICSharpCode.NRefactory.VB/IAstVisitor.cs
+index 7f8363180..941fe2079 100644
+--- a/NRefactory.VB/ICSharpCode.NRefactory.VB/IAstVisitor.cs
++++ b/NRefactory.VB/ICSharpCode.NRefactory.VB/IAstVisitor.cs
+@@ -74,6 +74,8 @@ public interface IAstVisitor<in T, out S>
+ 		S VisitLabelDeclarationStatement(LabelDeclarationStatement labelDeclarationStatement, T data);
+ 		S VisitLocalDeclarationStatement(LocalDeclarationStatement localDeclarationStatement, T data);
+ 		S VisitExpressionStatement(ExpressionStatement expressionStatement, T data);
++
++		S VisitCallStatement(CallStatement callStatement, T data);
+ 		S VisitAddRemoveHandlerStatement(AddRemoveHandlerStatement addRemoveHandlerStatement, T data);
+ 		S VisitWithStatement(WithStatement withStatement, T data);
+ 		S VisitSyncLockStatement(SyncLockStatement syncLockStatement, T data);
+diff --git a/NRefactory.VB/ICSharpCode.NRefactory.VB/OutputVisitor/OutputVisitor.cs b/NRefactory.VB/ICSharpCode.NRefactory.VB/OutputVisitor/OutputVisitor.cs
+index 7b9d4ea1f..6f76bd2f2 100644
+--- a/NRefactory.VB/ICSharpCode.NRefactory.VB/OutputVisitor/OutputVisitor.cs
++++ b/NRefactory.VB/ICSharpCode.NRefactory.VB/OutputVisitor/OutputVisitor.cs
+@@ -2879,6 +2879,17 @@ public object VisitUsingStatement(UsingStatement usingStatement, object data)
+ 			return EndNode(usingStatement);
+ 		}
+ 		
++		public object VisitCallStatement(CallStatement callStatement, object data)
++		{
++			StartNode(callStatement);
++
++			WriteKeyword("Call");
++			Space();
++			callStatement.Expression.AcceptVisitor(this, data);
++
++			return EndNode(callStatement);
++		}
++
+ 		public object VisitGoToStatement(GoToStatement goToStatement, object data)
+ 		{
+ 			StartNode(goToStatement);

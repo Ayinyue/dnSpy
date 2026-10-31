@@ -146,7 +146,7 @@ namespace EngineBaseline {
 		// ---------------------------------------------------------------- dump
 
 		static int RunDump(string[] args) {
-			string asmPath = null, impl = null, lang = null, outDir = null, dnspyDir = null;
+			string asmPath = null, impl = null, lang = null, outDir = null, dnspyDir = null, onlyType = null;
 			bool all = false;
 			int max = int.MaxValue;
 
@@ -159,6 +159,7 @@ namespace EngineBaseline {
 				case "--dnspy-dir": dnspyDir = Next(args, ref i); break;
 				case "--max": max = int.Parse(Next(args, ref i)); break;
 				case "--all": all = true; break;
+				case "--type": onlyType = Next(args, ref i); break;
 				default: throw new ArgumentException("Unknown option: " + args[i]);
 				}
 			}
@@ -188,6 +189,7 @@ namespace EngineBaseline {
 			var candidates = (all
 				? mod.GetTypes()
 				: mod.GetTypes().Where(t => t.IsPublic && !t.IsEnum && !t.IsInterface))
+				.Where(t => onlyType is null || t.FullName == onlyType || t.FullName.Contains(onlyType))
 				.OrderBy(t => t.FullName, StringComparer.Ordinal)
 				.Take(max)
 				.ToList();

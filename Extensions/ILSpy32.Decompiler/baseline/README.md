@@ -39,6 +39,11 @@ dotnet run -c Release -- compare --a out/core-vb-contracts --b out/v32-vb-contra
 # 语法验证（Roslyn 解析，只查语法，不做语义/引用解析）
 dotnet run -c Release -- validate --dir out/v32-vb-contracts --lang vb \n    --out out/syntax-vb-contracts.md
 
+# 语义编译（带引用）
+dotnet run -c Release -- compile --dir out/v32-vb-contracts --lang vb \
+    --refs ../../../dnSpy/dnSpy/bin/Release/net10.0-windows \
+    --out out/compile-vb-contracts.md
+
 # 单个类型的全部诊断（排查用）
 dotnet run -c Release -- validate --dir out/v32-vb-asm --lang vb \n    --file "dnSpy.AsmEditor.Compiler.ModulePatcher"
 ```
@@ -53,6 +58,8 @@ dotnet run -c Release -- validate --dir out/v32-vb-asm --lang vb \n    --file "d
 | `--dnspy-dir <dir>` | 显式指定 dnSpy 输出目录（默认取 `--asm` 所在目录）|
 | `validate --dir <dir>` | 对某次 dump 的结果做语法验证 |
 | `validate --file <name>` | 只验证一个类型并打印全部诊断 |
+| `compile --refs <dir>` | 语义编译（需要引用目录），可访问性错误单列为 noise |
+| `--type <name>` | dump 只处理名字匹配的类型（调试单个类型用）|
 
 输出：每个类型一个 `.txt`、`summary.tsv`（类型 / 状态 / 长度 / 文件 / 原因）、
 `_meta.txt`（引擎与程序集信息）；`compare` 生成 markdown 报告。
@@ -180,12 +187,18 @@ value = (dictionary([key]))                        ' 同一个实例
 3. **`_` 不能作标识符**（`[_]` 同样非法，VB 视其为续行符），重命名为 `__`。
 4. **`Char` 漏在关键字表外**，导致枚举成员/属性名未加方括号。
 
+5. **语句以 `New` 开头**（`New T().M()`）——VB 会报语法错误，必须加 `Call`。
+   为此在 VB AST 中新增了 `CallStatement` 节点（接口 + 两个输出器 + 转换器）。
+6. **P/Invoke 方法被输出成无方法体的 `Function`**。根因是 `HasAttribute` 依赖
+   MemberReference 注解，而反编译产物没有该注解 → 永远检测不到 `DllImport`，
+   走不到已有的 `ExternalMethodDeclaration` 分支。改为回退到语法名后正确输出 `Declare ... Lib`。
+
 修复后的语法错误文件数：
 
 | 程序集 | 语言 | 语法错误文件 |
 |---|---|---|
-| AsmEditor（1278） | VB | **8（0.63%）** |
-| dnSpy.dll（3266） | VB | **145（4.4%）** |
+| AsmEditor（1278） | VB | **0** |
+| dnSpy.dll（3266） | VB | **6（0.18%）** |
 | Contracts.Logic（84） | VB | **1（1.2%）** |
 
 ### 剩余已知形态（未修）
@@ -196,7 +209,27 @@ value = (dictionary([key]))                        ' 同一个实例
 
 这些都需要各自的转换策略，且当前已不影响「是否产出代码」。
 
-## 诊断开关
+## 语义编译验证（2026-10-31 新增）
+
+`compile` 用 `--refs` 目录里的程序集 + 运行时程序集做真正的语义编译。
+**注意**：反编译出的类型与它引用的内部成员不在同一程序集，可访问性错误属于
+测量假阳性，报告里单列为 noise（`CS0122` / `BC30390` 等）。
+
+Contracts.Logic（84 个 public 类型）的首次结果：**54 个文件编译失败**，真实问题包括：
+
+| 次数 | 诊断 | 说明 |
+|---|---|---|
+| 18 | `BC30451 '__PostIncrement' is not declared` | 转换器把 `++/--` 表达式输出成对未定义辅助函数的调用 |
+| 18 | `BC30258 Classes can inherit only from other classes` | `Inherits` 目标不是类型 |
+| 15 | `BC30662 Attribute 'NullableAttribute' cannot be applied` | 特性目标不匹配 |
+| 15 | `BC30456 'Contracts' is not a member of 'dnSpy.Contracts.DnSpy'` | 命名空间被同名类型遮蔽，需要 `Global.` |
+| 12 | `BC30002 Type '_GetCustomAttributes_d__9' is not defined` | 重命名后的类型引用未全部一致 |
+| 12 | `BC30654 'Return' statement in a Function must return a value` | 裸 `Return` 出现在 Function 中 |
+| 11 | `BC31409 'Equals' must be declared 'Overloads'` | 缺少 Overloads |
+
+这些都是「语义正确性」层面的后续工作，不影响「能否产出代码」。
+
+## 诊断开关## 诊断开关
 
 失败注释默认只写一行（异常类型 + 消息）。设置 `DNSPY_ILSPY32_DIAG=1` 会把完整调用栈
 追加进注释（单行 ` | ` 分隔），用于定位转换器内部失败——转换器吞掉所有异常，这是唯一的

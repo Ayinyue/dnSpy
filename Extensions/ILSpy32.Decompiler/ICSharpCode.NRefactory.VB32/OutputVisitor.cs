@@ -2918,6 +2918,17 @@ namespace ICSharpCode.NRefactory.VB {
 			return EndNode(usingStatement);
 		}
 		
+		public object VisitCallStatement(CallStatement callStatement, object data)
+		{
+			StartNode(callStatement);
+
+			WriteKeyword("Call");
+			Space();
+			callStatement.Expression.AcceptVisitor(this, data);
+
+			return EndNode(callStatement);
+		}
+
 		public object VisitGoToStatement(GoToStatement goToStatement, object data)
 		{
 			StartNode(goToStatement);

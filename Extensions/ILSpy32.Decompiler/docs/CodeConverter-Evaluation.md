@@ -140,6 +140,16 @@ IL (dnlib) → 桥接 → ILSpy 3.2 → C# SyntaxTree → C# 文本 → Roslyn P
 - 仍需长期维护自研转换器
 - 无法获得 CodeConverter 的完整语义分析能力
 
+**已落地改进**（2026-10-31）：
+- **catch 隐式变量命名**：从 `exN` 改为 `__unused{TypeShortName}{n}__`（如
+  `__unusedIOException1__`），计数器在每个 try 语句内重置——完全对齐 CodeConverter
+  方案。验证：`dnSpy.AsmEditor.x.dll` 全量回归 `ok=1278 failed=0`，CatchShapes 六种
+  catch 形态输出全部为合法 VB。
+- **`DateTime`→`Date` 别名：验证不可行并回滚**。反编译生成的类型节点不带
+  Cecil `TypeReference` 注解（`ConvertType` 只在显式类型转换路径添加注解），转换器
+  无法安全识别 `System.DateTime` 并缩写为 `Date`。该结论由
+  `vbverify/testsrc/DateTimeShapes.cs` 固化为回归锁（输出仍为 `DateTime`/`DateTime?`）。
+
 ### 方案 C：混合（推荐候选）
 
 - 默认使用自研转换器（快、无额外依赖）

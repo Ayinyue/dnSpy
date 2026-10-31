@@ -1426,6 +1426,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitTryCatchStatement(CS.TryCatchStatement tryCatchStatement, object data)
 		{
+			// Reset the implicit-catch-variable counter per try statement, matching
+			// CodeConverter's behavior of numbering catch clauses within each try.
+			catchVariableCount = 0;
+
 			var stmt = new TryStatement();
 
 			stmt.Body = (BlockStatement)tryCatchStatement.TryBlock.AcceptVisitor(this, data);
@@ -1445,9 +1449,12 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				// "catch (Exception)" without a variable, which the 3.2 engine emits
 				// with an empty VariableNameToken. Generate a unique name in that case,
 				// otherwise NRefactory's OutputVisitor asserts (and the output would be
-				// invalid VB anyway).
+				// invalid VB anyway). The naming scheme mirrors CodeConverter:
+				// "__unused{SimpleTypeName}{n}__" (n restarts per try statement).
 				if (catchClause.VariableNameToken.IsNull) {
-					clause.ExceptionVariable = Identifier.Create(catchClause.Annotations, "ex" + (++catchVariableCount));
+					string typeName = clause.ExceptionType.ToString();
+					string simpleName = typeName.Split('.').Last().Split('`')[0];
+					clause.ExceptionVariable = Identifier.Create(catchClause.Annotations, "__unused" + simpleName + (++catchVariableCount) + "__");
 				}
 			}
 			if (!catchClause.VariableNameToken.IsNull)

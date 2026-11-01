@@ -38,12 +38,51 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			foreach (var type in module.GetTypes())
 				types[type.FullName] = type;
 
+			var renames = new Dictionary<string, string>(StringComparer.Ordinal);
 			foreach (var typeDeclaration in tree.Descendants.OfType<ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration>()) {
 				var fullName = GetFullTypeName(typeDeclaration);
 				if (fullName is null || !types.TryGetValue(fullName, out var typeDef))
 					continue;
 				typeDeclaration.AddAnnotation(typeDef);
 				AttachMembers(typeDef, typeDeclaration);
+				CollectIdentifierRenames(typeDef, typeDeclaration, renames);
+			}
+
+			if (renames.Count > 0)
+				tree.AddAnnotation(renames);
+		}
+
+		/// <summary>
+		/// VB is case-insensitive, so a private field "start" and a property "Start" cannot both
+		/// exist (BC30260/BC31429). Rename the field: fields are private in practice, so no other
+		/// file refers to them, while renaming a public member would break the other dumps.
+		/// </summary>
+		static void CollectIdentifierRenames(TypeDef typeDef, ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration declaration, Dictionary<string, string> renames) {
+			var fields = declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.FieldDeclaration>()
+				.SelectMany(f => f.Variables.Select(v => v.Name)).ToList();
+			if (fields.Count == 0)
+				return;
+
+			var names = new List<string>(fields);
+			names.AddRange(declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.PropertyDeclaration>().Select(p => p.Name));
+			names.AddRange(declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.MethodDeclaration>().Select(m => m.Name));
+			names.AddRange(declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.EventDeclaration>().Select(e => e.Name));
+			names.AddRange(declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.CustomEventDeclaration>().Select(e => e.Name));
+			names.AddRange(declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration>().Select(t => t.Name));
+
+			foreach (var group in names.GroupBy(n => n, StringComparer.OrdinalIgnoreCase)) {
+				if (group.Count() <= 1)
+					continue;
+				if (group.Distinct(StringComparer.Ordinal).Count() <= 1)
+					continue;
+				var field = fields.FirstOrDefault(f => group.Contains(f, StringComparer.Ordinal));
+				if (field is null)
+					continue;
+				var renamed = field + "_2";
+				while (names.Contains(renamed, StringComparer.OrdinalIgnoreCase))
+					renamed += "_";
+				renames[field] = renamed;
+				names.Add(renamed);
 			}
 		}
 

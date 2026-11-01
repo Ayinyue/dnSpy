@@ -7,6 +7,8 @@
 // AST through OutputVisitor + VBTextOutputFormatter32.
 
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using dnlib.DotNet;
 using dnSpy.Contracts.Decompiler;
@@ -95,6 +97,21 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			return DnlibCecilBridge.TryGetMember(cecilModule, rawToken);
 		}
 
+		/// <summary>
+		/// Applies the renames the binder computed for VB's case-insensitive name space. Both the
+		/// declarations and the references go through Identifier, so renaming the nodes keeps them
+		/// consistent.
+		/// </summary>
+		static void ApplyIdentifierRenames(ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree csharpUnit, CompilationUnit unit) {
+			var renames = csharpUnit.Annotation<Dictionary<string, string>>();
+			if (renames is null || renames.Count == 0)
+				return;
+			foreach (var identifier in unit.Descendants.OfType<Identifier>()) {
+				if (renames.TryGetValue(identifier.Name, out var renamed))
+					identifier.Name = renamed;
+			}
+		}
+
 		void DecompileCore(ModuleDef module, IDecompilerOutput output, DecompilationContext ctx, Func<ICSharpCode.Decompiler.CSharp.CSharpDecompiler, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree> decompile) {
 			ctx.CancellationToken.ThrowIfCancellationRequested();
 			var cecilModule = DnlibCecilBridge.TryGetModule(module);
@@ -122,6 +139,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				AstAnnotationBinder.Attach(module, csharpUnit);
 				var converter = new CSharpToVBConverter32(module, new ILSpyEnvironmentProvider32());
 				var unit = (CompilationUnit)csharpUnit.AcceptVisitor(converter, null);
+				ApplyIdentifierRenames(csharpUnit, unit);
 				var outputFormatter = new VBTextOutputFormatter32(output);
 				var formattingPolicy = new VBFormattingOptions {
 					NumberFormatter = ICSharpCode.NRefactory.NumberFormatter.GetVBInstance(hex: false, upper: true),

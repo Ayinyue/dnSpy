@@ -618,7 +618,7 @@ namespace EngineBaseline {
 		// A decompiled type always ends up in a different assembly than the members it
 		// references, so internal members look inaccessible. Report those separately.
 		static readonly HashSet<string> accessibilityNoise = new HashSet<string>(StringComparer.Ordinal) {
-			"CS0122", "CS0050", "CS0051", "BC30390", "BC30500", "BC30508"
+			"CS0122", "CS0050", "CS0051", "BC30390", "BC30389", "BC30500", "BC30508"
 		};
 		static bool IsAccessibilityNoise(string id) => accessibilityNoise.Contains(id);
 

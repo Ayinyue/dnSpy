@@ -7,6 +7,7 @@
 // annotations directly.
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using dnSpy.Contracts.Decompiler;
 using ICSharpCode.NRefactory.TypeSystem;
@@ -59,10 +60,54 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public bool IsMethodGroup(CS.Expression expression) {
 			var annotation = expression.Annotation<MethodReference>();
-			if (annotation is null)
+			if (annotation is not null) {
+				var def = annotation.Resolve();
+				return def is not null && !def.IsGetter && !def.IsSetter && !def.IsAddOn && !def.IsRemoveOn;
+			}
+			// No annotations in 3.2. Fall back to the method names the binder recorded: a bare
+			// reference to a method must become AddressOf in VB, a field/property must not.
+			if (expression.Parent is CS.InvocationExpression invocation && invocation.Target == expression)
 				return false;
-			var def = annotation.Resolve();
-			return def is not null && !def.IsGetter && !def.IsSetter && !def.IsAddOn && !def.IsRemoveOn;
+			var tree = expression.Ancestors.OfType<CS.SyntaxTree>().FirstOrDefault();
+			var methodNames = tree?.Annotation<Dictionary<string, HashSet<string>>>();
+			if (methodNames is null)
+				return false;
+			switch (expression) {
+			case CS.IdentifierExpression identifier:
+				var owner = GetEnclosingTypeName(expression);
+				return owner is not null && methodNames.TryGetValue(owner, out var ownNames) && ownNames.Contains(identifier.Identifier);
+			case CS.MemberReferenceExpression member:
+				var name = GetTypeNameText(member.Target);
+				return name is not null && methodNames.TryGetValue(name, out var names) && names.Contains(member.MemberName);
+			default:
+				return false;
+			}
+		}
+
+		static string GetEnclosingTypeName(CS.AstNode node) {
+			for (var current = node.Parent; current != null; current = current.Parent) {
+				if (current is CS.TypeDeclaration type)
+					return type.Name;
+			}
+			return null;
+		}
+
+		static string GetTypeNameText(CS.AstNode node) {
+			switch (node) {
+			case CS.SimpleType simple:
+				return simple.Identifier;
+			case CS.MemberType member:
+				return member.MemberName;
+			// In an expression context a type name can be a TypeReferenceExpression wrapping an AstType.
+			case CS.TypeReferenceExpression typeReference:
+				return GetTypeNameText(typeReference.Type);
+			case CS.IdentifierExpression identifier:
+				return identifier.Identifier;
+			case CS.MemberReferenceExpression reference:
+				return reference.MemberName;
+			default:
+				return null;
+			}
 		}
 
 		public bool HasEvent(Expression expression) =>

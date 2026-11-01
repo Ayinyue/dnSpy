@@ -39,6 +39,7 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 				types[type.FullName] = type;
 
 			var renames = new Dictionary<string, string>(StringComparer.Ordinal);
+			var methodNames = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
 			foreach (var typeDeclaration in tree.Descendants.OfType<ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration>()) {
 				var fullName = GetFullTypeName(typeDeclaration);
 				if (fullName is null || !types.TryGetValue(fullName, out var typeDef))
@@ -46,13 +47,37 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 				typeDeclaration.AddAnnotation(typeDef);
 				AttachMembers(typeDef, typeDeclaration);
 				CollectIdentifierRenames(typeDef, typeDeclaration, renames);
+				RegisterMethodNames(typeDef, typeDeclaration, methodNames);
 			}
 
 			if (renames.Count > 0)
 				tree.AddAnnotation(renames);
+			if (methodNames.Count > 0)
+				tree.AddAnnotation(methodNames);
 		}
 
 		/// <summary>
+		/// Records the method names per type. The converter needs them to decide whether a bare
+		/// member reference is a method group (VB requires AddressOf) or a field/property.
+		/// </summary>
+		static void RegisterMethodNames(TypeDef typeDef, ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration declaration,
+				Dictionary<string, HashSet<string>> methodNames) {
+			var names = new HashSet<string>(declaration.Members
+				.OfType<ICSharpCode.Decompiler.CSharp.Syntax.MethodDeclaration>()
+				.Select(m => m.Name), StringComparer.Ordinal);
+			if (names.Count == 0)
+				return;
+			foreach (var key in new string[] { typeDef.Name?.String, typeDef.FullName }) {
+				if (string.IsNullOrEmpty(key))
+					continue;
+				if (!methodNames.TryGetValue(key, out var existing))
+					methodNames[key] = existing = new HashSet<string>(StringComparer.Ordinal);
+				existing.UnionWith(names);
+			}
+		}
+
+		/// <summary>
+		/// VB is case-insensitive		/// <summary>
 		/// VB is case-insensitive, so a private field "start" and a property "Start" cannot both
 		/// exist (BC30260/BC31429). Rename the field: fields are private in practice, so no other
 		/// file refers to them, while renaming a public member would break the other dumps.

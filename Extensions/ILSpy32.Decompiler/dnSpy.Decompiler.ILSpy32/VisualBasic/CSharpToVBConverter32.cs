@@ -2089,6 +2089,37 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			}
 		}
 
+		IEnumerable<ImplementsResult> MatchViaCecil(MethodDef method, ITypeDefOrRef iface) {
+			var cecilType = DnlibCecilBridge.TryGetTypeReference(module, iface);
+			var definition = cecilType?.Resolve();
+			if (definition is null)
+				yield break;
+
+			// IEquatable<AddressReference>: map the interface's own type parameters to those
+			// arguments so Equals(T) does not match an unrelated Equals(object) overload.
+			var genericArguments = (iface.ToTypeSig() as GenericInstSig)?.GenericArguments;
+			var comparer = new SigComparer(0, method.Module);
+			foreach (var ifaceMethod in definition.Methods) {
+				if (ifaceMethod.Name != method.Name && !method.Name.EndsWith("." + ifaceMethod.Name, StringComparison.Ordinal))
+					continue;
+				if (ifaceMethod.Parameters.Count != method.MethodSig.Params.Count)
+					continue;
+				bool matches = true;
+				for (int i = 0; i < ifaceMethod.Parameters.Count; i++) {
+					if (!(ifaceMethod.Parameters[i].ParameterType is Mono.Cecil.GenericParameter gp))
+						continue;
+					if (genericArguments is null || gp.Position >= genericArguments.Count)
+						continue;
+					if (!comparer.Equals(genericArguments[gp.Position], method.MethodSig.Params[i])) {
+						matches = false;
+						break;
+					}
+				}
+				if (matches)
+					yield return new ImplementsResult(iface, ifaceMethod.Name, method);
+			}
+		}
+
 		static bool IsSameType(List<ImplementsResult> overrides, ITypeDefOrRef type, UTF8String memberName) {
 			if (overrides == null)
 				return false;
@@ -2119,8 +2150,14 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			var comparer = new SigComparer(0, method.Module);
 			foreach (var ii in method.DeclaringType.Interfaces) {
 				var iface = ii.Interface.Resolve();
-				if (iface == null)
+				if (iface == null) {
+					// dnlib has no assembly resolver here, so an instantiated interface such as
+					// IEquatable<T> does not resolve. cecil can resolve it; the clause still uses
+					// the dnlib type so the emitted name matches.
+					foreach (var fallback in MatchViaCecil(method, ii.Interface))
+						yield return fallback;
 					continue;
+				}
 				foreach (var ifaceMethod in iface.Methods) {
 					if (ifaceMethod.Name != method.Name)
 						continue;

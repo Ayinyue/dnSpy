@@ -120,18 +120,83 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		/// matching and modifier heuristics, both of which re-check the signature.
 		/// </summary>
 		static MethodDef MatchMethod(TypeDef typeDef, ICSharpCode.Decompiler.CSharp.Syntax.MethodDeclaration declaration) {
+			MethodDef fallback = null;
 			foreach (var method in typeDef.Methods) {
 				// Explicit interface implementations are named "IFoo.Bar" in metadata while the
 				// syntax tree keeps "Bar". Parameters exclude the hidden this/return parameters.
 				if (method.Name != declaration.Name && !method.Name.EndsWith("." + declaration.Name, StringComparison.Ordinal))
 					continue;
-				if (method.Parameters.Count(p => p.IsNormalMethodParameter) != declaration.Parameters.Count)
+				var parameters = method.Parameters.Where(p => p.IsNormalMethodParameter).ToList();
+				if (parameters.Count != declaration.Parameters.Count)
 					continue;
 				if (method.IsStatic != declaration.HasModifier(ICSharpCode.Decompiler.CSharp.Syntax.Modifiers.Static))
 					continue;
-				return method;
+				if (ParameterTypesMatch(parameters, declaration))
+					return method;
+				// Same name and arity: remember the first candidate, but keep looking. Without
+				// this, Equals(object) inherits the definition of Equals(T) and then claims to
+				// implement an interface method it does not implement.
+				fallback ??= method;
 			}
-			return null;
+			return fallback;
+		}
+
+		static bool ParameterTypesMatch(List<Parameter> parameters, ICSharpCode.Decompiler.CSharp.Syntax.MethodDeclaration declaration) {
+			for (int i = 0; i < parameters.Count; i++) {
+				var expected = parameters[i].Type?.TypeName;
+				var actual = GetAstTypeName(declaration.Parameters.ElementAt(i).Type);
+				if (string.IsNullOrEmpty(expected) || string.IsNullOrEmpty(actual))
+					continue;
+				if (!string.Equals(LastSegment(expected), actual, StringComparison.OrdinalIgnoreCase))
+					return false;
+			}
+			return true;
+		}
+
+		static string LastSegment(string name) {
+			int index = name.LastIndexOf('.');
+			return index < 0 ? name : name.Substring(index + 1);
+		}
+
+		static string GetAstTypeName(ICSharpCode.Decompiler.CSharp.Syntax.AstType type) {
+			switch (type) {
+			case ICSharpCode.Decompiler.CSharp.Syntax.SimpleType simple:
+				return simple.Identifier;
+			case ICSharpCode.Decompiler.CSharp.Syntax.MemberType member:
+				return member.MemberName;
+			case ICSharpCode.Decompiler.CSharp.Syntax.ComposedType composed:
+				return GetAstTypeName(composed.BaseType);
+			case ICSharpCode.Decompiler.CSharp.Syntax.PrimitiveType primitive:
+				return PrimitiveTypeName(primitive.Keyword);
+			default:
+				return null;
+			}
+		}
+
+		/// <summary>
+		/// Maps a C# keyword to the BCL type name used by dnlib ("object" -> "Object"), so that
+		/// overloads taking a primitive can be told apart from ones taking a reference type.
+		/// </summary>
+		static string PrimitiveTypeName(string keyword) {
+			switch (keyword) {
+			case "object": return "Object";
+			case "string": return "String";
+			case "bool": return "Boolean";
+			case "byte": return "Byte";
+			case "sbyte": return "SByte";
+			case "short": return "Int16";
+			case "ushort": return "UInt16";
+			case "int": return "Int32";
+			case "uint": return "UInt32";
+			case "long": return "Int64";
+			case "ulong": return "UInt64";
+			case "float": return "Single";
+			case "double": return "Double";
+			case "decimal": return "Decimal";
+			case "char": return "Char";
+			case "void": return "Void";
+			default: return null;
+			}
 		}
 	}
 }

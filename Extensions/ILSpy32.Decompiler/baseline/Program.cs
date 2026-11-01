@@ -623,9 +623,9 @@ namespace EngineBaseline {
 		static bool IsAccessibilityNoise(string id) => accessibilityNoise.Contains(id);
 
 		// Compiler-generated names such as "<GetCustomAttributes>d__9" are rewritten to
-		// "_GetCustomAttributes_d__9" because VB cannot name them. Their declaration lives in
-		// another dump file (nested types are dumped separately), so compiling a single file
-		// reports them as missing even though the output as a whole is consistent.
+		// "_GetCustomAttributes_d__9" because VB cannot name them. The state-machine type itself
+		// is not part of the dump (it is a non-public nested type), so the reference cannot
+		// resolve. That is a property of the dump selection, not of the generated code.
 		static bool IsRenamedStateMachineReference(Microsoft.CodeAnalysis.Diagnostic diagnostic) {
 			if (diagnostic.Id != "BC30002" && diagnostic.Id != "CS0246")
 				return false;
@@ -637,6 +637,7 @@ namespace EngineBaseline {
 		static int RunCompile(string[] args) {
 			string dir = null, lang = null, outPath = null, refsDir = null;
 			int top = 10, max = int.MaxValue;
+			bool whole = false;
 			for (int i = 0; i < args.Length; i++) {
 				switch (args[i]) {
 				case "--dir": dir = Next(args, ref i); break;
@@ -645,6 +646,7 @@ namespace EngineBaseline {
 				case "--refs": refsDir = Next(args, ref i); break;
 				case "--top": top = int.Parse(Next(args, ref i)); break;
 				case "--max": max = int.Parse(Next(args, ref i)); break;
+				case "--whole": whole = true; break;
 				default: throw new ArgumentException("Unknown option: " + args[i]);
 				}
 			}
@@ -667,6 +669,8 @@ namespace EngineBaseline {
 
 			var entries = ReadSummary(dir).Values.Where(e => e.Status == "ok")
 				.OrderBy(e => e.FileName, StringComparer.Ordinal).Take(max).ToList();
+			if (whole)
+				return CompileWhole(vb, entries, refs, dir, top, outPath);
 			int badFiles = 0, noiseOnlyFiles = 0, realBadFiles = 0;
 			var byId = new Dictionary<string, int>(StringComparer.Ordinal);
 			var msg = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -680,7 +684,7 @@ namespace EngineBaseline {
 				Microsoft.CodeAnalysis.Compilation compilation = vb
 					? Microsoft.CodeAnalysis.VisualBasic.VisualBasicCompilation.Create(
 						"dump_" + e.FileName, new[] { tree }, refs,
-						new Microsoft.CodeAnalysis.VisualBasic.VisualBasicCompilationOptions(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary))
+						CreateVBOptions())
 					: Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create(
 						"dump_" + e.FileName, new[] { tree }, refs,
 						new Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary));
@@ -744,6 +748,99 @@ namespace EngineBaseline {
 				Console.WriteLine("  " + s);
 			if (outPath is not null) Console.WriteLine("[OK] Report: " + Path.GetFullPath(outPath));
 			return badFiles == 0 ? 0 : 2;
+		}
+
+		// Compiles the whole dump as one assembly. Cross-file references and Friend members that
+		// are part of the dump then resolve, which is closer to how the output would be used.
+		static int CompileWhole(bool vb, List<DumpEntry> entries, List<Microsoft.CodeAnalysis.MetadataReference> refs,
+				string dir, int top, string outPath) {
+			var trees = new List<Microsoft.CodeAnalysis.SyntaxTree>();
+			var files = new Dictionary<Microsoft.CodeAnalysis.SyntaxTree, DumpEntry>();
+			foreach (var entry in entries) {
+				var text = ReadEntry(dir, entry);
+				var tree = vb
+					? Microsoft.CodeAnalysis.VisualBasic.VisualBasicSyntaxTree.ParseText(text)
+					: Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(text);
+				trees.Add(tree);
+				files[tree] = entry;
+			}
+			Microsoft.CodeAnalysis.Compilation compilation = vb
+				? Microsoft.CodeAnalysis.VisualBasic.VisualBasicCompilation.Create("dump", trees, refs,
+					CreateVBOptions())
+				: Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create("dump", trees, refs,
+					new Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary));
+
+			var errors = compilation.GetDiagnostics()
+				.Where(d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error)
+				.ToList();
+			var perFile = new Dictionary<string, int>(StringComparer.Ordinal);
+			var byId = new Dictionary<string, int>(StringComparer.Ordinal);
+			var msg = new Dictionary<string, string>(StringComparer.Ordinal);
+			var samples = new List<string>();
+			int orphan = 0;
+			foreach (var diagnostic in errors) {
+				byId[diagnostic.Id] = (byId.TryGetValue(diagnostic.Id, out var n) ? n : 0) + 1;
+				if (!msg.ContainsKey(diagnostic.Id))
+					msg[diagnostic.Id] = diagnostic.GetMessage();
+				var tree = diagnostic.Location.SourceTree;
+				if (tree != null && files.TryGetValue(tree, out var entry)) {
+					perFile[entry.FullName] = (perFile.TryGetValue(entry.FullName, out var c) ? c : 0) + 1;
+					if (samples.Count < top && !IsAccessibilityNoise(diagnostic.Id) && !IsRenamedStateMachineReference(diagnostic))
+						samples.Add(entry.FullName + " :: " + diagnostic.Id + " " + diagnostic.GetMessage() +
+							" (line " + (diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1) + ")");
+				}
+				else
+					orphan++;
+			}
+
+			var report = new StringBuilder();
+			report.AppendLine("# Semantic compile validation (whole dump)");
+			report.AppendLine();
+			report.AppendLine("- dir: `" + dir + "`");
+			report.AppendLine("- language: " + (vb ? "vb" : "cs"));
+			report.AppendLine("- files compiled: " + entries.Count);
+			report.AppendLine("- files with errors: " + perFile.Count);
+			report.AppendLine("- diagnostics: " + errors.Count + " (unattributed: " + orphan + ")");
+			report.AppendLine();
+			report.AppendLine("| Count | Diagnostic | Message |");
+			report.AppendLine("|---|---|---|");
+			foreach (var kv in byId.OrderByDescending(k => k.Value))
+				report.AppendLine("| " + kv.Value + " | `" + kv.Key + "`" +
+					(IsAccessibilityNoise(kv.Key) ? " (noise)" : "") + " | " +
+					msg.GetValueOrDefault(kv.Key, "").Replace("|", "\\|") + " |");
+			report.AppendLine();
+			report.AppendLine("## Samples");
+			report.AppendLine();
+			foreach (var sample in samples)
+				report.AppendLine("- " + sample);
+
+			if (outPath is not null) {
+				Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath))!);
+				File.WriteAllText(outPath, report.ToString(), new UTF8Encoding(false));
+			}
+			Console.WriteLine("[RESULT] compile(whole) lang=" + (vb ? "vb" : "cs") +
+				" files=" + entries.Count + " badFiles=" + perFile.Count + " diagnostics=" + errors.Count);
+			foreach (var kv in byId.OrderByDescending(k => k.Value).Take(10))
+				Console.WriteLine("  " + kv.Value + "x " + kv.Key +
+					(IsAccessibilityNoise(kv.Key) ? " (noise)" : "") + " " + msg.GetValueOrDefault(kv.Key, ""));
+			foreach (var sample in samples.Take(3))
+				Console.WriteLine("  " + sample);
+			if (outPath is not null)
+				Console.WriteLine("[OK] Report: " + Path.GetFullPath(outPath));
+			return perFile.Count == 0 ? 0 : 2;
+		}
+
+		// A real VB project imports these implicitly; a bare Compilation does not, which would
+		// otherwise report vbTab/vbCrLf and friends as undeclared.
+		static Microsoft.CodeAnalysis.VisualBasic.VisualBasicCompilationOptions CreateVBOptions() {
+			return new Microsoft.CodeAnalysis.VisualBasic.VisualBasicCompilationOptions(
+				Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary,
+				globalImports: new[] {
+					Microsoft.CodeAnalysis.VisualBasic.GlobalImport.Parse("System"),
+					Microsoft.CodeAnalysis.VisualBasic.GlobalImport.Parse("System.Collections.Generic"),
+					Microsoft.CodeAnalysis.VisualBasic.GlobalImport.Parse("System.Linq"),
+					Microsoft.CodeAnalysis.VisualBasic.GlobalImport.Parse("Microsoft.VisualBasic"),
+				});
 		}
 
 		static string Truncate(string s, int max) =>

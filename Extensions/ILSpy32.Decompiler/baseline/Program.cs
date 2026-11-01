@@ -638,6 +638,7 @@ namespace EngineBaseline {
 			string dir = null, lang = null, outPath = null, refsDir = null;
 			int top = 10, max = int.MaxValue;
 			bool whole = false;
+			string onlyDiagnostic = null;
 			for (int i = 0; i < args.Length; i++) {
 				switch (args[i]) {
 				case "--dir": dir = Next(args, ref i); break;
@@ -647,6 +648,7 @@ namespace EngineBaseline {
 				case "--top": top = int.Parse(Next(args, ref i)); break;
 				case "--max": max = int.Parse(Next(args, ref i)); break;
 				case "--whole": whole = true; break;
+				case "--id": onlyDiagnostic = Next(args, ref i); break;
 				default: throw new ArgumentException("Unknown option: " + args[i]);
 				}
 			}
@@ -670,7 +672,7 @@ namespace EngineBaseline {
 			var entries = ReadSummary(dir).Values.Where(e => e.Status == "ok")
 				.OrderBy(e => e.FileName, StringComparer.Ordinal).Take(max).ToList();
 			if (whole)
-				return CompileWhole(vb, entries, refs, dir, top, outPath);
+				return CompileWhole(vb, entries, refs, dir, top, outPath, onlyDiagnostic);
 			int badFiles = 0, noiseOnlyFiles = 0, realBadFiles = 0;
 			var byId = new Dictionary<string, int>(StringComparer.Ordinal);
 			var msg = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -753,7 +755,7 @@ namespace EngineBaseline {
 		// Compiles the whole dump as one assembly. Cross-file references and Friend members that
 		// are part of the dump then resolve, which is closer to how the output would be used.
 		static int CompileWhole(bool vb, List<DumpEntry> entries, List<Microsoft.CodeAnalysis.MetadataReference> refs,
-				string dir, int top, string outPath) {
+				string dir, int top, string outPath, string onlyDiagnostic) {
 			var trees = new List<Microsoft.CodeAnalysis.SyntaxTree>();
 			var files = new Dictionary<Microsoft.CodeAnalysis.SyntaxTree, DumpEntry>();
 			foreach (var entry in entries) {
@@ -823,6 +825,14 @@ namespace EngineBaseline {
 			foreach (var kv in byId.OrderByDescending(k => k.Value).Take(10))
 				Console.WriteLine("  " + kv.Value + "x " + kv.Key +
 					(IsAccessibilityNoise(kv.Key) ? " (noise)" : "") + " " + msg.GetValueOrDefault(kv.Key, ""));
+			if (onlyDiagnostic is not null) {
+				foreach (var diagnostic in errors.Where(d => d.Id == onlyDiagnostic).Take(20)) {
+					var tree = diagnostic.Location.SourceTree;
+					var name = tree != null && files.TryGetValue(tree, out var entry) ? entry.FullName : "<unknown>";
+					Console.WriteLine("    " + name + ":" +
+						(diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1) + " " + diagnostic.GetMessage());
+				}
+			}
 			foreach (var sample in samples.Take(3))
 				Console.WriteLine("  " + sample);
 			if (outPath is not null)

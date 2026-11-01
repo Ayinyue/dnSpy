@@ -118,6 +118,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			}
 
 			try {
+				// The 3.2 tree has no dnlib annotations; the ported converter needs them.
+				AstAnnotationBinder.Attach(module, csharpUnit);
 				var converter = new CSharpToVBConverter32(module, new ILSpyEnvironmentProvider32());
 				var unit = (CompilationUnit)csharpUnit.AcceptVisitor(converter, null);
 				var outputFormatter = new VBTextOutputFormatter32(output);

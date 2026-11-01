@@ -1075,7 +1075,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				if (typeDeclaration.BaseTypes.Any()) {
 					var first = typeDeclaration.BaseTypes.First();
 
-					if (provider.GetTypeKindForAstType(first) != TypeKind.Interface) {
+					if (!IsInterfaceType(first)) {
 						ConvertNodes(typeDeclaration.BaseTypes.Skip(1), type.ImplementsTypes);
 						type.InheritsType = (AstType)first.AcceptVisitor(this, data);
 					} else
@@ -2927,6 +2927,62 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			if (name.Length > suffix.Length && name.EndsWith(suffix, StringComparison.Ordinal))
 				name = name.Substring(0, name.Length - suffix.Length);
 			return name;
+		}
+
+		readonly Dictionary<string, bool> interfaceLookup = new Dictionary<string, bool>(StringComparer.Ordinal);
+
+		// Base types reach the converter without a TypeReference annotation, so
+		// GetTypeKindForAstType answers Unknown and interfaces ended up in Inherits, which VB
+		// rejects (BC30258). Look the name up in the dnlib module instead.
+		bool IsInterfaceType(CS.AstType astType) {
+			if (provider.GetTypeKindForAstType(astType) == TypeKind.Interface)
+				return true;
+
+			var name = GetShortTypeName(astType);
+			if (string.IsNullOrEmpty(name))
+				return false;
+			if (interfaceLookup.TryGetValue(name, out var cached))
+				return cached;
+
+			bool result = false;
+			bool found = false;
+			foreach (var type in module.GetTypes()) {
+				if (type.Name != name)
+					continue;
+				result = type.IsInterface;
+				found = true;
+				break;
+			}
+			if (!found) {
+				foreach (var typeRef in module.GetTypeRefs()) {
+					if (typeRef.Name != name)
+						continue;
+					var definition = typeRef.Resolve();
+					if (definition != null)
+						result = definition.IsInterface;
+					break;
+				}
+			}
+			// Not found in this module or its type refs: fall back to the .NET naming
+			// convention (I followed by an upper-case letter). A wrong guess only moves the
+			// error, whereas leaving it as a class is always wrong for an interface.
+			if (!found && name.Length > 1 && name[0] == 'I' && char.IsUpper(name[1]))
+				result = true;
+			interfaceLookup[name] = result;
+			return result;
+		}
+
+		static string GetShortTypeName(CS.AstType astType) {
+			switch (astType) {
+			case CS.SimpleType simple:
+				return simple.Identifier;
+			case CS.MemberType member:
+				return member.MemberName;
+			case CS.ComposedType composed:
+				return GetShortTypeName(composed.BaseType);
+			default:
+				return null;
+			}
 		}
 
 		bool HasAttribute(CS.AstNodeCollection<CS.AttributeSection> attributes, string name, out CS.Attribute foundAttribute)

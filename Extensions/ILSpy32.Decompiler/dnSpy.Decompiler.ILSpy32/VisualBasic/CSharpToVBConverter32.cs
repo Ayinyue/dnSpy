@@ -55,6 +55,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		int unusedObjectCounter;
 		int incrementTempCounter;
 		readonly Stack<string> namespaceStack = new Stack<string>();
+		readonly Dictionary<string, string> variableTypes = new Dictionary<string, string>(StringComparer.Ordinal);
 
 		/// <summary>
 		/// Per-switch labels used to translate "goto case" / "goto default". VB has no such
@@ -320,6 +321,62 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			return identifier;
 		}
 
+		static bool IsArithmetic(CS.BinaryOperatorType op) {
+			switch (op) {
+			case CS.BinaryOperatorType.Add:
+			case CS.BinaryOperatorType.Subtract:
+			case CS.BinaryOperatorType.Multiply:
+			case CS.BinaryOperatorType.Divide:
+			case CS.BinaryOperatorType.Modulus:
+			case CS.BinaryOperatorType.BitwiseAnd:
+			case CS.BinaryOperatorType.BitwiseOr:
+			case CS.BinaryOperatorType.ExclusiveOr:
+			case CS.BinaryOperatorType.ShiftLeft:
+			case CS.BinaryOperatorType.ShiftRight:
+				return true;
+			default:
+				return false;
+			}
+		}
+
+		bool IsCharExpression(CS.Expression expression) {
+			switch (expression) {
+			case CS.PrimitiveExpression primitive:
+				return primitive.Value is char;
+			case CS.CastExpression cast:
+				return IsCharTypeName(cast.Type.ToString());
+			case CS.IdentifierExpression identifier:
+				return variableTypes.TryGetValue(identifier.Identifier, out var typeName) && IsCharTypeName(typeName);
+			default:
+				return false;
+			}
+		}
+
+		static bool IsCharTypeName(string name) => name == "char" || name == "Char" || name == "System.Char";
+
+		bool IsStringExpression(CS.Expression expression) {
+			switch (expression) {
+			case CS.PrimitiveExpression primitive:
+				return primitive.Value is string;
+			case CS.CastExpression cast:
+				return cast.Type.ToString() == "string" || cast.Type.ToString() == "String";
+			case CS.IdentifierExpression identifier:
+				return variableTypes.TryGetValue(identifier.Identifier, out var typeName) &&
+					(typeName == "string" || typeName == "String" || typeName == "System.String");
+			default:
+				return false;
+			}
+		}
+
+		static Expression WrapAscW(Expression expression) {
+			var invocation = new InvocationExpression();
+			invocation.Target = new IdentifierExpression() {
+				Identifier = Identifier.Create((object)null, "AscW")
+			};
+			invocation.Arguments.Add(expression);
+			return invocation;
+		}
+
 		public AstNode VisitBaseReferenceExpression(CS.BaseReferenceExpression baseReferenceExpression, object data)
 		{
 			InstanceExpression result = new InstanceExpression(InstanceExpressionType.MyBase, ToNRefactoryLocation(baseReferenceExpression.StartLocation));
@@ -332,6 +389,17 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			var left = (Expression)binaryOperatorExpression.Left.AcceptVisitor(this, data);
 			var op = BinaryOperatorType.None;
 			var right = (Expression)binaryOperatorExpression.Right.AcceptVisitor(this, data);
+
+			// VB has no arithmetic on Char (C# does): "c - 48" must become "AscW(c) - 48".
+			// Addition is left alone because C# yields Char there, which VB represents differently.
+			if (IsArithmetic(binaryOperatorExpression.Operator)
+					&& !(binaryOperatorExpression.Operator == CS.BinaryOperatorType.Add
+						&& (IsStringExpression(binaryOperatorExpression.Left) || IsStringExpression(binaryOperatorExpression.Right)))) {
+				if (IsCharExpression(binaryOperatorExpression.Left))
+					left = WrapAscW(left);
+				if (IsCharExpression(binaryOperatorExpression.Right))
+					right = WrapAscW(right);
+			}
 
 			switch (binaryOperatorExpression.Operator) {
 				case CS.BinaryOperatorType.BitwiseAnd:
@@ -1348,6 +1416,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitForeachStatement(CS.ForeachStatement foreachStatement, object data)
 		{
+			// Register before the body is converted: the loop variable is visible inside it.
+			variableTypes[foreachStatement.VariableName] = foreachStatement.VariableType.ToString();
 			var stmt = new ForEachStatement() {
 				Body = (BlockStatement)foreachStatement.EmbeddedStatement.AcceptVisitor(this, data),
 				InExpression = (Expression)foreachStatement.InExpression.AcceptVisitor(this, data),
@@ -1723,6 +1793,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitVariableDeclarationStatement(CS.VariableDeclarationStatement variableDeclarationStatement, object data)
 		{
+			foreach (var variable in variableDeclarationStatement.Variables)
+				variableTypes[variable.Name] = variableDeclarationStatement.Type.ToString();
 			var decl = new LocalDeclarationStatement();
 			decl.Modifiers = Modifiers.Dim;
 			ConvertNodes(variableDeclarationStatement.Variables, decl.Variables);
@@ -1954,6 +2026,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		public AstNode VisitMethodDeclaration(CS.MethodDeclaration methodDeclaration, object data)
 		{
 			CS.Attribute attr;
+
+			variableTypes.Clear();
 
 			if (IsOwnerAModule(methodDeclaration))
 				methodDeclaration.Modifiers &= ~CS.Modifiers.Static;
@@ -2543,6 +2617,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				param.Attributes.Add(block);
 			}
 			param.Name = Identifier.Create(parameterDeclaration.NameToken.Annotations, parameterDeclaration.Name);
+			variableTypes[parameterDeclaration.Name] = parameterDeclaration.Type.ToString();
 			param.Type = (AstType)parameterDeclaration.Type.AcceptVisitor(this, data);
 			param.OptionalValue = (Expression)parameterDeclaration.DefaultExpression.AcceptVisitor(this, data);
 			if (!param.OptionalValue.IsNull)

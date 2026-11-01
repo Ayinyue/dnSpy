@@ -622,6 +622,18 @@ namespace EngineBaseline {
 		};
 		static bool IsAccessibilityNoise(string id) => accessibilityNoise.Contains(id);
 
+		// Compiler-generated names such as "<GetCustomAttributes>d__9" are rewritten to
+		// "_GetCustomAttributes_d__9" because VB cannot name them. Their declaration lives in
+		// another dump file (nested types are dumped separately), so compiling a single file
+		// reports them as missing even though the output as a whole is consistent.
+		static bool IsRenamedStateMachineReference(Microsoft.CodeAnalysis.Diagnostic diagnostic) {
+			if (diagnostic.Id != "BC30002" && diagnostic.Id != "CS0246")
+				return false;
+			// "Type '_GetCustomAttributes_d__9' is not defined." — the sanitized state-machine
+			// name always contains "_d__".
+			return diagnostic.GetMessage().Contains("_d__", StringComparison.Ordinal);
+		}
+
 		static int RunCompile(string[] args) {
 			string dir = null, lang = null, outPath = null, refsDir = null;
 			int top = 10, max = int.MaxValue;
@@ -655,7 +667,7 @@ namespace EngineBaseline {
 
 			var entries = ReadSummary(dir).Values.Where(e => e.Status == "ok")
 				.OrderBy(e => e.FileName, StringComparer.Ordinal).Take(max).ToList();
-			int badFiles = 0, noiseOnlyFiles = 0;
+			int badFiles = 0, noiseOnlyFiles = 0, realBadFiles = 0;
 			var byId = new Dictionary<string, int>(StringComparer.Ordinal);
 			var msg = new Dictionary<string, string>(StringComparer.Ordinal);
 			var samples = new List<string>();
@@ -678,14 +690,17 @@ namespace EngineBaseline {
 					.ToList();
 				if (errors.Count == 0) continue;
 				badFiles++;
-				if (errors.All(d => IsAccessibilityNoise(d.Id)))
+				bool noiseOnly = errors.All(d => IsAccessibilityNoise(d.Id) || IsRenamedStateMachineReference(d));
+				if (noiseOnly)
 					noiseOnlyFiles++;
+				else
+					realBadFiles++;
 				foreach (var g in errors.GroupBy(d => d.Id)) {
 					byId[g.Key] = (byId.TryGetValue(g.Key, out var n) ? n : 0) + 1;
 					if (!msg.ContainsKey(g.Key)) msg[g.Key] = g.First().GetMessage();
 				}
 				if (samples.Count < top) {
-					var first = errors.FirstOrDefault(d => !IsAccessibilityNoise(d.Id)) ?? errors[0];
+					var first = errors.FirstOrDefault(d => !IsAccessibilityNoise(d.Id) && !IsRenamedStateMachineReference(d)) ?? errors[0];
 					int line = first.Location.GetLineSpan().StartLinePosition.Line + 1;
 					samples.Add(e.FullName + " :: " + first.Id + " " + first.GetMessage() + " (line " + line + ")");
 				}
@@ -699,7 +714,8 @@ namespace EngineBaseline {
 			report.AppendLine("- files compiled: " + entries.Count);
 			report.AppendLine("- references: " + refs.Count);
 			report.AppendLine("- files with errors: " + badFiles);
-			report.AppendLine("- of which only accessibility noise: " + noiseOnlyFiles);
+			report.AppendLine("- files with real errors: " + realBadFiles);
+			report.AppendLine("- files whose errors are all measurement noise: " + noiseOnlyFiles);
 			report.AppendLine();
 			if (byId.Count > 0) {
 				report.AppendLine("| Count | Diagnostic | Message |");
@@ -719,7 +735,8 @@ namespace EngineBaseline {
 				File.WriteAllText(outPath, report.ToString(), new UTF8Encoding(false));
 			}
 			Console.WriteLine("[RESULT] compile lang=" + lang + " files=" + entries.Count +
-				" badFiles=" + badFiles + " noiseOnly=" + noiseOnlyFiles);
+				" badFiles=" + badFiles + " realBadFiles=" + realBadFiles +
+				" noiseOnly=" + noiseOnlyFiles);
 			foreach (var kv in byId.OrderByDescending(k => k.Value).Take(10))
 				Console.WriteLine("  " + kv.Value + "x " + kv.Key +
 					(IsAccessibilityNoise(kv.Key) ? " (noise)" : "") + " " + msg.GetValueOrDefault(kv.Key, ""));

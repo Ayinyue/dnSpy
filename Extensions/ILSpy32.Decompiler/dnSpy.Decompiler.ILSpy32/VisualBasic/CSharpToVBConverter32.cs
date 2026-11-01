@@ -54,6 +54,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		int catchVariableCount;
 		int unusedObjectCounter;
 		int incrementTempCounter;
+		readonly Stack<string> namespaceStack = new Stack<string>();
 
 		/// <summary>
 		/// Per-switch labels used to translate "goto case" / "goto default". VB has no such
@@ -1007,6 +1008,18 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			return EndNode(delegateDeclaration, result);
 		}
 
+		// True when the identifier is the root segment of the namespace we are currently in, i.e.
+		// the reference would be resolved relative to that namespace and could hit a type of the
+		// same name instead of the namespace.
+		bool ShouldQualifyWithGlobal(string identifier) {
+			if (namespaceStack.Count == 0)
+				return false;
+			var current = namespaceStack.Peek();
+			int dot = current.IndexOf('.');
+			var root = dot < 0 ? current : current.Substring(0, dot);
+			return root == identifier;
+		}
+
 		public AstNode VisitNamespaceDeclaration(CS.NamespaceDeclaration namespaceDeclaration, object data)
 		{
 			var newNamespace = new NamespaceDeclaration();
@@ -1015,7 +1028,14 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				var newId = new Identifier(BoxedTextColor.Namespace, name, ICSharpCode.NRefactory.TextLocation.Empty);
 				newNamespace.Identifiers.Add(newId);
 			}
-			ConvertMembers(namespaceDeclaration, newNamespace, CS.NamespaceDeclaration.MemberRole, NamespaceDeclaration.MemberRole);
+			var parent = namespaceStack.Count > 0 ? namespaceStack.Peek() + "." : string.Empty;
+			namespaceStack.Push(parent + string.Join(".", newNamespace.Identifiers.Select(i => i.Name)));
+			try {
+				ConvertMembers(namespaceDeclaration, newNamespace, CS.NamespaceDeclaration.MemberRole, NamespaceDeclaration.MemberRole);
+			}
+			finally {
+				namespaceStack.Pop();
+			}
 
 			return EndNode(namespaceDeclaration, newNamespace);
 		}
@@ -2613,6 +2633,12 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 			if (memberType.Target is CS.SimpleType && ((CS.SimpleType)(memberType.Target)).Identifier.Equals("global", StringComparison.Ordinal))
 				target = new PrimitiveType("Global");
+			else if (memberType.Target is CS.SimpleType root && ShouldQualifyWithGlobal(root.Identifier))
+				// Inside namespace dnSpy.*, the name "dnSpy.Contracts.DnSpy.X" resolves "dnSpy" to
+				// the type dnSpy.Contracts.DnSpy and fails (BC30456). Qualifying with Global makes
+				// VB start the lookup at the root namespace.
+				target = new QualifiedType(new PrimitiveType("Global"),
+					Identifier.Create(root.IdentifierToken.Annotations, root.Identifier));
 			else
 				target = (AstType)memberType.Target.AcceptVisitor(this, data);
 

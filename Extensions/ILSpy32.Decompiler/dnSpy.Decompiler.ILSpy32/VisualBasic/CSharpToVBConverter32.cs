@@ -971,9 +971,24 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitAttributeSection(CS.AttributeSection attributeSection, object data)
 		{
-			AttributeBlock block = new AttributeBlock();
-			ConvertNodes(attributeSection.Attributes, block.Attributes);
+			// NullableAttribute / NullableContextAttribute are C# compiler metadata for nullable
+			// reference types. VB cannot apply them (BC30662) and does not need them.
+			var attributes = attributeSection.Attributes
+				.Where(a => !IsNullableMetadataAttribute(a)).ToList();
+			if (attributes.Count == 0)
+				return null;
+
+			var block = new AttributeBlock();
+			foreach (var attribute in attributes) {
+				if (attribute.AcceptVisitor(this, null) is VB.Ast.Attribute converted)
+					block.Attributes.Add(converted);
+			}
 			return EndNode(attributeSection, block);
+		}
+
+		static bool IsNullableMetadataAttribute(CS.Attribute attribute) {
+			var name = NormalizeAttributeName(attribute.Type?.ToString());
+			return name == "Nullable" || name == "NullableContext";
 		}
 
 		public AstNode VisitDelegateDeclaration(CS.DelegateDeclaration delegateDeclaration, object data)

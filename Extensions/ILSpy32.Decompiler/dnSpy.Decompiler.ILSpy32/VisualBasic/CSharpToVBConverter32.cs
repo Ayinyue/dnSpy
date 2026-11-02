@@ -56,6 +56,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		int incrementTempCounter;
 		readonly Stack<string> namespaceStack = new Stack<string>();
 		readonly Dictionary<string, string> variableTypes = new Dictionary<string, string>(StringComparer.Ordinal);
+		readonly Common.ExpressionTypeResolver typeResolver;
 
 		/// <summary>
 		/// Per-switch labels used to translate "goto case" / "goto default". VB has no such
@@ -87,6 +88,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			this.types = new Stack<TypeDeclaration>();
 			this.members = new Stack<MemberInfo>();
 			this.switchLabelMaps = new Stack<SwitchLabelMap>();
+			this.typeResolver = new Common.ExpressionTypeResolver(module, variableTypes);
 		}
 
 		public AstNode VisitAnonymousMethodExpression(CS.AnonymousMethodExpression anonymousMethodExpression, object data)
@@ -484,7 +486,11 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			var leftCode = provider.ResolveExpression(binaryOperatorExpression.Left);
 			var rightCode = provider.ResolveExpression(binaryOperatorExpression.Right);
 
-			return (left == true || right == true) && (leftCode != TypeCode.String && rightCode != TypeCode.String);
+			if ((left == true || right == true) && (leftCode != TypeCode.String && rightCode != TypeCode.String))
+				return true;
+			// No annotations in 3.2, so both operands are usually unknown. When the resolver can
+			// prove both are reference types, C# compares references and VB needs Is.
+			return typeResolver.AreBothReferenceTypes(binaryOperatorExpression.Left, binaryOperatorExpression.Right);
 		}
 
 		public AstNode VisitCastExpression(CS.CastExpression castExpression, object data)
@@ -2028,6 +2034,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			CS.Attribute attr;
 
 			variableTypes.Clear();
+			typeResolver.CurrentType = methodDeclaration.Annotation<MethodDef>()?.DeclaringType;
 
 			if (IsOwnerAModule(methodDeclaration))
 				methodDeclaration.Modifiers &= ~CS.Modifiers.Static;

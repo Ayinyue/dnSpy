@@ -290,19 +290,26 @@ value = (dictionary([key]))                        ' 同一个实例
     类型声明，`GetFullTypeName` 只能算出短名，于是整类没有 `TypeDef` 注解——所有依赖注解的
     功能对它静默失效。现在全名匹配不到时按**唯一简单名**兜底（同名多处时不猜）。
 
+30. **`long.MinValue` 的字面量溢出**（`BC30036`）。C# 对 `-9223372036854775808L` 有特殊规则
+    （一元负号 + 十进制字面量 `9223372036854775808` 恰好合法），VB 没有：VB 先解析字面量再做
+    一元负号，而十进制字面量不允许回绕，`9223372036854775808` 超出 Long → Overflow。
+    3.2 引擎的 C# 输出把该常量写成裸字面量，转换器原样传递。修法：`VisitPrimitiveExpression`
+    特判 `long.MinValue`，发出 `Long.MinValue` 成员引用——2.3 引擎的 VB 输出正是这个形式。
+    十六进制回绕形式（`&H8000000000000000L`）也可行，但成员引用与数字格式化选项无冲突。
+    注意 `9223372036854775808UL`（ULong 的 2^63）是**合法**的，不需要处理。
+
 修复后的语法错误文件数：
 
 | 程序集 | 语言 | 语法错误文件 |
 |---|---|---|
 | AsmEditor（1278） | VB | **0** |
-| dnSpy.dll（3266） | VB | **5（0.15%）** |
-| Contracts.Logic（84） | VB | **1（1.2%）** |
+| dnSpy.dll（3266） | VB | **0** |
+| Contracts.Logic（84） | VB | **0** |
 
 ### 剩余已知形态（未修）
 
 - `New T(...).Method()` 单独成句（VB 需要 `Call`）。dnSpy.dll 的 BC30035 主要来自这里。
 - 无方法体的 P/Invoke / abstract 声明缺少 `End Function`（应改写成 `Declare` 形式）。
-- 超出范围的整数字面量（BC30036）。
 
 这些都需要各自的转换策略，且当前已不影响「是否产出代码」。
 
@@ -422,6 +429,17 @@ Friend 引用、但推断确实有问题」的场面一起藏掉）。要复核�
   （`BC30002`）。要再往下压只能换度量（整份 `--whole` 或给输出加 `InternalsVisibleTo`）。
 
 这些都是「语义正确性」层面的后续工作，不影响「能否产出代码」。
+
+## 度量确定性：引用集必须显式（2026-11-03 教训）
+
+`compile` 的引用 = 进程 TPA + `--refs` 目录。TPA 是否包含 Microsoft.WindowsDesktop.App
+（PresentationCore 等 58 个程序集）是**非确定的**：同日两轮运行，dnSpy.dll 一次
+`references: 316 / realBadFiles 1068`，一次 `references: 266 / realBadFiles 1710`——
+暴涨的 642 个文件全是缺引用假阳性（`BC30652`/`BC30002`/`BC30456 'Media'`），不是转换缺陷。
+
+修法：`Baseline.csproj` 显式 `<FrameworkReference Include="Microsoft.WindowsDesktop.App" />`，
+TPA 确定性包含桌面框架，refs 稳定在 320。**发现 realBadFiles 异常暴涨且错误形态为缺引用时，
+先看报告里的 `references:` 行。**
 
 ## 诊断开关
 

@@ -981,10 +981,24 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				expr = ConvertToConcat(primitiveExpression.Value.ToString());
 			else if (primitiveExpression.Value is char)
 				expr = ConvertToSpecialChar((char)primitiveExpression.Value);
+			else if (primitiveExpression.Value is long && (long)primitiveExpression.Value == long.MinValue)
+				expr = CreateLongMinValueReference();
 			else
 				expr = new PrimitiveExpression(primitiveExpression.Value);
 
 			return EndNode(primitiveExpression, expr);
+		}
+
+		Expression CreateLongMinValueReference()
+		{
+			// VB applies unary minus after the literal and decimal literals cannot wrap,
+			// so C#'s special-cased "-9223372036854775808L" overflows Long when parsed
+			// (BC30036). Emit the constant as a member reference instead; the 2.3
+			// engine's VB output used the same form.
+			return new MemberAccessExpression {
+				Target = new TypeReferenceExpression(new PrimitiveType("Long")),
+				MemberName = Identifier.CreateLiteralField("MinValue")
+			};
 		}
 
 		Expression ConvertToConcat(string literal)

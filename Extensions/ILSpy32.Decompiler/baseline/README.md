@@ -205,6 +205,19 @@ value = (dictionary([key]))                        ' 同一个实例
    initializer（否则改名晚于引用）、判冲突要不区分大小写（`rVA`/`rva`）、生成名要避开
    ILSpy 已经用过的名字（`array`/`array2`）。`out var _` 因此变成 `_discard1`/`_discard2`。
 
+10. **循环条件里的自增/自减**（`while (--i >= 0)`）。VB 没有赋值表达式，原先输出成对不存在的
+    `__Decrement` 的调用。改为下沉到循环体：
+    `While True : i -= 1 : If Not(cond) Then Exit While : … : End While`。
+    只下沉「沿左操作数可达」的自增（右侧可能被短路跳过）；否定时必须加括号，
+    否则 `Not a AndAlso b` 只否定 a。
+11. **事件被当委托调用**（C# 的 `PropertyChanged(this, e)`）。VB 需要 `RaiseEvent`，
+    为此给 VB AST 新增 `RaiseEventStatement`（与 `CallStatement` 同一个补丁）。
+    `var h = Event; if (h != null) h(...)` 这种副本模式会连声明和守卫一起消掉：
+    VB 无法读取事件，而 `RaiseEvent` 自带空检查。
+12. **`Module` 的构造函数带 `Shared`**（`BC30433`）、**`TupleElementNames` 元数据**（`BC37269`）。
+    静态构造函数与方法一样要先剔除 `Static`；`TupleElementNames` 与 `Nullable*` 同属
+    C# 编译器元数据，VB 无法显式应用。
+
 修复后的语法错误文件数：
 
 | 程序集 | 语言 | 语法错误文件 |
@@ -253,9 +266,12 @@ Contracts.Logic（84 个 public 类型）的首次结果：**54 个文件编译�
 | `BC30260` / `BC31429` 大小写重名 | 18 | **0** |
 | `BC30288` 同块重名 | 4 | **0** |
 | `BC30616` 嵌套遮蔽（AsmEditor）| 9 | **0** |
+| `BC32022` 事件当委托调用（AsmEditor）| 36 | **0** |
+| `BC30433` Module 构造函数 `Shared` | 4 | **0** |
+| `BC37269` TupleElementNames | 2 | **0** |
 
-Contracts.Logic 的真实失败文件 54 → **19**；AsmEditor 因缺 WPF 引用等外部因素，
-真实失败文件仍以引用缺失为主（BC30389 等噪声已单列）。
+Contracts.Logic 的真实失败文件 54 → **15**；AsmEditor 因缺 WPF 引用等外部因素，
+真实失败文件 906 → **896**（BC30389/BC30002 等引用缺失为主，已单列噪声）。
 
 这些都是「语义正确性」层面的后续工作，不影响「能否产出代码」。
 

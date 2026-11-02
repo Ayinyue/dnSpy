@@ -33,4 +33,12 @@
     </Reference>
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- dnSpy's output decompiles WPF-heavy UI assemblies, so the semantic compile
+         needs the WindowsDesktop shared framework (PresentationCore, ...). Relying
+         on the process TPA is non-deterministic: a run without it measured dnSpy.dll
+         at 1710 realBadFiles instead of 1068 purely from missing references. -->
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App" />
+  </ItemGroup>
+
 </Project>

@@ -227,12 +227,21 @@ value = (dictionary([key]))                        ' 同一个实例
     （即 CLR 的拆箱）。注意与 `as` 的差别：类型不符时 `DirectCast` 抛异常而非返回 `Nothing`。
 15. **抽象事件**（`BC30243`）。VB 没有抽象事件，去掉 `MustOverride`，退化为字段式事件。
 
+16. **元组**（类型与表达式）。VB AST 原本没有对应节点，导致 `dnSpy.dll` 有 18 个类型直接
+    抛异常降级。新增 `TupleExpression` / `TupleType` / `TupleTypeElement`（元素名可选），
+    输出 `(a, b)` 与 `(x As Integer, y As String)`。
+17. **`new T(AddressOf M)` 无条件简写成 `AddressOf M`**。只对**委托类型**成立，
+    `New Lazy(Of T)(AddressOf ...)` 被削掉了构造函数（`BC30581`）。现在先解析类型，
+    确认派生自 `MulticastDelegate` 才省略。
+18. **`New` 关键字判定区分大小写**，导致名为 `new` 的局部变量没被方括号转义（`BC30180`）；
+    **属性初始化写在 `Implements` 之后**（`BC30205`，VB 要求 `Property X As T = v Implements I.X`）。
+
 修复后的语法错误文件数：
 
 | 程序集 | 语言 | 语法错误文件 |
 |---|---|---|
 | AsmEditor（1278） | VB | **0** |
-| dnSpy.dll（3266） | VB | **6（0.18%）** |
+| dnSpy.dll（3266） | VB | **5（0.15%）** |
 | Contracts.Logic（84） | VB | **1（1.2%）** |
 
 ### 剩余已知形态（未修）
@@ -283,6 +292,10 @@ Contracts.Logic（84 个 public 类型）的首次结果：**54 个文件编译�
 | `BC32006/BC32007` Char 与数值互转 | 10 | **0** |
 | `BC30792` `as` 用于值类型 | 2 | **0** |
 | `BC30243` 抽象事件 | 1 | **0** |
+| `BC30581` 委托构造误简写 | 1 | **0** |
+| `BC30180` 关键字大小写（dnSpy.dll）| 1 | **0** |
+| `BC30205` 属性初始化顺序（dnSpy.dll）| 1 | **0** |
+| 元组表达式/类型（dnSpy.dll 降级）| 18 | **0** |
 
 Contracts.Logic 的真实失败文件 54 → **10**；AsmEditor 因缺 WPF 引用等外部因素，
 真实失败文件 906 → **896**（BC30389/BC30002 等引用缺失为主，已单列噪声）。

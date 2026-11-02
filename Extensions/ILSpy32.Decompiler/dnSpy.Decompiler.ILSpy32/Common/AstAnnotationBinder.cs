@@ -215,21 +215,34 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			return fallback;
 		}
 
+		/// <summary>
+		/// True when the metadata method's parameters match the declaration in the syntax tree.
+		/// <see cref="MatchMethod"/> falls back to the first same-name/arity overload, so callers
+		/// that need the exact overload must check this before trusting the definition.
+		/// </summary>
+		public static bool ParametersMatch(MethodDef method, ICSharpCode.Decompiler.CSharp.Syntax.MethodDeclaration declaration) {
+			var parameters = method.Parameters.Where(p => p.IsNormalMethodParameter).ToList();
+			return parameters.Count == declaration.Parameters.Count && ParameterTypesMatch(parameters, declaration);
+		}
+
 		static bool ParameterTypesMatch(List<Parameter> parameters, ICSharpCode.Decompiler.CSharp.Syntax.MethodDeclaration declaration) {
 			for (int i = 0; i < parameters.Count; i++) {
 				var expected = parameters[i].Type?.TypeName;
 				var actual = GetAstTypeName(declaration.Parameters.ElementAt(i).Type);
 				if (string.IsNullOrEmpty(expected) || string.IsNullOrEmpty(actual))
 					continue;
-				if (!string.Equals(LastSegment(expected), actual, StringComparison.OrdinalIgnoreCase))
+				// 'ref/out' shows up as a trailing '&' in the metadata name but as a modifier on
+				// the syntax node, so it must not decide the match.
+				if (!string.Equals(NormalizeParameterTypeName(expected), NormalizeParameterTypeName(actual), StringComparison.OrdinalIgnoreCase))
 					return false;
 			}
 			return true;
 		}
 
-		static string LastSegment(string name) {
-			int index = name.LastIndexOf('.');
-			return index < 0 ? name : name.Substring(index + 1);
+		static string NormalizeParameterTypeName(string name) {
+			var result = name.TrimEnd('&', '*');
+			int index = result.LastIndexOf('.');
+			return index < 0 ? result : result.Substring(index + 1);
 		}
 
 		static string GetAstTypeName(ICSharpCode.Decompiler.CSharp.Syntax.AstType type) {
@@ -239,7 +252,8 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			case ICSharpCode.Decompiler.CSharp.Syntax.MemberType member:
 				return member.MemberName;
 			case ICSharpCode.Decompiler.CSharp.Syntax.ComposedType composed:
-				return GetAstTypeName(composed.BaseType);
+				var baseName = GetAstTypeName(composed.BaseType);
+				return composed.ArraySpecifiers.Count > 0 ? baseName + "[]" : baseName;
 			case ICSharpCode.Decompiler.CSharp.Syntax.PrimitiveType primitive:
 				return PrimitiveTypeName(primitive.Keyword);
 			default:

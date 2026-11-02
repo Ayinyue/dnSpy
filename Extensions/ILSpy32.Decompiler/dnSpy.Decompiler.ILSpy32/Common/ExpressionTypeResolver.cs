@@ -47,9 +47,19 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		}
 
 		/// <summary>True when both operands are known to be reference types.</summary>
-		public bool AreBothReferenceTypes(ICSharpCode.Decompiler.CSharp.Syntax.Expression left,
-				ICSharpCode.Decompiler.CSharp.Syntax.Expression right) =>
-			IsReference(left) == true && IsReference(right) == true;
+		/// <summary>
+		/// True when 'left == right' can only be a reference comparison. One side being a known
+		/// reference type is enough: a struct operand would need an operator the other operand
+		/// cannot convert to. A side known to be a value type vetoes it.
+		/// </summary>
+		public bool IsReferentialComparison(ICSharpCode.Decompiler.CSharp.Syntax.Expression left,
+				ICSharpCode.Decompiler.CSharp.Syntax.Expression right) {
+			var l = IsReference(left);
+			var r = IsReference(right);
+			if (l == false || r == false)
+				return false;
+			return l == true || r == true;
+		}
 
 		public bool? IsReference(ICSharpCode.Decompiler.CSharp.Syntax.Expression expression) {
 			var name = GetTypeName(expression);
@@ -117,18 +127,23 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 				result = true;
 			else if (name.EndsWith("[]", StringComparison.Ordinal))
 				result = true;
-			else if (IsValueTypeName(name))
+			// 'ReadOnlyCollection<string>', 'ReadOnlyCollection`1<string>' and
+			// 'ReadOnlyCollection(Of String)' are all the metadata type 'ReadOnlyCollection`1'.
+			// Without stripping the arguments no lookup can match and the type stays unknown,
+			// which used to turn a reference comparison into a value comparison (BC30452).
+			var bare = StripGenericArgs(name, out var arity);
+			if (result is null && IsValueTypeName(bare))
 				result = false;
-			else {
-				var local = LookupLocalTypeDef(name);
+			else if (result is null) {
+				var local = LookupLocalTypeDef(bare, arity) ?? LookupLocalTypeDef(name);
 				if (local != null)
 					result = !local.IsValueType;
 				else {
-					var external = LookupExternalType(name);
+					var external = LookupExternalType(bare, arity) ?? LookupExternalType(name);
 					if (external != null)
 						result = !external.IsValueType;
 					else {
-						var runtimeType = GetRuntimeType(name);
+						var runtimeType = GetRuntimeType(bare) ?? GetRuntimeType(name);
 						if (runtimeType != null)
 							result = !runtimeType.IsValueType;
 					}
@@ -174,6 +189,47 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		static bool IsStringType(string name) {
 			var n = Normalize(name);
 			return n == "string" || n == "String";
+		}
+
+		/// <summary>
+		/// Removes generic arguments, accepting the C#, dnlib ('Foo`1&lt;...&gt;') and VB spellings,
+		/// and returns the arity so the metadata name ('Foo`1') can be looked up.
+		/// </summary>
+		static string StripGenericArgs(string name, out int arity) {
+			arity = 0;
+			var result = name;
+			var open = result.IndexOf('<');
+			if (open >= 0) {
+				arity = CountGenericArguments(result, open + 1, '<', '>');
+				result = result.Substring(0, open);
+			}
+			else if ((open = result.IndexOf("(Of ", StringComparison.Ordinal)) >= 0) {
+				arity = CountGenericArguments(result, open + 4, '(', ')');
+				result = result.Substring(0, open);
+			}
+			// dnlib writes the arity into the name: ReadOnlyCollection`1<System.String>.
+			var tick = result.LastIndexOf('`');
+			if (tick >= 0 && int.TryParse(result.Substring(tick + 1), out var declared)) {
+				arity = declared;
+				result = result.Substring(0, tick);
+			}
+			return result;
+		}
+
+		static int CountGenericArguments(string text, int start, char open, char close) {
+			int depth = 1, count = 1;
+			for (int i = start; i < text.Length; i++) {
+				var c = text[i];
+				if (c == open)
+					depth++;
+				else if (c == close) {
+					if (--depth == 0)
+						break;
+				}
+				else if (c == ',' && depth == 1)
+					count++;
+			}
+			return count;
 		}
 
 		static bool IsValueTypeName(string name) {
@@ -433,7 +489,9 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		/// <summary>Type of a member of an explicitly named type.</summary>
 		string MemberTypeOf(string typeName, string memberName) {
 			var name = Normalize(typeName);
-			var type = LookupLocalTypeDef(name);
+			// Members live on the generic type definition, not on the constructed type.
+			var bare = StripGenericArgs(name, out var arity);
+			var type = LookupLocalTypeDef(bare, arity) ?? LookupLocalTypeDef(name);
 			if (type != null) {
 				foreach (var field in type.Fields) {
 					if (field.Name == memberName)
@@ -446,7 +504,7 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			}
 
 			// Types from other assemblies (dnlib.DotNet.MethodDef, ...) resolve through cecil.
-			var external = LookupExternalType(name);
+			var external = LookupExternalType(bare, arity) ?? LookupExternalType(name);
 			if (external is null)
 				return null;
 			foreach (var field in external.Fields) {
@@ -460,25 +518,37 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			return null;
 		}
 
-		TypeDef LookupLocalTypeDef(string name) {
+		TypeDef LookupLocalTypeDef(string name, int arity = 0) {
+			var genericName = arity > 0 ? name + "`" + arity : null;
 			foreach (var type in module.GetTypes()) {
 				if (type.FullName == name || type.Name == name)
+					return type;
+				// Generic types carry the arity in their metadata name.
+				if (genericName != null && (type.FullName == genericName || type.Name == genericName))
 					return type;
 			}
 			return null;
 		}
 
-		Mono.Cecil.TypeDefinition LookupExternalType(string name) {
-			if (externalTypes.TryGetValue(name, out var cached))
+		Mono.Cecil.TypeDefinition LookupExternalType(string name, int arity = 0) {
+			var cacheKey = arity > 0 ? name + "`" + arity : name;
+			if (externalTypes.TryGetValue(cacheKey, out var cached))
 				return cached;
+			var genericName = arity > 0 ? name + "`" + arity : null;
 			Mono.Cecil.TypeDefinition result = null;
 			var cecilModule = DnlibCecilBridge.TryGetModule(module);
 			if (cecilModule != null) {
 				result = cecilModule.GetType(name);
+				if (result is null && genericName != null)
+					result = cecilModule.GetType(genericName);
 				if (result is null) {
 					foreach (var assemblyRef in cecilModule.AssemblyReferences) {
 						var referenced = ResolveAssembly(assemblyRef);
-						result = referenced?.MainModule.GetType(name);
+						if (referenced is null)
+							continue;
+						result = referenced.MainModule.GetType(name);
+						if (result is null && genericName != null)
+							result = referenced.MainModule.GetType(genericName);
 						if (result != null)
 							break;
 					}
@@ -492,7 +562,7 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 						if (module is null)
 							continue;
 						foreach (var type in module.GetTypes()) {
-							if (type.Name == name) {
+							if (type.Name == name || (genericName != null && type.Name == genericName)) {
 								result = type;
 								break;
 							}
@@ -502,7 +572,7 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 					}
 				}
 			}
-			externalTypes[name] = result;
+			externalTypes[cacheKey] = result;
 			return result;
 		}
 

@@ -659,8 +659,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			if ((left == true || right == true) && (leftCode != TypeCode.String && rightCode != TypeCode.String))
 				return true;
 			// No annotations in 3.2, so both operands are usually unknown. When the resolver can
-			// prove both are reference types, C# compares references and VB needs Is.
-			return typeResolver.AreBothReferenceTypes(binaryOperatorExpression.Left, binaryOperatorExpression.Right);
+			// prove at least one side is a reference type, C# compares references and VB needs Is.
+			return typeResolver.IsReferentialComparison(binaryOperatorExpression.Left, binaryOperatorExpression.Right);
 		}
 
 		public AstNode VisitCastExpression(CS.CastExpression castExpression, object data)
@@ -2565,11 +2565,27 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					continue;
 				bool matches = true;
 				for (int i = 0; i < ifaceMethod.Parameters.Count; i++) {
-					if (!(ifaceMethod.Parameters[i].ParameterType is Mono.Cecil.GenericParameter gp))
+					var parameterType = ifaceMethod.Parameters[i].ParameterType;
+					if (parameterType is Mono.Cecil.GenericParameter gp) {
+						if (genericArguments is null || gp.Position >= genericArguments.Count)
+							continue;
+						if (!comparer.Equals(genericArguments[gp.Position], method.MethodSig.Params[i])) {
+							matches = false;
+							break;
+						}
 						continue;
-					if (genericArguments is null || gp.Position >= genericArguments.Count)
+					}
+					// Only names can be compared here: dnlib did not resolve the interface, so its
+					// signature is not available. Without this every Write(x, String) overload
+					// matched every Write(y, String) interface member and claimed all of them
+					// (BC30583/BC30401). Generic instantiations are left to the arity check above.
+					var ifaceName = parameterType.FullName;
+					var implName = method.MethodSig.Params[i].FullName;
+					if (ifaceName.IndexOf('<') >= 0 || implName.IndexOf('<') >= 0)
 						continue;
-					if (!comparer.Equals(genericArguments[gp.Position], method.MethodSig.Params[i])) {
+					if (!string.Equals(ifaceName, implName, StringComparison.Ordinal)) {
+						if (Environment.GetEnvironmentVariable("VB32_TRACE_IMPL") == "1")
+							Console.WriteLine("[cecil] " + definition.FullName + "." + ifaceMethod.Name + " param" + i + " '" + ifaceName + "' vs '" + implName + "'");
 						matches = false;
 						break;
 					}
@@ -2579,21 +2595,28 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			}
 		}
 
-		static bool IsSameType(List<ImplementsResult> overrides, ITypeDefOrRef type, UTF8String memberName) {
-			if (overrides == null)
-				return false;
-			foreach (var ovr in overrides) {
-				if (ovr.OriginalName != memberName)
+		// A type can list the same interface more than once (dnSpy.dll does, and every entry then
+		// matches the same member), which used to emit 'Implements I.Foo, I.Foo' — BC30583.
+		// Deduplicate per (interface, member signature): two overloads of one name are distinct
+		// members and must both keep their clause.
+		static bool TryAddClause(List<ImplementsResult> emitted, ImplementsResult result) {
+			var comparer = new SigComparer(0);
+			var key = MemberKey(result);
+			foreach (var item in emitted) {
+				if (MemberKey(item) != key)
 					continue;
-				var comparer = new SigComparer(0);
-				if (comparer.Equals(type, ovr.Type))
-					return true;
+				if (comparer.Equals(result.Type, item.Type))
+					return false;
 			}
-			return false;
+			emitted.Add(result);
+			return true;
 		}
 
+		static string MemberKey(ImplementsResult result) =>
+			result.OriginalName + "|" + (result.Reference?.ToString() ?? "");
+
 		IEnumerable<ImplementsResult> GetMethods(MethodDef method) {
-			List<ImplementsResult> overrides = null;
+			var emitted = new List<ImplementsResult>();
 			foreach (var o in method.Overrides) {
 				var m = o.MethodDeclaration.ResolveMethodDef();
 				if (m == null)
@@ -2601,9 +2624,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				if (!m.DeclaringType.IsInterface)
 					continue;
 				var res = new ImplementsResult(o.MethodDeclaration, o.MethodDeclaration);
-				if (overrides == null)
-					overrides = new List<ImplementsResult>();
-				overrides.Add(res);
+				if (!TryAddClause(emitted, res))
+					continue;
 				yield return res;
 			}
 			var comparer = new SigComparer(0, method.Module);
@@ -2613,8 +2635,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					// dnlib has no assembly resolver here, so an instantiated interface such as
 					// IEquatable<T> does not resolve. cecil can resolve it; the clause still uses
 					// the dnlib type so the emitted name matches.
-					foreach (var fallback in MatchViaCecil(method, ii.Interface))
-						yield return fallback;
+					foreach (var fallback in MatchViaCecil(method, ii.Interface)) {
+						if (TryAddClause(emitted, fallback))
+							yield return fallback;
+					}
 					continue;
 				}
 				foreach (var ifaceMethod in iface.Methods) {
@@ -2623,15 +2647,16 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					var ifaceMethodSig = GetMethodBaseSig(ii.Interface, ifaceMethod.MethodSig);
 					if (!comparer.Equals(ifaceMethodSig, method.MethodSig))
 						continue;
-					if (IsSameType(overrides, ii.Interface, ifaceMethod.Name))
+					var res = new ImplementsResult(ii.Interface, ifaceMethod.Name, ifaceMethod);
+					if (!TryAddClause(emitted, res))
 						continue;
-					yield return new ImplementsResult(ii.Interface, ifaceMethod.Name, ifaceMethod);
+					yield return res;
 				}
 			}
 		}
 
 		IEnumerable<ImplementsResult> GetProperties(PropertyDef prop) {
-			List<ImplementsResult> overrides = null;
+			var emitted = new List<ImplementsResult>();
 			var pm = prop.GetMethod ?? prop.SetMethod;
 			if (pm != null) {
 				foreach (var o in pm.Overrides) {
@@ -2644,9 +2669,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					if (p == null)
 						continue;
 					var res = new ImplementsResult(o.MethodDeclaration.DeclaringType, p.Name, (object)GetProperty(o.MethodDeclaration) ?? o.MethodDeclaration);
-					if (overrides == null)
-						overrides = new List<ImplementsResult>();
-					overrides.Add(res);
+					if (!TryAddClause(emitted, res))
+						continue;
 					yield return res;
 				}
 			}
@@ -2665,9 +2689,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 								continue;
 							if (ifaceProp.PropertyType?.FullName != prop.PropertySig.RetType?.FullName)
 								continue;
-							if (IsSameType(overrides, ii.Interface, ifaceProp.Name))
+							var res = new ImplementsResult(ii.Interface, ifaceProp.Name, ifaceProp);
+							if (!TryAddClause(emitted, res))
 								continue;
-							yield return new ImplementsResult(ii.Interface, ifaceProp.Name, ifaceProp);
+							yield return res;
 						}
 					}
 					continue;
@@ -2683,9 +2708,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					}
 					if (!comparer.Equals(ifaceMethodSig, prop.PropertySig))
 						continue;
-					if (IsSameType(overrides, ii.Interface, ifaceProp.Name))
+					var res = new ImplementsResult(ii.Interface, ifaceProp.Name, ifaceProp);
+					if (!TryAddClause(emitted, res))
 						continue;
-					yield return new ImplementsResult(ii.Interface, ifaceProp.Name, ifaceProp);
+					yield return res;
 				}
 			}
 		}
@@ -2719,7 +2745,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		}
 
 		IEnumerable<ImplementsResult> GetEvents(EventDef evt) {
-			List<ImplementsResult> overrides = null;
+			var emitted = new List<ImplementsResult>();
 			var em = evt.AddMethod ?? evt.RemoveMethod ?? evt.InvokeMethod;
 			if (em != null) {
 				foreach (var o in em.Overrides) {
@@ -2732,9 +2758,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					if (e == null)
 						continue;
 					var res = new ImplementsResult(o.MethodDeclaration.DeclaringType, e.Name, (object)GetEvent(o.MethodDeclaration) ?? o.MethodDeclaration);
-					if (overrides == null)
-						overrides = new List<ImplementsResult>();
-					overrides.Add(res);
+					if (!TryAddClause(emitted, res))
+						continue;
 					yield return res;
 				}
 			}
@@ -2751,9 +2776,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 								continue;
 							if (ifaceEvent.EventType?.FullName != evt.EventType?.FullName)
 								continue;
-							if (IsSameType(overrides, ii.Interface, ifaceEvent.Name))
+							var res = new ImplementsResult(ii.Interface, ifaceEvent.Name, ifaceEvent);
+							if (!TryAddClause(emitted, res))
 								continue;
-							yield return new ImplementsResult(ii.Interface, ifaceEvent.Name, ifaceEvent);
+							yield return res;
 						}
 					}
 					continue;
@@ -2764,9 +2790,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					var eventType = GetReplacedType(ii.Interface, ifaceEvent.EventType);
 					if (!comparer.Equals(eventType, evt.EventType))
 						continue;
-					if (IsSameType(overrides, ii.Interface, ifaceEvent.Name))
+					var res = new ImplementsResult(ii.Interface, ifaceEvent.Name, ifaceEvent);
+					if (!TryAddClause(emitted, res))
 						continue;
-					yield return new ImplementsResult(ii.Interface, ifaceEvent.Name, ifaceEvent);
+					yield return res;
 				}
 			}
 		}
@@ -2780,12 +2807,70 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			if (cecilType is null)
 				return AstType.FromName(type.FullName, BoxedTextColor.Type);
 			var csAstType = ICSharpCode.Decompiler.CSharp.CSharpDecompiler.ConvertType(cecilType);
-			return (AstType)csAstType.AcceptVisitor(this, null);
+			var vbType = (AstType)csAstType.AcceptVisitor(this, null);
+			return QualifyMemberType(vbType, cecilType);
+		}
+
+		// CSharpDecompiler.ConvertType names a type the way the C# output would: the simple name
+		// whenever a using directive is in scope. A member-level Implements clause, however, is
+		// written with no imports in scope, so a bare 'IBackgroundImageOptionDefinition.Id' does
+		// not resolve (BC30002). Rebuild the name from the metadata as Global.<ns>.<name>.
+		static AstType QualifyMemberType(AstType vbType, Mono.Cecil.TypeReference cecilType) {
+			var element = cecilType is Mono.Cecil.GenericInstanceType git ? git.ElementType : cecilType;
+			// Arrays, byrefs and type parameters cannot be reached through a namespace.
+			if (element is Mono.Cecil.GenericParameter || element is Mono.Cecil.TypeSpecification)
+				return vbType;
+
+			var arguments = new List<AstType>();
+			if (vbType is SimpleType simple) {
+				foreach (var a in simple.TypeArguments)
+					arguments.Add(a);
+			}
+			else if (vbType is QualifiedType qualified) {
+				foreach (var a in qualified.TypeArguments)
+					arguments.Add(a);
+			}
+			else
+				return vbType;
+
+			AstType root = vbType;
+			while (root is QualifiedType qt)
+				root = qt.Target;
+			if (root is PrimitiveType primitive && primitive.Keyword == "Global")
+				return vbType;
+
+			var names = new List<string>();
+			for (var t = element; t != null; t = t.DeclaringType)
+				names.Insert(0, StripGenericArity(t.Name));
+			if (!string.IsNullOrEmpty(element.Namespace))
+				names.InsertRange(0, element.Namespace.Split('.'));
+
+			AstType result = new PrimitiveType("Global");
+			foreach (var name in names)
+				result = new QualifiedType(result, Identifier.Create((object)null, name));
+			// Re-attach the converted type arguments; clone so the old tree keeps its children.
+			if (result is QualifiedType leaf && arguments.Count > 0) {
+				foreach (var argument in arguments)
+					leaf.TypeArguments.Add((AstType)argument.Clone());
+			}
+			return result;
+		}
+
+		// Metadata names carry the generic arity ('IEquatable`1'); the type arguments in the
+		// emitted type already express it, and a backtick would be escaped into '_' (BC30149).
+		static string StripGenericArity(string name) {
+			var tick = name.LastIndexOf('`');
+			return tick > 0 ? name.Substring(0, tick) : name;
 		}
 
 		void CreateImplementsClausesForMethod(CS.MethodDeclaration orig, MethodDeclaration result) {
 			var md = orig.Annotation<MethodDef>();
 			if (md == null || !md.IsVirtual)
+				return;
+			// The binder falls back to another same-name overload when no signature matches.
+			// Claiming its interface members would make several overloads implement the same
+			// member (BC30583), so only a definition with matching parameters is trusted.
+			if (!AstAnnotationBinder.ParametersMatch(md, orig))
 				return;
 			var type = md.DeclaringType;
 			if (type.IsInterface)

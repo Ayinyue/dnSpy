@@ -479,6 +479,20 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			return identifier;
 		}
 
+		static bool IsComparisonOperator(CS.BinaryOperatorType op) {
+			switch (op) {
+			case CS.BinaryOperatorType.Equality:
+			case CS.BinaryOperatorType.InEquality:
+			case CS.BinaryOperatorType.GreaterThan:
+			case CS.BinaryOperatorType.GreaterThanOrEqual:
+			case CS.BinaryOperatorType.LessThan:
+			case CS.BinaryOperatorType.LessThanOrEqual:
+				return true;
+			default:
+				return false;
+			}
+		}
+
 		static bool IsArithmetic(CS.BinaryOperatorType op) {
 			switch (op) {
 			case CS.BinaryOperatorType.Add:
@@ -549,6 +563,15 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			return invocation;
 		}
 
+		// Note: an invocation of an identifier called 'CStr' would be escaped as [CStr], so the
+		// conversion is expressed as the AST node the output visitor knows how to print.
+		static Expression WrapCStr(Expression expression) {
+			return new CastExpression() {
+				CastType = CastType.CStr,
+				Expression = expression
+			};
+		}
+
 		public AstNode VisitBaseReferenceExpression(CS.BaseReferenceExpression baseReferenceExpression, object data)
 		{
 			InstanceExpression result = new InstanceExpression(InstanceExpressionType.MyBase, ToNRefactoryLocation(baseReferenceExpression.StartLocation));
@@ -571,6 +594,33 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					left = WrapAscW(left);
 				if (IsCharExpression(binaryOperatorExpression.Right))
 					right = WrapAscW(right);
+			}
+
+			// VB cannot compare Char with a number (BC30452): C# promotes the Char to Int32, so
+			// "i != c" has to become "i <> AscW(c)". Char to Char stays untouched.
+			if (IsComparisonOperator(binaryOperatorExpression.Operator)) {
+				if (IsCharExpression(binaryOperatorExpression.Left) &&
+						IsNumericTypeName(typeResolver.GetTypeName(binaryOperatorExpression.Right)))
+					left = WrapAscW(left);
+				if (IsCharExpression(binaryOperatorExpression.Right) &&
+						IsNumericTypeName(typeResolver.GetTypeName(binaryOperatorExpression.Left)))
+					right = WrapAscW(right);
+			}
+
+			// C# folds an implicit conversion to String into 'a + b' (dnlib's UTF8String is the
+			// common case); VB does not chain a user-defined conversion into '+', so the operand
+			// needs an explicit CStr (BC30452).
+			if (binaryOperatorExpression.Operator == CS.BinaryOperatorType.Add) {
+				var leftIsString = IsStringExpression(binaryOperatorExpression.Left);
+				var rightIsString = IsStringExpression(binaryOperatorExpression.Right);
+				var leftConverts = !leftIsString && typeResolver.HasImplicitStringConversion(binaryOperatorExpression.Left);
+				var rightConverts = !rightIsString && typeResolver.HasImplicitStringConversion(binaryOperatorExpression.Right);
+				// Only when the other side really is text, otherwise this could be an arithmetic
+				// '+' on a type that happens to define a conversion to String.
+				if (leftConverts && (rightIsString || rightConverts))
+					left = WrapCStr(left);
+				if (rightConverts && (leftIsString || leftConverts))
+					right = WrapCStr(right);
 			}
 
 			switch (binaryOperatorExpression.Operator) {
@@ -2329,6 +2379,16 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			return EndNode(eventDeclaration, result);
 		}
 
+		/// <summary>
+		/// True for the compiler-generated field event pattern: no raise accessor and both accessors
+		/// marked CompilerGenerated.
+		/// </summary>
+		bool IsCompilerGeneratedFieldEvent(CS.CustomEventDeclaration declaration) {
+			CS.Attribute attribute;
+			return HasAttribute(declaration.AddAccessor.Attributes, "System.Runtime.CompilerServices.CompilerGeneratedAttribute", out attribute) &&
+				HasAttribute(declaration.RemoveAccessor.Attributes, "System.Runtime.CompilerServices.CompilerGeneratedAttribute", out attribute);
+		}
+
 		public AstNode VisitCustomEventDeclaration(CS.CustomEventDeclaration customEventDeclaration, object data)
 		{
 			var result = new EventDeclaration();
@@ -2339,12 +2399,18 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			if (IsOwnerAModule(customEventDeclaration))
 				customEventDeclaration.Modifiers &= ~CS.Modifiers.Static;
 			result.Modifiers = ConvertModifiers(customEventDeclaration.Modifiers, customEventDeclaration);
-			result.IsCustom = true;
+			// VB requires all three accessors on a Custom Event, while a C# compiler-generated
+			// field event has no RaiseEvent counterpart at all (BC31132). Its add/remove only do
+			// the thread-safe bookkeeping a VB field event does itself, so such an event is
+			// emitted field-like instead of dropping or inventing a RaiseEvent body.
+			result.IsCustom = !IsCompilerGeneratedFieldEvent(customEventDeclaration);
 			result.Name = Identifier.Create(customEventDeclaration.NameToken.Annotations, customEventDeclaration.Name);
 			result.ReturnType = (AstType)customEventDeclaration.ReturnType.AcceptVisitor(this, data);
 			CreateImplementsClausesForEvent(customEventDeclaration, result);
-			result.AddHandlerBlock = (Accessor)customEventDeclaration.AddAccessor.AcceptVisitor(this, data);
-			result.RemoveHandlerBlock = (Accessor)customEventDeclaration.RemoveAccessor.AcceptVisitor(this, data);
+			if (result.IsCustom) {
+				result.AddHandlerBlock = (Accessor)customEventDeclaration.AddAccessor.AcceptVisitor(this, data);
+				result.RemoveHandlerBlock = (Accessor)customEventDeclaration.RemoveAccessor.AcceptVisitor(this, data);
+			}
 
 			members.Pop();
 

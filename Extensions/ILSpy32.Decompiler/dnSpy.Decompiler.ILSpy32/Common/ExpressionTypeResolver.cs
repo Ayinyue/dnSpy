@@ -35,6 +35,7 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		readonly ModuleDef module;
 		readonly Dictionary<string, string> variables;
 		readonly Dictionary<string, bool?> referenceCache = new Dictionary<string, bool?>(StringComparer.Ordinal);
+		readonly Dictionary<string, bool> implicitStringCache = new Dictionary<string, bool>(StringComparer.Ordinal);
 		readonly Dictionary<string, Mono.Cecil.TypeDefinition> externalTypes = new Dictionary<string, Mono.Cecil.TypeDefinition>(StringComparer.Ordinal);
 		readonly Dictionary<string, Mono.Cecil.AssemblyDefinition> resolvedAssemblies = new Dictionary<string, Mono.Cecil.AssemblyDefinition>(StringComparer.Ordinal);
 
@@ -46,7 +47,6 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			this.variables = variables;
 		}
 
-		/// <summary>True when both operands are known to be reference types.</summary>
 		/// <summary>
 		/// True when 'left == right' can only be a reference comparison. One side being a known
 		/// reference type is enough: a struct operand would need an operator the other operand
@@ -66,6 +66,57 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			if (string.IsNullOrEmpty(name))
 				return null;
 			return Classify(name);
+		}
+
+		/// <summary>
+		/// True when the expression's type defines an implicit conversion to String. C# folds that
+		/// conversion into 'a + b' (dnlib's UTF8String is the common case), VB does not chain a
+		/// user-defined conversion into the built-in '+' operator and needs CStr().
+		/// </summary>
+		public bool HasImplicitStringConversion(ICSharpCode.Decompiler.CSharp.Syntax.Expression expression) {
+			var name = Normalize(GetTypeName(expression));
+			if (string.IsNullOrEmpty(name) || IsStringType(name))
+				return false;
+			if (implicitStringCache.TryGetValue(name, out var cached))
+				return cached;
+
+			var bare = StripGenericArgs(name, out var arity);
+			bool result;
+			var local = LookupLocalTypeDef(bare, arity) ?? LookupLocalTypeDef(name);
+			if (local != null)
+				result = HasImplicitStringConversion(local);
+			else {
+				var external = LookupExternalType(bare, arity) ?? LookupExternalType(name);
+				result = external != null && HasImplicitStringConversion(external);
+			}
+			implicitStringCache[name] = result;
+			return result;
+		}
+
+		static bool HasImplicitStringConversion(TypeDef type) {
+			foreach (var method in type.Methods) {
+				if (!method.IsStatic || method.Name != "op_Implicit")
+					continue;
+				var sig = method.MethodSig;
+				if (sig is null || sig.Params.Count != 1)
+					continue;
+				var returnType = sig.RetType?.RemovePinnedAndModifiers();
+				if (returnType is ClassSig classSig && classSig.TypeDefOrRef?.FullName == "System.String")
+					return true;
+			}
+			return false;
+		}
+
+		static bool HasImplicitStringConversion(Mono.Cecil.TypeDefinition type) {
+			foreach (var method in type.Methods) {
+				if (!method.IsStatic || method.Name != "op_Implicit")
+					continue;
+				if (method.Parameters.Count != 1)
+					continue;
+				if (method.ReturnType?.FullName == "System.String")
+					return true;
+			}
+			return false;
 		}
 
 		public string GetTypeName(ICSharpCode.Decompiler.CSharp.Syntax.Expression expression) {
@@ -491,31 +542,83 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			var name = Normalize(typeName);
 			// Members live on the generic type definition, not on the constructed type.
 			var bare = StripGenericArgs(name, out var arity);
-			var type = LookupLocalTypeDef(bare, arity) ?? LookupLocalTypeDef(name);
-			if (type != null) {
-				foreach (var field in type.Fields) {
-					if (field.Name == memberName)
-						return field.FieldType?.TypeName;
-				}
-				foreach (var property in type.Properties) {
-					if (property.Name == memberName)
-						return property.PropertySig?.RetType?.TypeName;
-				}
+			var local = LookupLocalTypeDef(bare, arity) ?? LookupLocalTypeDef(name);
+			if (local != null) {
+				var localMember = FindMemberType(local, memberName);
+				if (localMember != null)
+					return localMember;
 			}
 
 			// Types from other assemblies (dnlib.DotNet.MethodDef, ...) resolve through cecil.
 			var external = LookupExternalType(bare, arity) ?? LookupExternalType(name);
-			if (external is null)
-				return null;
-			foreach (var field in external.Fields) {
-				if (field.Name == memberName)
-					return field.FieldType?.FullName;
-			}
-			foreach (var property in external.Properties) {
-				if (property.Name == memberName)
-					return property.PropertyType?.FullName;
+			return external is null ? null : FindMemberType(external, memberName);
+		}
+
+		// Members are inherited: dnlib's IAssembly declares no 'Name' of its own, it comes from a
+		// base interface, so a lookup that only walks the declared members finds nothing.
+		static string FindMemberType(TypeDef type, string memberName) {
+			var visited = new HashSet<string>(StringComparer.Ordinal);
+			var queue = new Queue<TypeDef>();
+			queue.Enqueue(type);
+			while (queue.Count > 0) {
+				var current = queue.Dequeue();
+				if (current is null || !visited.Add(current.FullName))
+					continue;
+				foreach (var field in current.Fields) {
+					if (field.Name == memberName)
+						return field.FieldType?.TypeName;
+				}
+				foreach (var property in current.Properties) {
+					if (property.Name == memberName)
+						return property.PropertySig?.RetType?.TypeName;
+				}
+				var baseType = current.BaseType?.ResolveTypeDef();
+				if (baseType != null)
+					queue.Enqueue(baseType);
+				foreach (var iface in current.Interfaces) {
+					var resolved = iface.Interface?.ResolveTypeDef();
+					if (resolved != null)
+						queue.Enqueue(resolved);
+				}
 			}
 			return null;
+		}
+
+		static string FindMemberType(Mono.Cecil.TypeDefinition type, string memberName) {
+			var visited = new HashSet<string>(StringComparer.Ordinal);
+			var queue = new Queue<Mono.Cecil.TypeDefinition>();
+			queue.Enqueue(type);
+			while (queue.Count > 0) {
+				var current = queue.Dequeue();
+				if (current is null || !visited.Add(current.FullName))
+					continue;
+				foreach (var field in current.Fields) {
+					if (field.Name == memberName)
+						return field.FieldType?.FullName;
+				}
+				foreach (var property in current.Properties) {
+					if (property.Name == memberName)
+						return property.PropertyType?.FullName;
+				}
+				var baseType = TryResolve(current.BaseType);
+				if (baseType != null)
+					queue.Enqueue(baseType);
+				foreach (var iface in current.Interfaces) {
+					var resolved = TryResolve(iface.InterfaceType);
+					if (resolved != null)
+						queue.Enqueue(resolved);
+				}
+			}
+			return null;
+		}
+
+		static Mono.Cecil.TypeDefinition TryResolve(Mono.Cecil.TypeReference reference) {
+			try {
+				return reference?.Resolve();
+			}
+			catch {
+				return null;
+			}
 		}
 
 		TypeDef LookupLocalTypeDef(string name, int arity = 0) {

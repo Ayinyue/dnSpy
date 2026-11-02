@@ -37,6 +37,16 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			var types = new Dictionary<string, TypeDef>(StringComparer.Ordinal);
 			foreach (var type in module.GetTypes())
 				types[type.FullName] = type;
+			// The syntax tree names a generic type without the arity suffix the metadata carries
+			// ("BulkObservableCollection" vs "BulkObservableCollection`1"), so a generic type used
+			// to bind nothing at all - no MethodDef, no EventDef, which silently disabled every
+			// annotation-based feature for it. Register the tree spelling too, but only where it
+			// cannot shadow a real type of that name.
+			foreach (var type in module.GetTypes()) {
+				var stripped = StripTypeArity(type.FullName);
+				if (stripped != type.FullName && !types.ContainsKey(stripped))
+					types[stripped] = type;
+			}
 
 			var renames = new Dictionary<string, string>(StringComparer.Ordinal);
 			var methodNames = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
@@ -77,7 +87,7 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		}
 
 		/// <summary>
-		/// VB is case-insensitive		/// <summary>
+		/// <summary>
 		/// VB is case-insensitive, so a private field "start" and a property "Start" cannot both
 		/// exist (BC30260/BC31429). Rename the field: fields are private in practice, so no other
 		/// file refers to them, while renaming a public member would break the other dumps.
@@ -109,6 +119,23 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 				renames[field] = renamed;
 				names.Add(renamed);
 			}
+		}
+
+		/// <summary>Removes the metadata arity suffix from every segment of a type full name.</summary>
+		static string StripTypeArity(string fullName) {
+			if (fullName.IndexOf('`') < 0)
+				return fullName;
+			var builder = new System.Text.StringBuilder(fullName.Length);
+			for (int i = 0; i < fullName.Length; i++) {
+				if (fullName[i] == '`') {
+					// The arity is already expressed by the type parameters of the declaration.
+					while (i + 1 < fullName.Length && char.IsDigit(fullName[i + 1]))
+						i++;
+					continue;
+				}
+				builder.Append(fullName[i]);
+			}
+			return builder.ToString();
 		}
 
 		/// <summary>

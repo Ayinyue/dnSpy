@@ -342,6 +342,25 @@ value = (dictionary([key]))                        ' 同一个实例
     「转发函数」声称实现接口**属性**成员，VB 不接受方法实现属性成员（BC30401 残留）。正确输出
     是把转发函数变换成 `Private ReadOnly Property X ... Implements I.X`，属独立改动，留待后续。
 
+38. **VB 大小写不敏感：局部/参数名吞掉类型名**（Batch 3 主根因，`BC30456` 229→215）。
+    C# 里参数 `searchLocation` 与类型 `SearchLocation` 靠大小写区分，VB 靠不区分——
+    `SearchLocation.SelectedType` 被解析到 String 参数上（`'SelectedType' is not a member
+    of 'String'`），`Dim guid As String` 吞掉 `Guid.TryParse` 同理。修法：成员体里按
+    `SimpleType`/`MemberType` 收集被引用类型的简单名，冲突的**方法头参数**改名（`guid2`）
+    并保留原名→新名的引用映射；局部沿用既有 `DeclareLocal` 冲突机制（加入同一集合）。
+    两个边界：**lambda 参数不改名也不注册**——并行 lambda 复用同名参数是合法的，而改名映射
+    是成员级的，表达不了每个 lambda 的作用域（round 6 曾让 361 个文件报 `'a' is not
+    declared`）；**改名参数要在 `variableTypes` 双注册**（原名 + 新名）——CS 树里的标识符
+    仍是原拼写，事件订阅判定（`IsEventAccess`→`GetTypeName`）靠原名直查（round 6b 的
+    `+=` 回退即此）。
+39. **已知缺口：构造器/运算符没有 `MethodDef` 注解**——绑定器只走 `MethodDeclaration`，
+    `ResolveCurrentType` 对 ctor 返回 null，ctor 体里的成员类型查找（`MemberType`）静默失效；
+    之前被「参数原名直查」掩盖（上一条的双注册就是为了不依赖它）。后续可让绑定器给
+    `ConstructorDeclaration`/`OperatorDeclaration` 也绑定定义。
+40. **BC30456 其余形态定性**（229→215 后剩 215，噪声 12）：大头是 `'ImageReference' is not
+    a member of 'BookmarkInfo'` 这类**成员真的没生成**（属性/字段未输出，属转换缺陷，待后续
+    batch）与**互操作类型成员跨 dump 文件**（度量口径，`--whole` 下消失）。本轮未再修。
+
 修复后的语法错误文件数：
 
 | 程序集 | 语言 | 语法错误文件 |

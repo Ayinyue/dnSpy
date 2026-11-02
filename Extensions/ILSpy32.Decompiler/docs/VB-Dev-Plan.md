@@ -36,7 +36,7 @@ VB 语义正确性只是迁移验收的一关：3.2 的输出质量必须**不�
 
 ### 当前差距（M2）
 
-realBadFiles 1050 / 556 / 10，可归零部分约 350~450（`BC30456/BC32022/BC30521/BC30583/BC31132`，BC30401 已收敛），
+realBadFiles 1030 / 554 / 10，可归零部分约 350~450（`BC30456 真缺成员/BC32022/BC30521/BC30583/BC31132`，BC30401 已收敛），
 其余为度量口径问题（见第 3 节）。语法 0 / 0 / 0（`BC30036` 已修）。
 
 ## 0. 基线与验收红线（每批通用）## 0. 基线与验收红线（每批通用）
@@ -45,7 +45,7 @@ realBadFiles 1050 / 556 / 10，可归零部分约 350~450（`BC30456/BC32022/BC3
 |---|---|---|---|
 | 转换 | 3266 ok / 0 degraded | 1278 ok / 0 degraded | 84 ok / 0 degraded |
 | 语法错误 | 0 | 0 | 0 |
-| realBadFiles | **1050** | **556** | **10** |
+| realBadFiles | **1030** | **554** | **10** |
 
 **验收红线（任一违背即该批不通过）**
 - [ ] 引擎构建 0 错误（`dotnet build -c Release -f net10.0-windows --no-restore`）
@@ -111,12 +111,18 @@ Batch 1~5 = 里程碑 M2（质量对齐）；M3/M4 见「里程碑任务」节
 
 ### Batch 3 `BC30456` 成员不存在定性（229 个文件，12 噪声）
 
-- [ ] 取样 20 条，分「跨 dump 文件类型」（度量口径）与「真缺成员」（转换缺陷）
-- [ ] 真缺成员的：定位是属性/字段没生成，还是访问器形态问题
-- [ ] 输出定性结论写进 README，再决定修哪些
+- [x] 取样 20 条定性（2026-11-03）：
+  - 主形态（**转换缺陷，已修**）：VB 大小写不敏感，局部/参数名吞掉类型引用
+    （`searchLocation` 吞 `SearchLocation`、`guid` 吞 `Guid.TryParse`）→ 方法头参数改名 +
+    引用映射（README 第 38 条）
+  - 次形态（**真缺成员**，待后续）：`'ImageReference' is not a member of 'BookmarkInfo'`
+    类——属性/字段没生成
+  - 余量（**度量口径**）：互操作类型成员跨 dump 文件，`--whole` 下消失
+- [x] 定性结论入档 README 第 38~40 条
+- [x] 已知缺口入档：ctor/operator 无 MethodDef 注解（README 第 39 条）
 
-**代表样本**：`'ImageReference' is not a member of 'BookmarkInfo'`。
-**验收**：定性报告入档；realBadFiles 下降或明确「全部为口径问题」。
+**代表样本**：`'ImageReference' is not a member of 'BookmarkInfo'`（真缺成员，未修）。
+**验收**：定性报告入档 ✅；realBadFiles 下降 ✅（1050→1030；AsmEditor 556→554）。
 
 ### Batch 4 事件族（`BC32022` 266 / `BC31132` 81）
 

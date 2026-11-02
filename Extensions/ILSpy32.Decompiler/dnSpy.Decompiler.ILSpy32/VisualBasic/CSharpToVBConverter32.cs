@@ -72,6 +72,13 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		// therefore decided against every local name already used in the method.
 		readonly HashSet<string> methodLocalNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 		readonly HashSet<string> emittedLocalNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		// Simple names of the types referenced by the member body. VB resolves identifiers
+		// case-insensitively, so a local or parameter named "searchLocation" swallows the type
+		// reference "SearchLocation" ('SearchLocation.SelectedType' then fails, BC30456).
+		readonly HashSet<string> memberTypeNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		// Parameter renames forced by the type-name collision above; consulted when references
+		// to the original parameter name are emitted.
+		readonly Dictionary<string, string> paramNameRenames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		// Every local name the method declares. ILSpy already disambiguates repeats by appending
 		// a digit (array, array2), so a generated name must not reuse any of them.
 		readonly HashSet<string> reservedLocalNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -334,6 +341,12 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				reservedLocalNames.Add(outVar.Variable.Name);
 			foreach (var forEach in declaration.Descendants.OfType<CS.ForeachStatement>())
 				reservedLocalNames.Add(forEach.VariableName);
+			memberTypeNames.Clear();
+			foreach (var simpleType in declaration.Descendants.OfType<CS.SimpleType>())
+				memberTypeNames.Add(simpleType.Identifier);
+			foreach (var memberType in declaration.Descendants.OfType<CS.MemberType>())
+				memberTypeNames.Add(memberType.MemberName);
+			paramNameRenames.Clear();
 			typeResolver.CurrentType = ResolveCurrentType(declaration);
 			CollectSuppressedEventAliases(declaration);
 		}
@@ -385,6 +398,33 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			return scope;
 		}
 
+		/// <summary>
+		/// Registers a parameter and returns the name to emit. A parameter whose name collides
+		/// case-insensitively with a type referenced by the body must be renamed (VB resolves
+		/// identifiers without case, so "searchLocation As String" swallows "SearchLocation").
+		/// </summary>
+		/// <summary>
+		/// Registers a method-header parameter and returns the name to emit. A parameter whose
+		/// name collides case-insensitively with a type referenced by the body must be renamed
+		/// (VB resolves identifiers without case, so "searchLocation As String" swallows
+		/// "SearchLocation"). Lambda parameters are converted while their block is on the stack;
+		/// they keep their original name — C# forbids shadowing there, parallel lambdas reuse the
+		/// same name, and the member-level rename map cannot express per-lambda scopes.
+		/// </summary>
+		string RegisterParameterName(string name) {
+			if (blocks.Count != 0)
+				return name;
+			bool conflicts = memberTypeNames.Contains(name) || methodLocalNames.Contains(name) || variableTypes.ContainsKey(name);
+			if (!conflicts) {
+				methodLocalNames.Add(name);
+				return name;
+			}
+			var emitted = MakeUniqueLocalName(name, 2);
+			methodLocalNames.Add(emitted);
+			paramNameRenames[name] = emitted;
+			return emitted;
+		}
+
 		/// <summary>Emitted name for a reference to a local, following the enclosing blocks.</summary>
 		string ResolveLocalName(string name) {
 			// The block stack is the scope chain: nodes are not attached to their parents until
@@ -393,6 +433,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				if (blockScopes.TryGetValue(block, out var scope) && scope.TryGetValue(name, out var mapped))
 					return mapped;
 			}
+			if (paramNameRenames.TryGetValue(name, out var renamed))
+				return renamed;
 			return name;
 		}
 
@@ -405,7 +447,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				return name;
 			var block = blocks.Peek();
 			var scope = GetScope(block);
-			bool conflicts = methodLocalNames.Contains(name) || scope.ContainsKey(name);
+			bool conflicts = methodLocalNames.Contains(name) || scope.ContainsKey(name) ||
+				memberTypeNames.Contains(name);
 			if (!conflicts) {
 				foreach (var enclosing in blocks) {
 					if (enclosing == block)
@@ -437,6 +480,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				if (emittedLocalNames.Contains(candidate))
 					continue;
 				if (variableTypes.ContainsKey(candidate))
+					continue;
+				// The rename exists to keep names apart from referenced types, so the generated
+				// name must stay clear of them too.
+				if (memberTypeNames.Contains(candidate))
 					continue;
 				if (ResolveLocalName(candidate) != candidate)
 					continue;
@@ -3436,8 +3483,14 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				block.Attributes.Add(new VB.Ast.Attribute() { Type = CreateType(attrRef) });
 				param.Attributes.Add(block);
 			}
-			param.Name = Identifier.Create(parameterDeclaration.NameToken.Annotations, parameterDeclaration.Name);
-			variableTypes[parameterDeclaration.Name] = parameterDeclaration.Type.ToString();
+			var emittedParamName = RegisterParameterName(parameterDeclaration.Name);
+			param.Name = Identifier.Create(parameterDeclaration.NameToken.Annotations, emittedParamName);
+			var parameterTypeName = parameterDeclaration.Type.ToString();
+			variableTypes[emittedParamName] = parameterTypeName;
+			// The body's identifiers keep the C# spelling, so the original name must still
+			// resolve; C# cannot shadow a parameter, so both keys can coexist.
+			if (emittedParamName != parameterDeclaration.Name)
+				variableTypes[parameterDeclaration.Name] = parameterTypeName;
 			param.Type = (AstType)parameterDeclaration.Type.AcceptVisitor(this, data);
 			param.OptionalValue = (Expression)parameterDeclaration.DefaultExpression.AcceptVisitor(this, data);
 			if (!param.OptionalValue.IsNull)

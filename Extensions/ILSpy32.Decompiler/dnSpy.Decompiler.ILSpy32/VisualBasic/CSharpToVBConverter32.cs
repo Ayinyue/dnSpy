@@ -198,7 +198,17 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitAsExpression(CS.AsExpression asExpression, object data)
 		{
-			return EndNode(asExpression, new CastExpression(CastType.TryCast, (AstType)asExpression.Type.AcceptVisitor(this, data), (Expression)asExpression.Expression.AcceptVisitor(this, data)));
+			// TryCast only accepts reference types (BC30792). For a value type such as Boolean?
+			// the CLR performs an unboxing conversion, which VB spells DirectCast.
+			var typeName = asExpression.Type.ToString();
+			var castType = IsValueTypeTarget(typeName) ? CastType.DirectCast : CastType.TryCast;
+			return EndNode(asExpression, new CastExpression(castType, (AstType)asExpression.Type.AcceptVisitor(this, data), (Expression)asExpression.Expression.AcceptVisitor(this, data)));
+		}
+
+		bool IsValueTypeTarget(string typeName) {
+			if (typeName.EndsWith("?", StringComparison.Ordinal))
+				return true;
+			return typeResolver.Classify(typeName) == false;
 		}
 
 		public AstNode VisitAssignmentExpression(CS.AssignmentExpression assignmentExpression, object data)
@@ -2274,6 +2284,9 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					if (IsOwnerAModule(eventDeclaration))
 						eventDeclaration.Modifiers &= ~CS.Modifiers.Static;
 				}
+				// VB has no abstract events (BC30243): the modifier is dropped and the event stays
+				// field-like, so derived classes can still raise it.
+				eventDeclaration.Modifiers &= ~CS.Modifiers.Abstract;
 				result.Modifiers = ConvertModifiers(eventDeclaration.Modifiers, eventDeclaration);
 				result.Name = Identifier.Create(evt.NameToken.Annotations, evt.Name);
 				result.ReturnType = (AstType)eventDeclaration.ReturnType.AcceptVisitor(this, data);

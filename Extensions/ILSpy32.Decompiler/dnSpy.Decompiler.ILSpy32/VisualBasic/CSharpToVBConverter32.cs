@@ -3103,6 +3103,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					var parameters = method.Parameters.Where(p => p.IsNormalMethodParameter).ToList();
 					if (parameters.Count != result.Parameters.Count)
 						continue;
+					// Overloads share the name and often the arity; applying Load#2's Optional to
+					// Load#1's parameter changed the implementation's signature (BC30401).
+					if (!InterfaceParameterTypesMatch(parameters, result))
+						continue;
 					if (!parameters.Any(p => p.ParamDef?.IsOptional == true))
 						continue;
 					for (int i = 0; i < parameters.Count; i++) {
@@ -3122,6 +3126,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					continue;
 				if (method.Parameters.Count != result.Parameters.Count)
 					continue;
+				if (!CecilInterfaceParameterTypesMatch(method.Parameters, result))
+					continue;
 				if (!method.Parameters.Any(p => p.IsOptional))
 					continue;
 				for (int i = 0; i < method.Parameters.Count; i++) {
@@ -3130,6 +3136,58 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				}
 				return;
 			}
+		}
+
+		/// <summary>
+		/// Compares the interface method's parameter types with the emitted VB parameters by
+		/// their last name segment, so the Optional/default values only travel to the overload
+		/// that really has them.
+		/// </summary>
+		static bool InterfaceParameterTypesMatch(List<dnlib.DotNet.Parameter> ifaceParameters, MethodDeclaration result) {
+			var implParameters = result.Parameters.ToList();
+			if (ifaceParameters.Count != implParameters.Count)
+				return false;
+			for (int i = 0; i < ifaceParameters.Count; i++) {
+				var expected = AstAnnotationBinder.NormalizeParameterTypeName(NormalizeParamSigName(ifaceParameters[i].Type));
+				var actual = AstAnnotationBinder.NormalizeParameterTypeName(implParameters[i].Type?.ToString() ?? "");
+				if (string.IsNullOrEmpty(expected) || string.IsNullOrEmpty(actual))
+					continue;
+				if (!string.Equals(expected, actual, StringComparison.OrdinalIgnoreCase))
+					return false;
+			}
+			return true;
+		}
+
+		static bool CecilInterfaceParameterTypesMatch(System.Collections.Generic.IList<Mono.Cecil.ParameterDefinition> ifaceParameters, MethodDeclaration result) {
+			var implParameters = result.Parameters.ToList();
+			if (ifaceParameters.Count != implParameters.Count)
+				return false;
+			for (int i = 0; i < ifaceParameters.Count; i++) {
+				var expected = AstAnnotationBinder.NormalizeParameterTypeName(NormalizeCecilParamName(ifaceParameters[i].ParameterType));
+				var actual = AstAnnotationBinder.NormalizeParameterTypeName(implParameters[i].Type?.ToString() ?? "");
+				if (string.IsNullOrEmpty(expected) || string.IsNullOrEmpty(actual))
+					continue;
+				if (!string.Equals(expected, actual, StringComparison.OrdinalIgnoreCase))
+					return false;
+			}
+			return true;
+		}
+
+		// Nullable<T> params must compare by their element type: the VB text says "Span?" while
+		// the metadata name says "Nullable`1".
+		static string NormalizeParamSigName(dnlib.DotNet.TypeSig sig) {
+			sig = sig?.RemovePinnedAndModifiers();
+			if (sig is dnlib.DotNet.GenericInstSig nullable && nullable.GenericType?.TypeDefOrRef?.FullName == "System.Nullable`1" &&
+					nullable.GenericArguments.Count == 1)
+				return nullable.GenericArguments[0]?.TypeName ?? "";
+			return sig?.TypeName ?? "";
+		}
+
+		static string NormalizeCecilParamName(Mono.Cecil.TypeReference type) {
+			if (type is Mono.Cecil.GenericInstanceType nullable && nullable.ElementType?.FullName == "System.Nullable`1" &&
+					nullable.GenericArguments.Count == 1)
+				return nullable.GenericArguments[0]?.Name ?? "";
+			return type?.Name ?? "";
 		}
 
 		static void SetOptionalValue(ParameterDeclaration parameter, object value) {

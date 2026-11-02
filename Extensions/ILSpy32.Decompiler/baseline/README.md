@@ -320,6 +320,28 @@ value = (dictionary([key]))                        ' 同一个实例
     （`object == literal` 在 C# 里确实是引用语义，`Is` 保留）。字符串是引用类型所以从不
     报错，这类缺陷语法/编译门禁都测不到，只有语义走查能发现。
 
+34. **显式接口实现与同签名成员绑定混淆**（Batch 2 主根因，`BC30401` 108→49）。绑定器按
+    「名字+元数」匹配元数据成员，遇到「显式接口实现 + 私有辅助方法」（两者同名同参数、仅返回
+    类型不同，如 `AssemblyResolver` 的 `Resolve`）会把**同一个 MethodDef 绑给两个语法节点**，
+    于是私有辅助方法也拿到 Implements 子句（VB 校验签名失败 → BC30401）。属性同理：override
+    属性与显式接口实现共享短名（`UIObject`），两者都声称实现接口成员。修法：显式实现节点
+    （`PrivateImplementationType` 已设置）优先匹配限定名（`IFoo.Bar`，同时容忍 .override 挂在
+    普通名方法上的形态），普通节点永不匹配限定名；候选分级为「全签名 → 参数 → 名字」，新增
+    **返回类型比较**做决胜（`Nullable<T>` 按 `T` 归一，`!!T` 泛型参数放行）。
+35. **Optional 复制落到错误的重载**（Batch 2）。`ApplyOptionalParameters` 按名字+元数找接口
+    成员抄 Optional/默认值，接口有同名重载时会把 `Load#2` 的 Optional 抄给 `Load#1` 的参数
+    （`DocumentListLoader.Load` 的 `loadDocuments` 莫名变成 `Optional = Nothing`）——实现签名
+    被改坏，直接 BC30401。修法：抄写前比较**全部参数类型**（末段归一后），类型不齐就跳过。
+36. **名字近似比较必须过同一个归一化**（Batch 2 教训，回归 round 5 的 +34 由此而来）。VB 拼写
+    `Integer`/`UInteger`/`Long`… 对元数据 `Int32`/`UInt32`/`Int64`…；`T?` 对 `Nullable\`1`；
+    `Byte()` 对 `Byte[]`——三组拼写差异各造成一轮门禁误杀（子句丢失或 Optional 不复制 →
+    BC30149 156→190）。归一化收敛三件事：VB 关键字映射表、`Nullable`/数组/指针/ByRef 修饰
+    剥离（两侧都剥）、`(Of T)` 与 `<T>` 同切。**任何「比较两边名字」的新代码都必须走同一个
+    `NormalizeParameterTypeName`**，不要手写最后一截。
+37. **已知限制：`.override` 在属性访问器上时**（`DocumentViewer.get_DocumentTab`），引擎生成
+    「转发函数」声称实现接口**属性**成员，VB 不接受方法实现属性成员（BC30401 残留）。正确输出
+    是把转发函数变换成 `Private ReadOnly Property X ... Implements I.X`，属独立改动，留待后续。
+
 修复后的语法错误文件数：
 
 | 程序集 | 语言 | 语法错误文件 |

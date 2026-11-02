@@ -184,13 +184,13 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			}
 
 			foreach (var property in declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.PropertyDeclaration>()) {
-				var propertyDef = MatchProperty(typeDef, property.Name, 0);
+				var propertyDef = MatchProperty(typeDef, property.Name, 0, property.PrivateImplementationType);
 				if (propertyDef != null)
 					property.AddAnnotation(propertyDef);
 			}
 
 			foreach (var indexer in declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.IndexerDeclaration>()) {
-				var propertyDef = MatchProperty(typeDef, "Item", indexer.Parameters.Count);
+				var propertyDef = MatchProperty(typeDef, "Item", indexer.Parameters.Count, indexer.PrivateImplementationType);
 				if (propertyDef != null)
 					indexer.AddAnnotation(propertyDef);
 			}
@@ -212,15 +212,26 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			}
 		}
 
-		static PropertyDef MatchProperty(TypeDef typeDef, string name, int parameterCount) {
+		/// <summary>
+		/// Exact name wins over the qualified form ("IFoo.Bar" ends with ".Bar"): an override
+		/// property and an explicit interface implementation can share the short name, and giving
+		/// the qualified definition to both syntax nodes made the override claim the interface
+		/// member too (BC30401). Explicit implementations are only matched against the qualified
+		/// name, their plain-named twin must not be picked for them.
+		/// </summary>
+		static PropertyDef MatchProperty(TypeDef typeDef, string name, int parameterCount,
+				ICSharpCode.Decompiler.CSharp.Syntax.AstType privateImplementationType) {
+			bool wantsQualified = privateImplementationType is { IsNull: false };
+			PropertyDef exact = null, suffix = null;
 			foreach (var property in typeDef.Properties) {
-				if (property.Name != name && !property.Name.EndsWith("." + name, StringComparison.Ordinal))
-					continue;
 				if (property.PropertySig.Params.Count != parameterCount)
 					continue;
-				return property;
+				if (property.Name == name)
+					exact ??= property;
+				else if (property.Name.EndsWith("." + name, StringComparison.Ordinal))
+					suffix ??= property;
 			}
-			return null;
+			return wantsQualified ? suffix ?? exact : exact ?? suffix;
 		}
 
 		static EventDef MatchEvent(TypeDef typeDef, string name) {
@@ -232,40 +243,83 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		}
 
 		/// <summary>
-		/// Matches by name and parameter count. Overloads that differ only by parameter types
-		/// resolve to the first candidate; the caller only uses the definition for interface
-		/// matching and modifier heuristics, both of which re-check the signature.
+		/// Matches by name and parameter count, preferring the full signature. Explicit interface
+		/// implementations are usually qualified in metadata ("IFoo.Bar") while the syntax tree
+		/// keeps "Bar", but the .override can also live on a plain-named method — so an explicit
+		/// node accepts both spellings and the full signature decides. A non-explicit node never
+		/// binds a qualified method: two methods can share name and parameters and differ only by
+		/// return type (a private helper next to an explicit implementation), and binding both
+		/// syntax nodes to one definition made both claim the interface member (BC30401).
 		/// </summary>
 		static MethodDef MatchMethod(TypeDef typeDef, ICSharpCode.Decompiler.CSharp.Syntax.MethodDeclaration declaration) {
+			bool wantsQualified = declaration.PrivateImplementationType is { IsNull: false };
 			MethodDef fallback = null;
+			MethodDef parameterMatch = null;
 			foreach (var method in typeDef.Methods) {
-				// Explicit interface implementations are named "IFoo.Bar" in metadata while the
-				// syntax tree keeps "Bar". Parameters exclude the hidden this/return parameters.
-				if (method.Name != declaration.Name && !method.Name.EndsWith("." + declaration.Name, StringComparison.Ordinal))
+				bool qualified = method.Name.IndexOf('.') >= 0;
+				if (qualified) {
+					if (!wantsQualified || !method.Name.EndsWith("." + declaration.Name, StringComparison.Ordinal))
+						continue;
+				}
+				else if (method.Name != declaration.Name) {
 					continue;
+				}
 				var parameters = method.Parameters.Where(p => p.IsNormalMethodParameter).ToList();
 				if (parameters.Count != declaration.Parameters.Count)
 					continue;
 				if (method.IsStatic != declaration.HasModifier(ICSharpCode.Decompiler.CSharp.Syntax.Modifiers.Static))
 					continue;
-				if (ParameterTypesMatch(parameters, declaration))
-					return method;
+				if (ParameterTypesMatch(parameters, declaration)) {
+					// Full signature match; a same-params candidate with a different return type
+					// (Equals(object) vs Equals(T), explicit impl vs helper) must not win.
+					if (ReturnTypeMatches(method, declaration))
+						return method;
+					parameterMatch ??= method;
+					continue;
+				}
 				// Same name and arity: remember the first candidate, but keep looking. Without
 				// this, Equals(object) inherits the definition of Equals(T) and then claims to
 				// implement an interface method it does not implement.
 				fallback ??= method;
 			}
-			return fallback;
+			return parameterMatch ?? fallback;
 		}
 
 		/// <summary>
-		/// True when the metadata method's parameters match the declaration in the syntax tree.
-		/// <see cref="MatchMethod"/> falls back to the first same-name/arity overload, so callers
-		/// that need the exact overload must check this before trusting the definition.
+		/// True when the metadata method matches the declaration in the syntax tree: parameters
+		/// AND return type. <see cref="MatchMethod"/> can fall back to a same-name/arity overload,
+		/// and overloads that differ only by their return type must not claim interface members
+		/// (BC30401) — VB compares the whole signature when validating Implements clauses.
 		/// </summary>
 		public static bool ParametersMatch(MethodDef method, ICSharpCode.Decompiler.CSharp.Syntax.MethodDeclaration declaration) {
 			var parameters = method.Parameters.Where(p => p.IsNormalMethodParameter).ToList();
-			return parameters.Count == declaration.Parameters.Count && ParameterTypesMatch(parameters, declaration);
+			return parameters.Count == declaration.Parameters.Count &&
+				ParameterTypesMatch(parameters, declaration) &&
+				ReturnTypeMatches(method, declaration);
+		}
+
+		/// <summary>
+		/// Return type comparison as a tie-breaker between candidates that share name, arity and
+		/// parameters. Unresolvable names on either side keep the candidate alive (return true).
+		/// </summary>
+		static bool ReturnTypeMatches(MethodDef method, ICSharpCode.Decompiler.CSharp.Syntax.MethodDeclaration declaration) {
+			var retType = method.MethodSig?.RetType?.RemovePinnedAndModifiers();
+			// The syntax tree spells Nullable<T> as "T?", which normalizes to the underlying name;
+			// compare against the same name from the metadata side.
+			string expected;
+			if (retType is GenericInstSig nullable && nullable.GenericType?.TypeDefOrRef?.FullName == "System.Nullable`1" &&
+					nullable.GenericArguments.Count == 1)
+				expected = NormalizeParameterTypeName(nullable.GenericArguments[0]?.TypeName ?? "");
+			else
+				expected = NormalizeParameterTypeName(retType?.TypeName ?? "");
+			var actual = NormalizeParameterTypeName(GetAstTypeName(declaration.ReturnType) ?? "");
+			if (string.IsNullOrEmpty(expected) || string.IsNullOrEmpty(actual))
+				return true;
+			// Unresolved generic parameters ("!!TResult" and friends) cannot be compared against
+			// the syntax tree spelling; keep the candidate alive instead of vetoing it.
+			if (expected.StartsWith("!") || actual.StartsWith("!"))
+				return true;
+			return string.Equals(expected, actual, StringComparison.OrdinalIgnoreCase);
 		}
 
 		static bool ParameterTypesMatch(List<Parameter> parameters, ICSharpCode.Decompiler.CSharp.Syntax.MethodDeclaration declaration) {
@@ -282,18 +336,36 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			return true;
 		}
 
-		static string NormalizeParameterTypeName(string name) {
-			var result = name.TrimEnd('&', '*');
+		/// <summary>VB keyword spellings of the BCL primitives, for name-only comparisons.</summary>
+		static readonly Dictionary<string, string> VbPrimitiveNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
+			["Integer"] = "Int32",
+			["UInteger"] = "UInt32",
+			["Long"] = "Int64",
+			["ULong"] = "UInt64",
+			["Short"] = "Int16",
+			["UShort"] = "UInt16",
+			["Date"] = "DateTime",
+		};
+
+		internal static string NormalizeParameterTypeName(string name) {
+			var result = name.TrimEnd('&', '*', '(', ')', '[', ']', '?');
+			// Arrays ("Byte[]" in metadata, "Byte()" in VB) and Nullable ("T?" / Nullable`1)
+			// normalize to their element type; the trim above already handled the spellings.
 			// A generic argument contains dots and an arity suffix of its own, so cut the arguments
-			// off first: "System.ValueTuple`3<A.B, C.D>" must compare as "ValueTuple".
+			// off first: "System.ValueTuple`3<A.B, C.D>" must compare as "ValueTuple". The VB
+			// spelling "Lazy(Of T)" cuts the same way.
 			var generic = result.IndexOf('<');
 			if (generic >= 0)
 				result = result.Substring(0, generic);
+			var of = result.IndexOf("(Of ", StringComparison.Ordinal);
+			if (of >= 0)
+				result = result.Substring(0, of);
 			int tick = result.LastIndexOf('`');
 			if (tick > 0)
 				result = result.Substring(0, tick);
 			int index = result.LastIndexOf('.');
-			return index < 0 ? result : result.Substring(index + 1);
+			result = index < 0 ? result.Trim() : result.Substring(index + 1).Trim();
+			return VbPrimitiveNames.TryGetValue(result, out var mapped) ? mapped : result;
 		}
 
 		static string GetAstTypeName(ICSharpCode.Decompiler.CSharp.Syntax.AstType type) {

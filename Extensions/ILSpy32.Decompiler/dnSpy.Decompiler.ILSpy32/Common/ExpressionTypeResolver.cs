@@ -218,6 +218,30 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			return null;
 		}
 
+		/// <summary>
+		/// True when the type is a delegate, i.e. "New T(AddressOf M)" can be written as just
+		/// "AddressOf M". Everything else must keep its constructor call.
+		/// </summary>
+		public bool IsDelegateType(string typeName) {
+			if (string.IsNullOrEmpty(typeName))
+				return false;
+			var name = Normalize(typeName);
+			var local = LookupLocalTypeDef(name);
+			if (local != null)
+				return IsMulticastDelegate(local.BaseType?.FullName);
+			var external = LookupExternalType(name);
+			if (external != null)
+				return IsMulticastDelegate(external.BaseType?.FullName);
+			for (var type = GetRuntimeType(name)?.BaseType; type != null; type = type.BaseType) {
+				if (type.FullName == "System.MulticastDelegate")
+					return true;
+			}
+			return false;
+		}
+
+		static bool IsMulticastDelegate(string baseTypeName) =>
+			baseTypeName == "System.MulticastDelegate" || baseTypeName == "System.Delegate";
+
 		/// <summary>Result type of a binary operation, as far as the operands allow.</summary>
 		string BinaryResultType(ICSharpCode.Decompiler.CSharp.Syntax.BinaryOperatorExpression binary) {
 			var left = GetTypeName(binary.Left);

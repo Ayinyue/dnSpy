@@ -882,8 +882,11 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		{
 			var expr = new ObjectCreationExpression((AstType)objectCreateExpression.Type.AcceptVisitor(this, data));
 			ConvertNodes(objectCreateExpression.Arguments, expr.Arguments);
+			// "new Delegate(M)" is just "AddressOf M" in VB, but only when the type really is a
+			// delegate: "new Lazy(Of T)(M)" must keep its constructor call (BC30581).
 			var arg1 = expr.Arguments.FirstOrDefault() as UnaryOperatorExpression;
-			if (arg1 != null && arg1.Operator == UnaryOperatorType.AddressOf) {
+			if (arg1 != null && arg1.Operator == UnaryOperatorType.AddressOf &&
+					typeResolver.IsDelegateType(objectCreateExpression.Type.ToString())) {
 				arg1.Remove();
 				return EndNode(objectCreateExpression, arg1);
 			}
@@ -3642,13 +3645,29 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		public AstNode VisitThrowExpression(CS.ThrowExpression throwExpression, object data) =>
 			throw new NotSupportedException("VB output for throw expressions is not implemented");
 
-		public AstNode VisitTupleExpression(CS.TupleExpression tupleExpression, object data) =>
-			throw new NotSupportedException("VB output for tuple expressions is not implemented");
+		public AstNode VisitTupleExpression(CS.TupleExpression tupleExpression, object data)
+		{
+			var expr = new TupleExpression();
+			ConvertNodes(tupleExpression.Elements, expr.Elements);
+			return EndNode(tupleExpression, expr);
+		}
 
-		public AstNode VisitTupleType(CS.TupleAstType tupleType, object data) =>
-			throw new NotSupportedException("VB output for tuple types is not implemented");
+		public AstNode VisitTupleType(CS.TupleAstType tupleType, object data)
+		{
+			var type = new TupleType();
+			ConvertNodes(tupleType.Elements, type.Elements);
+			return EndNode(tupleType, type);
+		}
 
-		public AstNode VisitTupleTypeElement(CS.TupleTypeElement tupleTypeElement, object data) =>
-			throw new NotSupportedException("VB output for tuple elements is not implemented");
+		public AstNode VisitTupleTypeElement(CS.TupleTypeElement tupleTypeElement, object data)
+		{
+			var element = new TupleTypeElement();
+			// The name is optional: (Integer, String) is a valid tuple type.
+			var name = tupleTypeElement.NameToken;
+			if (name != null && !string.IsNullOrEmpty(name.Name))
+				element.Identifier = Identifier.Create(name.Annotations, name.Name);
+			element.Type = (AstType)tupleTypeElement.Type.AcceptVisitor(this, data);
+			return EndNode(tupleTypeElement, element);
+		}
 	}
 }

@@ -72,11 +72,93 @@ index 000000000..0158a530e
 +		}
 +	}
 +}
+diff --git a/NRefactory.VB/ICSharpCode.NRefactory.VB/Ast/TypeName/TupleType.cs b/NRefactory.VB/ICSharpCode.NRefactory.VB/Ast/TypeName/TupleType.cs
+new file mode 100644
+index 000000000..a40e3ed4f
+--- /dev/null
++++ b/NRefactory.VB/ICSharpCode.NRefactory.VB/Ast/TypeName/TupleType.cs
+@@ -0,0 +1,76 @@
++// Copyright (c) AlphaSierraPapa for the SharpDevelop Team (for details please see \doc\copyright.txt)
++// This code is distributed under MIT X11 license (for details please see \doc\license.txt)
++
++namespace ICSharpCode.NRefactory.VB.Ast
++{
++	/// <summary>
++	/// (a, b, c)
++	/// </summary>
++	public class TupleExpression : Expression
++	{
++		public AstNodeCollection<Expression> Elements {
++			get { return GetChildrenByRole<Expression>(Roles.Argument); }
++		}
++
++		public override S AcceptVisitor<T, S>(IAstVisitor<T, S> visitor, T data)
++		{
++			return visitor.VisitTupleExpression(this, data);
++		}
++
++		protected internal override bool DoMatch(AstNode other, ICSharpCode.NRefactory.PatternMatching.Match match)
++		{
++			TupleExpression o = other as TupleExpression;
++			return o != null && this.Elements.DoMatch(o.Elements, match);
++		}
++	}
++
++	/// <summary>
++	/// (x As Integer, y As String)
++	/// </summary>
++	public class TupleType : AstType
++	{
++		public AstNodeCollection<TupleTypeElement> Elements {
++			get { return GetChildrenByRole(TupleTypeElement.ElementRole); }
++		}
++
++		public override S AcceptVisitor<T, S>(IAstVisitor<T, S> visitor, T data)
++		{
++			return visitor.VisitTupleType(this, data);
++		}
++
++		protected internal override bool DoMatch(AstNode other, ICSharpCode.NRefactory.PatternMatching.Match match)
++		{
++			TupleType o = other as TupleType;
++			return o != null && this.Elements.DoMatch(o.Elements, match);
++		}
++	}
++
++	/// <summary>
++	/// One element of a <see cref="TupleType"/>; the name is optional.
++	/// </summary>
++	public class TupleTypeElement : AstNode
++	{
++		public static readonly Role<TupleTypeElement> ElementRole = new Role<TupleTypeElement>("Element");
++
++		public AstType Type {
++			get { return GetChildByRole(Roles.Type); }
++			set { SetChildByRole(Roles.Type, value); }
++		}
++
++		public Identifier Identifier {
++			get { return GetChildByRole(Roles.Identifier); }
++			set { SetChildByRole(Roles.Identifier, value); }
++		}
++
++		public override S AcceptVisitor<T, S>(IAstVisitor<T, S> visitor, T data)
++		{
++			return visitor.VisitTupleTypeElement(this, data);
++		}
++
++		protected internal override bool DoMatch(AstNode other, ICSharpCode.NRefactory.PatternMatching.Match match)
++		{
++			TupleTypeElement o = other as TupleTypeElement;
++			return o != null && this.Type.DoMatch(o.Type, match) && this.Identifier.DoMatch(o.Identifier, match);
++		}
++	}
++}
 diff --git a/NRefactory.VB/ICSharpCode.NRefactory.VB/IAstVisitor.cs b/NRefactory.VB/ICSharpCode.NRefactory.VB/IAstVisitor.cs
-index 7f8363180..4d4a5bbf0 100644
+index 7f8363180..94264ad2c 100644
 --- a/NRefactory.VB/ICSharpCode.NRefactory.VB/IAstVisitor.cs
 +++ b/NRefactory.VB/ICSharpCode.NRefactory.VB/IAstVisitor.cs
-@@ -74,6 +74,10 @@ public interface IAstVisitor<in T, out S>
+@@ -74,6 +74,16 @@ public interface IAstVisitor<in T, out S>
  		S VisitLabelDeclarationStatement(LabelDeclarationStatement labelDeclarationStatement, T data);
  		S VisitLocalDeclarationStatement(LocalDeclarationStatement localDeclarationStatement, T data);
  		S VisitExpressionStatement(ExpressionStatement expressionStatement, T data);
@@ -84,17 +166,78 @@ index 7f8363180..4d4a5bbf0 100644
 +		S VisitCallStatement(CallStatement callStatement, T data);
 +
 +		S VisitRaiseEventStatement(RaiseEventStatement raiseEventStatement, T data);
++
++		S VisitTupleExpression(TupleExpression tupleExpression, T data);
++
++		S VisitTupleType(TupleType tupleType, T data);
++
++		S VisitTupleTypeElement(TupleTypeElement tupleTypeElement, T data);
  		S VisitAddRemoveHandlerStatement(AddRemoveHandlerStatement addRemoveHandlerStatement, T data);
  		S VisitWithStatement(WithStatement withStatement, T data);
  		S VisitSyncLockStatement(SyncLockStatement syncLockStatement, T data);
 diff --git a/NRefactory.VB/ICSharpCode.NRefactory.VB/OutputVisitor/OutputVisitor.cs b/NRefactory.VB/ICSharpCode.NRefactory.VB/OutputVisitor/OutputVisitor.cs
-index 7b9d4ea1f..f5d21f060 100644
+index 7b9d4ea1f..486a14ac9 100644
 --- a/NRefactory.VB/ICSharpCode.NRefactory.VB/OutputVisitor/OutputVisitor.cs
 +++ b/NRefactory.VB/ICSharpCode.NRefactory.VB/OutputVisitor/OutputVisitor.cs
-@@ -2879,6 +2879,29 @@ public object VisitUsingStatement(UsingStatement usingStatement, object data)
+@@ -845,6 +845,10 @@ public object VisitPropertyDeclaration(PropertyDeclaration propertyDeclaration,
+ 				WriteAttributes(propertyDeclaration.ReturnTypeAttributes);
+ 				propertyDeclaration.ReturnType.AcceptVisitor(this, data);
+ 			}
++			// "Property X As T = value Implements I.X": VB wants the initializer before the
++			// Implements clause, otherwise the line is a syntax error (BC30205).
++			if (propertyDeclaration.Variables.Any())
++				WriteCommaSeparatedList(propertyDeclaration.Variables);
+ 			WriteImplementsClause(propertyDeclaration.ImplementsClause);
+ 		
+ 			
+@@ -869,8 +873,6 @@ public object VisitPropertyDeclaration(PropertyDeclaration propertyDeclaration,
+ 				formatter.AddHighlightedKeywordReference(reference, start, formatter.NextPosition);
+ 			}
+ 			SaveDeclarationOffset();
+-			if (propertyDeclaration.Variables.Any())
+-				WriteCommaSeparatedList(propertyDeclaration.Variables);
+ 			NewLine();
+ 			
+ 			return EndNode(propertyDeclaration);
+@@ -1321,7 +1323,8 @@ void Unindent()
+ 		/// </summary>
+ 		public static bool IsKeyword(string identifier, AstNode context)
+ 		{
+-			if (identifier == "New") {
++			// VB is case-insensitive, so "new" must be escaped just like "New".
++			if (string.Equals(identifier, "New", StringComparison.OrdinalIgnoreCase)) {
+ 				if (context.PrevSibling is InstanceExpression)
+ 					return false;
+ 				return true;
+@@ -2879,6 +2882,54 @@ public object VisitUsingStatement(UsingStatement usingStatement, object data)
  			return EndNode(usingStatement);
  		}
  		
++		public object VisitTupleExpression(TupleExpression tupleExpression, object data)
++		{
++			StartNode(tupleExpression);
++			WriteCommaSeparatedListInParenthesis(tupleExpression.Elements, false, CodeBracesRangeFlags.Parentheses);
++			return EndNode(tupleExpression);
++		}
++
++		public object VisitTupleType(TupleType tupleType, object data)
++		{
++			StartNode(tupleType);
++			WriteCommaSeparatedListInParenthesis(tupleType.Elements, false, CodeBracesRangeFlags.Parentheses);
++			return EndNode(tupleType);
++		}
++
++		public object VisitTupleTypeElement(TupleTypeElement tupleTypeElement, object data)
++		{
++			StartNode(tupleTypeElement);
++			if (!tupleTypeElement.Identifier.IsNull) {
++				WriteIdentifier(tupleTypeElement.Identifier);
++				WriteKeyword("As");
++			}
++			tupleTypeElement.Type.AcceptVisitor(this, data);
++			return EndNode(tupleTypeElement);
++		}
++
 +		public object VisitRaiseEventStatement(RaiseEventStatement raiseEventStatement, object data)
 +		{
 +			StartNode(raiseEventStatement);

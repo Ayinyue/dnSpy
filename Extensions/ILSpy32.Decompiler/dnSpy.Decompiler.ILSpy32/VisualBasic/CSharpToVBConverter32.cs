@@ -490,7 +490,31 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		bool IsCharExpression(CS.Expression expression) =>
 			IsCharTypeName(typeResolver.GetTypeName(expression));
 
-		static bool IsCharTypeName(string name) => name == "char" || name == "Char" || name == "System.Char";
+		static bool IsCharTypeName(string name) =>
+			name == "char" || name == "Char" || name == "System.Char";
+
+		static bool IsNumericTypeName(string name) {
+			switch (name) {
+			case "byte": case "sbyte": case "short": case "ushort":
+			case "int": case "uint": case "long": case "ulong":
+			case "Byte": case "SByte": case "Int16": case "UInt16":
+			case "Int32": case "UInt32": case "Int64": case "UInt64":
+			case "System.Byte": case "System.SByte": case "System.Int16": case "System.UInt16":
+			case "System.Int32": case "System.UInt32": case "System.Int64": case "System.UInt64":
+				return true;
+			default:
+				return false;
+			}
+		}
+
+		static Expression WrapChrW(Expression expression) {
+			var invocation = new InvocationExpression();
+			invocation.Target = new IdentifierExpression() {
+				Identifier = Identifier.Create((object)null, "ChrW")
+			};
+			invocation.Arguments.Add(expression);
+			return invocation;
+		}
 
 		bool IsStringExpression(CS.Expression expression) {
 			switch (expression) {
@@ -631,6 +655,14 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitCastExpression(CS.CastExpression castExpression, object data)
 		{
+			// VB cannot convert between Char and a number with CType: it needs ChrW/AscW.
+			var targetTypeName = castExpression.Type.ToString();
+			var sourceTypeName = typeResolver.GetTypeName(castExpression.Expression);
+			if (IsCharTypeName(targetTypeName) && IsNumericTypeName(sourceTypeName))
+				return EndNode(castExpression, WrapChrW((Expression)castExpression.Expression.AcceptVisitor(this, data)));
+			if (IsNumericTypeName(targetTypeName) && IsCharTypeName(sourceTypeName))
+				return EndNode(castExpression, WrapAscW((Expression)castExpression.Expression.AcceptVisitor(this, data)));
+
 			var expr = new CastExpression();
 
 			expr.Type = (AstType)castExpression.Type.AcceptVisitor(this, data);
@@ -3053,7 +3085,14 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				? mappedName
 				: variableInitializer.Name;
 			decl.Identifiers.Add(new VariableIdentifier() { Name = Identifier.Create(variableInitializer.NameToken.Annotations, emittedName) });
-			decl.Initializer = (Expression)variableInitializer.Initializer.AcceptVisitor(this, data);
+			var initializer = (Expression)variableInitializer.Initializer.AcceptVisitor(this, data);
+			var declaredTypeName = variableInitializer.Parent.GetChildByRole(CS.Roles.Type).ToString();
+			var valueTypeName = typeResolver.GetTypeName(variableInitializer.Initializer);
+			if (IsNumericTypeName(declaredTypeName) && IsCharTypeName(valueTypeName))
+				initializer = WrapAscW(initializer);
+			else if (IsCharTypeName(declaredTypeName) && IsNumericTypeName(valueTypeName))
+				initializer = WrapChrW(initializer);
+			decl.Initializer = initializer;
 
 			return EndNode(variableInitializer, decl);
 		}

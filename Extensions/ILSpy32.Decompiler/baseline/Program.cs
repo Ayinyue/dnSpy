@@ -659,6 +659,52 @@ namespace EngineBaseline {
 			return end < 0 ? null : message.Substring(start, end - start);
 		}
 
+		static string ExtractFirstQuoted(string message) {
+			int start = message.IndexOf('\'');
+			if (start < 0)
+				return null;
+			int end = message.IndexOf('\'', start + 1);
+			return end < 0 ? null : message.Substring(start + 1, end - start - 1);
+		}
+
+		// When a base class or interface is inaccessible ('Friend' in the reference assembly), VB
+		// cannot see its members, so every Overrides/Implements diagnostic on the type is a
+		// cascade of that single accessibility error, not a conversion defect. Only treat it as
+		// noise when the type's Inherits/Implements clause really names the inaccessible type.
+		static readonly HashSet<string> cascadeDiagnostics = new HashSet<string>(StringComparer.Ordinal) {
+			"BC30284", "BC30401", "BC30149", "BC30583", "BC30610", "BC30794", "BC30517",
+			"CS0115", "CS0535", "CS0534"
+		};
+
+		static HashSet<string> CollectInaccessibleBases(List<Microsoft.CodeAnalysis.Diagnostic> errors, string text) {
+			var names = new HashSet<string>(StringComparer.Ordinal);
+			foreach (var diagnostic in errors) {
+				if (diagnostic.Id != "BC30389")
+					continue;
+				var quoted = ExtractFirstQuoted(diagnostic.GetMessage());
+				if (quoted is null)
+					continue;
+				var simple = quoted.Substring(quoted.LastIndexOf('.') + 1);
+				if (simple.Length == 0)
+					continue;
+				if (MentionsInInheritanceClause(text, simple))
+					names.Add(simple);
+			}
+			return names;
+		}
+
+		static bool MentionsInInheritanceClause(string text, string name) {
+			foreach (var raw in text.Split('\n')) {
+				var line = raw.Trim();
+				if (!line.StartsWith("Inherits ", StringComparison.Ordinal) &&
+					!line.StartsWith("Implements ", StringComparison.Ordinal))
+					continue;
+				if (line.IndexOf(name, StringComparison.Ordinal) >= 0)
+					return true;
+			}
+			return false;
+		}
+
 		static bool IsDefinedElsewhere(string typeName, DumpEntry current, List<DumpEntry> all) {
 			foreach (var other in all) {
 				if (ReferenceEquals(other, current))
@@ -682,7 +728,7 @@ namespace EngineBaseline {
 			var refsDirs = new List<string>();
 			int top = 10, max = int.MaxValue;
 			bool whole = false;
-			string onlyDiagnostic = null;
+			string onlyDiagnostic = null, onlyType = null;
 			for (int i = 0; i < args.Length; i++) {
 				switch (args[i]) {
 				case "--dir": dir = Next(args, ref i); break;
@@ -695,6 +741,9 @@ namespace EngineBaseline {
 				case "--max": max = int.Parse(Next(args, ref i)); break;
 				case "--whole": whole = true; break;
 				case "--id": onlyDiagnostic = Next(args, ref i); break;
+				// Restrict the run to types whose full name contains this substring. Combined with
+				// the per-file diagnostic dump below this is the fastest way to iterate on one type.
+				case "--type": onlyType = Next(args, ref i); break;
 				default: throw new ArgumentException("Unknown option: " + args[i]);
 				}
 			}
@@ -721,10 +770,16 @@ namespace EngineBaseline {
 
 			var entries = ReadSummary(dir).Values.Where(e => e.Status == "ok")
 				.OrderBy(e => e.FileName, StringComparer.Ordinal).Take(max).ToList();
+			if (onlyType is not null)
+				entries = entries.Where(e => e.FullName.IndexOf(onlyType, StringComparison.OrdinalIgnoreCase) >= 0 ||
+					e.FileName.IndexOf(onlyType, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
 			if (whole)
 				return CompileWhole(vb, entries, refs, dir, top, outPath, onlyDiagnostic);
 			int badFiles = 0, noiseOnlyFiles = 0, realBadFiles = 0;
 			var byId = new Dictionary<string, int>(StringComparer.Ordinal);
+			// Several kinds of noise are decided per diagnostic (cross-file types, cascades), so
+			// the raw count alone overstates the problem; keep a noise count per id as well.
+			var byIdNoise = new Dictionary<string, int>(StringComparer.Ordinal);
 			var msg = new Dictionary<string, string>(StringComparer.Ordinal);
 			var samples = new List<string>();
 
@@ -746,8 +801,19 @@ namespace EngineBaseline {
 					.ToList();
 				if (errors.Count == 0) continue;
 				badFiles++;
+				// A single-type run is a debugging session, so show every diagnostic verbatim.
+				if (onlyType is not null) {
+					Console.WriteLine("[FILE] " + e.FullName + " (" + e.FileName + ") errors=" + errors.Count);
+					foreach (var d in errors.OrderBy(d => d.Location.GetLineSpan().StartLinePosition.Line)) {
+						var pos = d.Location.GetLineSpan().StartLinePosition;
+						Console.WriteLine("    " + d.Id + " (line " + (pos.Line + 1) + ", col " + (pos.Character + 1) + ") " +
+							d.GetMessage());
+					}
+				}
+				var inaccessibleBases = CollectInaccessibleBases(errors, text);
 				bool IsNoise(Microsoft.CodeAnalysis.Diagnostic d) =>
-					IsAccessibilityNoise(d.Id) || IsRenamedStateMachineReference(d) || IsShadowedMemberNoise(d, e, entries);
+					IsAccessibilityNoise(d.Id) || IsRenamedStateMachineReference(d) || IsShadowedMemberNoise(d, e, entries) ||
+					(inaccessibleBases.Count > 0 && cascadeDiagnostics.Contains(d.Id));
 				bool noiseOnly = errors.All(IsNoise);
 				if (noiseOnly)
 					noiseOnlyFiles++;
@@ -755,6 +821,10 @@ namespace EngineBaseline {
 					realBadFiles++;
 				foreach (var g in errors.GroupBy(d => d.Id)) {
 					byId[g.Key] = (byId.TryGetValue(g.Key, out var n) ? n : 0) + 1;
+					// Same unit as byId (files, not diagnostics): a file whose diagnostics of this
+					// id were all judged noise.
+					if (g.All(IsNoise))
+						byIdNoise[g.Key] = (byIdNoise.TryGetValue(g.Key, out var nz) ? nz : 0) + 1;
 					if (!msg.ContainsKey(g.Key)) msg[g.Key] = g.First().GetMessage();
 				}
 				if (samples.Count < top) {
@@ -776,10 +846,11 @@ namespace EngineBaseline {
 			report.AppendLine("- files whose errors are all measurement noise: " + noiseOnlyFiles);
 			report.AppendLine();
 			if (byId.Count > 0) {
-				report.AppendLine("| Count | Diagnostic | Message |");
-				report.AppendLine("|---|---|---|");
+				report.AppendLine("| Count | Noise | Diagnostic | Message |");
+				report.AppendLine("|---|---|---|---|");
 				foreach (var kv in byId.OrderByDescending(k => k.Value))
-					report.AppendLine("| " + kv.Value + " | `" + kv.Key + "`" +
+					report.AppendLine("| " + kv.Value + " | " + (byIdNoise.TryGetValue(kv.Key, out var noise) ? noise : 0) +
+						" | `" + kv.Key + "`" +
 						(IsAccessibilityNoise(kv.Key) ? " (noise)" : "") + " | " +
 						msg.GetValueOrDefault(kv.Key, "").Replace("|", "\\|") + " |");
 				report.AppendLine();

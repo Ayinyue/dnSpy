@@ -59,6 +59,7 @@ dotnet run -c Release -- validate --dir out/v32-vb-asm --lang vb \n    --file "d
 | `validate --dir <dir>` | 对某次 dump 的结果做语法验证 |
 | `validate --file <name>` | 只验证一个类型并打印全部诊断 |
 | `compile --refs <dir>[;<dir>…]` | 语义编译（引用目录可用 `;` 分隔多个），可访问性错误单列为 noise |
+| `compile --type <name>` | 只对名字匹配的类型做语义编译，并逐条打印诊断（单类型排查用）|
 | `--type <name>` | dump 只处理名字匹配的类型（调试单个类型用）|
 
 输出：每个类型一个 `.txt`、`summary.tsv`（类型 / 状态 / 长度 / 文件 / 原因）、
@@ -239,6 +240,25 @@ value = (dictionary([key]))                        ' 同一个实例
     `AddHandler x.Event, AddressOf handler`（否则报「事件不能被直接调用」，`BC32022`）。
     事件查找要沿着**基类型与基接口**走——`ITextView.Closed` 这类事件声明在继承来的接口上。
 
+20. **成员级 `Implements` 子句没限定命名空间**（`BC30002`）。类级子句写
+    `Implements Global.dnSpy.Contracts.X.IFoo`，成员级却写成 `Implements IFoo.Id`——
+    而输出文件通常没有 `Imports`，裸名解析不到。`CreateType` 现在按元数据重建
+    `Global.<ns>.<name>`。细节：元数据名带 arity（``IEquatable`1``），直接拼进标识符会被
+    转义成 `IEquatable_1`（`BC30149`），必须先剥掉。
+21. **同一个接口在 `Interfaces` 列表里出现两次**，于是每个成员都拿到两条相同子句
+    （`Implements I.Foo, I.Foo` → `BC30583`）。按 (接口, 成员**签名**) 去重。
+    ⚠️ 按 (接口, 成员**名**) 去重会连合法重载一起吞掉，而报错（`BC30149`）出现在
+    另一个方法上，很难联想到是去重造成的。
+22. **泛型实例名参与类型判定**（`BC30452`）。`Classify("ReadOnlyCollection<string>")`
+    查不到类型（没有剥泛型实参）→ 判不出引用比较 → 输出 `=`，而 VB 对引用类型要求 `Is`。
+    现在同时吃 `Foo<T>`、``Foo`1<T>``、`Foo(Of T)` 三种拼写，查找时补上 arity。
+23. **只有两侧都已知才判引用比较**，一侧解析失败（`MetroWindow` 来自未提供的程序集）
+    就漏判。改为「任一侧已知是引用类型即可」——另一侧若是已知值类型则否决。
+24. **注解绑定回退导致接口子句错位**。`MatchMethod` 在同名同参数个数但参数类型不符时
+    会返回第一个候选，而 `CreateImplementsClausesForMethod` 直接用了它的签名。
+    现在用 `ParametersMatch` 复核；`ref/out` 参数要剥掉尾部 `&` 再比，否则
+    `ref object` 永远比不上，反而把正确的那条子句丢掉（`BC30149`）。
+
 修复后的语法错误文件数：
 
 | 程序集 | 语言 | 语法错误文件 |
@@ -299,11 +319,36 @@ Contracts.Logic（84 个 public 类型）的首次结果：**54 个文件编译�
 | `BC30180` 关键字大小写（dnSpy.dll）| 1 | **0** |
 | `BC30205` 属性初始化顺序（dnSpy.dll）| 1 | **0** |
 | 元组表达式/类型（dnSpy.dll 降级）| 18 | **0** |
+| `BC30452` 泛型实例的引用比较 | 201 | **116**（剩余全为 `UTF8String + String`，另一根因）|
+| `BC30583` 重复的接口子句 | 168 | **0** |
+| `BC30149` 成员子句未限定命名空间 | 3956（whole）| **0** |
 
-Contracts.Logic 的真实失败文件 54 → **10**；AsmEditor 906 → **825**（`--refs` 加上
-`Microsoft.WindowsDesktop.App.Ref` 后，WPF 相关噪声消失）；dnSpy.dll（3266 类型）
-2039 → **1408**，剩余以「缺少 VS SDK / 外部程序集」导致的基类与接口解析失败为主
-（`BC30284` 367、`BC30149` 262、`BC30401` 237 等）。
+Contracts.Logic 的真实失败文件 54 → **10**；AsmEditor 906 → 896 → 825 → **583**；
+dnSpy.dll（3266 类型）2039 → 1408 → **1120**。
+
+### 度量口径：Count 是文件数，Noise 列是全为噪声的文件数
+
+表格里的 `Count` 一直是**出现该诊断的文件数**（不是诊断条数），新增的 `Noise` 列是
+「该诊断在此文件中全部被判为噪声」的文件数。dnSpy.dll 实测：
+
+| 诊断 | Count | Noise | 含义 |
+|---|---|---|---|
+| `BC30389` | 2416 | 2416 | 全部是 Friend 可见性假阳性 |
+| `BC30284` | 367 | 367 | **全部是基类不可见的级联**，不是转换缺陷 |
+| `BC30002` | 675 | 547 | 多为定义在另一个 dump 文件里的互操作类型 |
+
+级联判据（`CollectInaccessibleBases`）：文件里出现 `BC30389` 且该类型名真的出现在
+`Inherits` / `Implements` 子句中时，同一文件的 `BC30284` / `BC30401` / `BC30149` /
+`BC30583` / `BC30610` / `BC30794` / `BC30517` 才算噪声——基类看不见时，VB 无法匹配
+任何覆盖/实现关系，这些诊断必然是连锁反应。
+
+另有两点关于「缺引用」的实测结论：
+
+- dnSpy 的引用集（316 个程序集）里 `Microsoft.VisualStudio.Text/Language/Utilities`
+  都在，**没有缺失的 VS SDK**；转储里也只用到这三个 VS 命名空间。
+- 剩余上限不在引用，而在**逐文件编译**这种度量方式：被 dump 的程序集里 internal 类型/成员
+  对「另一个程序集」不可见（`BC30389`），定义在别的 dump 文件里的类型也看不见
+  （`BC30002`）。要再往下压只能换度量（整份 `--whole` 或给输出加 `InternalsVisibleTo`）。
 
 这些都是「语义正确性」层面的后续工作，不影响「能否产出代码」。
 

@@ -58,7 +58,7 @@ dotnet run -c Release -- validate --dir out/v32-vb-asm --lang vb \n    --file "d
 | `--dnspy-dir <dir>` | 显式指定 dnSpy 输出目录（默认取 `--asm` 所在目录）|
 | `validate --dir <dir>` | 对某次 dump 的结果做语法验证 |
 | `validate --file <name>` | 只验证一个类型并打印全部诊断 |
-| `compile --refs <dir>` | 语义编译（需要引用目录），可访问性错误单列为 noise |
+| `compile --refs <dir>[;<dir>…]` | 语义编译（引用目录可用 `;` 分隔多个），可访问性错误单列为 noise |
 | `--type <name>` | dump 只处理名字匹配的类型（调试单个类型用）|
 
 输出：每个类型一个 `.txt`、`summary.tsv`（类型 / 状态 / 长度 / 文件 / 原因）、

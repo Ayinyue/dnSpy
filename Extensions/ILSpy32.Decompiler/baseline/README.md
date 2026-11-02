@@ -235,6 +235,9 @@ value = (dictionary([key]))                        ' 同一个实例
     确认派生自 `MulticastDelegate` 才省略。
 18. **`New` 关键字判定区分大小写**，导致名为 `new` 的局部变量没被方括号转义（`BC30180`）；
     **属性初始化写在 `Implements` 之后**（`BC30205`，VB 要求 `Property X As T = v Implements I.X`）。
+19. **事件订阅写成 `+=`**。C# 的 `x.Event += handler` 在 VB 里必须写成
+    `AddHandler x.Event, AddressOf handler`（否则报「事件不能被直接调用」，`BC32022`）。
+    事件查找要沿着**基类型与基接口**走——`ITextView.Closed` 这类事件声明在继承来的接口上。
 
 修复后的语法错误文件数：
 
@@ -297,8 +300,10 @@ Contracts.Logic（84 个 public 类型）的首次结果：**54 个文件编译�
 | `BC30205` 属性初始化顺序（dnSpy.dll）| 1 | **0** |
 | 元组表达式/类型（dnSpy.dll 降级）| 18 | **0** |
 
-Contracts.Logic 的真实失败文件 54 → **10**；AsmEditor 因缺 WPF 引用等外部因素，
-真实失败文件 906 → **896**（BC30389/BC30002 等引用缺失为主，已单列噪声）。
+Contracts.Logic 的真实失败文件 54 → **10**；AsmEditor 906 → **825**（`--refs` 加上
+`Microsoft.WindowsDesktop.App.Ref` 后，WPF 相关噪声消失）；dnSpy.dll（3266 类型）
+2039 → **1408**，剩余以「缺少 VS SDK / 外部程序集」导致的基类与接口解析失败为主
+（`BC30284` 367、`BC30149` 262、`BC30401` 237 等）。
 
 这些都是「语义正确性」层面的后续工作，不影响「能否产出代码」。
 

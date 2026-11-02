@@ -2584,8 +2584,6 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					if (ifaceName.IndexOf('<') >= 0 || implName.IndexOf('<') >= 0)
 						continue;
 					if (!string.Equals(ifaceName, implName, StringComparison.Ordinal)) {
-						if (Environment.GetEnvironmentVariable("VB32_TRACE_IMPL") == "1")
-							Console.WriteLine("[cecil] " + definition.FullName + "." + ifaceMethod.Name + " param" + i + " '" + ifaceName + "' vs '" + implName + "'");
 						matches = false;
 						break;
 					}

@@ -626,6 +626,31 @@ namespace EngineBaseline {
 		// "_GetCustomAttributes_d__9" because VB cannot name them. The state-machine type itself
 		// is not part of the dump (it is a non-public nested type), so the reference cannot
 		// resolve. That is a property of the dump selection, not of the generated code.
+		// In per-file mode the dumped type is visible twice: once from the file, once from the
+		// reference assembly (the very assembly being dumped). Its internal members are missing
+		// from the latter, so a qualified call to one reports "is not a member".
+		static bool IsShadowedMemberNoise(Microsoft.CodeAnalysis.Diagnostic diagnostic, DumpEntry current, List<DumpEntry> all) {
+			if (diagnostic.Id != "BC30456" && diagnostic.Id != "CS0117")
+				return false;
+			var message = diagnostic.GetMessage();
+			const string marker = "is not a member of '";
+			int start = message.IndexOf(marker, StringComparison.Ordinal);
+			if (start < 0)
+				return false;
+			start += marker.Length;
+			int end = message.IndexOf('\'', start);
+			if (end < 0)
+				return false;
+			var typeName = message.Substring(start, end - start);
+			foreach (var other in all) {
+				if (ReferenceEquals(other, current))
+					continue;
+				if (other.FullName == typeName || other.FullName.EndsWith("." + typeName, StringComparison.Ordinal))
+					return true;
+			}
+			return false;
+		}
+
 		static bool IsRenamedStateMachineReference(Microsoft.CodeAnalysis.Diagnostic diagnostic) {
 			if (diagnostic.Id != "BC30002" && diagnostic.Id != "CS0246")
 				return false;
@@ -696,7 +721,9 @@ namespace EngineBaseline {
 					.ToList();
 				if (errors.Count == 0) continue;
 				badFiles++;
-				bool noiseOnly = errors.All(d => IsAccessibilityNoise(d.Id) || IsRenamedStateMachineReference(d));
+				bool IsNoise(Microsoft.CodeAnalysis.Diagnostic d) =>
+					IsAccessibilityNoise(d.Id) || IsRenamedStateMachineReference(d) || IsShadowedMemberNoise(d, e, entries);
+				bool noiseOnly = errors.All(IsNoise);
 				if (noiseOnly)
 					noiseOnlyFiles++;
 				else
@@ -706,7 +733,7 @@ namespace EngineBaseline {
 					if (!msg.ContainsKey(g.Key)) msg[g.Key] = g.First().GetMessage();
 				}
 				if (samples.Count < top) {
-					var first = errors.FirstOrDefault(d => !IsAccessibilityNoise(d.Id) && !IsRenamedStateMachineReference(d)) ?? errors[0];
+					var first = errors.FirstOrDefault(d => !IsNoise(d)) ?? errors[0];
 					int line = first.Location.GetLineSpan().StartLinePosition.Line + 1;
 					samples.Add(e.FullName + " :: " + first.Id + " " + first.GetMessage() + " (line " + line + ")");
 				}

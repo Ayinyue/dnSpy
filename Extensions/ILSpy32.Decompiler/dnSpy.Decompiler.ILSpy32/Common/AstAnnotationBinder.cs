@@ -284,6 +284,14 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 
 		static string NormalizeParameterTypeName(string name) {
 			var result = name.TrimEnd('&', '*');
+			// A generic argument contains dots and an arity suffix of its own, so cut the arguments
+			// off first: "System.ValueTuple`3<A.B, C.D>" must compare as "ValueTuple".
+			var generic = result.IndexOf('<');
+			if (generic >= 0)
+				result = result.Substring(0, generic);
+			int tick = result.LastIndexOf('`');
+			if (tick > 0)
+				result = result.Substring(0, tick);
 			int index = result.LastIndexOf('.');
 			return index < 0 ? result : result.Substring(index + 1);
 		}

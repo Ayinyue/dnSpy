@@ -2617,8 +2617,22 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		IEnumerable<ImplementsResult> MatchViaCecil(MethodDef method, ITypeDefOrRef iface) {
 			var cecilType = DnlibCecilBridge.TryGetTypeReference(module, iface);
 			var definition = cecilType?.Resolve();
-			if (definition is null)
+			if (definition is null) {
+				// The bridge cannot express every type spec - a tuple type argument, for one. Its
+				// generic type definition is a plain type reference though, so bridge that and
+				// match by name and arity; VB validates the signature itself.
+				var ifaceDef = ResolveInterfaceDefinition(iface);
+				if (ifaceDef is null)
+					yield break;
+				foreach (var ifaceMethod in ifaceDef.Methods) {
+					if (ifaceMethod.Name != method.Name && !method.Name.EndsWith("." + ifaceMethod.Name, StringComparison.Ordinal))
+						continue;
+					if (ifaceMethod.Parameters.Count != method.MethodSig.Params.Count)
+						continue;
+					yield return new ImplementsResult(iface, ifaceMethod.Name, ifaceMethod);
+				}
 				yield break;
+			}
 
 			// IEquatable<AddressReference>: map the interface's own type parameters to those
 			// arguments so Equals(T) does not match an unrelated Equals(object) overload.
@@ -2656,6 +2670,22 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				}
 				if (matches)
 					yield return new ImplementsResult(iface, ifaceMethod.Name, method);
+			}
+		}
+
+		/// <summary>
+		/// Resolves an interface definition through its generic type definition. Used when the
+		/// bridge cannot handle the constructed type (a tuple type argument defeats it).
+		/// </summary>
+		Mono.Cecil.TypeDefinition ResolveInterfaceDefinition(ITypeDefOrRef iface) {
+			var genericType = (iface as TypeSpec)?.TypeSig?.ToGenericInstSig()?.GenericType?.TypeDefOrRef;
+			if (genericType is null)
+				return null;
+			try {
+				return DnlibCecilBridge.TryGetTypeReference(module, genericType)?.Resolve();
+			}
+			catch {
+				return null;
 			}
 		}
 
@@ -2863,16 +2893,78 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		}
 
 		AstType CreateType(ITypeDefOrRef type) {
-			// The ILSpy 3.2 engine works on cecil, so bridge the dnlib type reference to
-			// cecil and reuse CSharpDecompiler.ConvertType (which understands generics,
-			// nested types, arrays, pointers, etc.). The resulting C# AstType is then
-			// converted to VB. If the bridge fails, fall back to a name-based AstType.
+			// A type spec (generic instance, array) is built from the signature: the cecil bridge
+			// cannot express every spec - a tuple type argument defeats it - and the C# type
+			// builder writes short names the output file cannot resolve without Imports.
+			if (type is TypeSpec spec) {
+				var fromSig = CreateTypeFromSig(spec.TypeSig);
+				if (fromSig != null)
+					return fromSig;
+			}
 			var cecilType = DnlibCecilBridge.TryGetTypeReference(module, type);
-			if (cecilType is null)
-				return AstType.FromName(type.FullName, BoxedTextColor.Type);
+			if (cecilType is null) {
+				var fromSig = CreateTypeFromSig(type.ToTypeSig());
+				return fromSig ?? (AstType)AstType.FromName(type.FullName, BoxedTextColor.Type);
+			}
 			var csAstType = ICSharpCode.Decompiler.CSharp.CSharpDecompiler.ConvertType(cecilType);
 			var vbType = (AstType)csAstType.AcceptVisitor(this, null);
 			return QualifyMemberType(vbType, cecilType);
+		}
+
+		/// <summary>
+		/// Builds a fully qualified VB type straight from a metadata signature: every segment with
+		/// Global, the arity stripped and the generic arguments converted recursively.
+		/// </summary>
+		static AstType CreateTypeFromSig(TypeSig sig) {
+			sig = sig?.RemovePinnedAndModifiers();
+			switch (sig) {
+			case null:
+				return null;
+			case GenericInstSig generic:
+				return CreateNamedType(generic.GenericType?.TypeDefOrRef?.FullName, generic.GenericArguments);
+			case ArraySigBase array:
+				var element = CreateTypeFromSig(array.Next);
+				if (element is null)
+					return null;
+				var composed = new ComposedType { BaseType = element };
+				composed.ArraySpecifiers.Add(new ArraySpecifier(array is ArraySig multi ? (int)multi.Rank : 1));
+				return composed;
+			case GenericSig parameter: {
+				var name = parameter.GenericParam?.Name?.String ?? parameter.TypeName;
+				return string.IsNullOrEmpty(name) ? null : new SimpleType((IEnumerable<object>)null, name);
+			}
+			case TypeDefOrRefSig named:
+				return named.TypeDefOrRef is null ? null : CreateNamedType(named.TypeDefOrRef.FullName, null);
+			default:
+				return null;
+			}
+		}
+
+		static AstType CreateNamedType(string fullName, IList<TypeSig> genericArguments) {
+			if (string.IsNullOrEmpty(fullName))
+				return null;
+			var segments = fullName.Split('/');
+			var names = new List<string>(segments[0].Split('.'));
+			for (int i = 1; i < segments.Length; i++)
+				names.Add(segments[i]);
+
+			AstType result = new PrimitiveType("Global");
+			foreach (var raw in names) {
+				var name = raw;
+				int tick = name.LastIndexOf('`');
+				if (tick > 0)
+					name = name.Substring(0, tick);
+				result = new QualifiedType(result, Identifier.Create((object)null, name));
+			}
+			if (genericArguments is null || genericArguments.Count == 0 || !(result is QualifiedType leaf))
+				return result;
+			foreach (var argument in genericArguments) {
+				var converted = CreateTypeFromSig(argument);
+				if (converted is null)
+					return null;
+				leaf.TypeArguments.Add(converted);
+			}
+			return result;
 		}
 
 		// CSharpDecompiler.ConvertType names a type the way the C# output would: the simple name

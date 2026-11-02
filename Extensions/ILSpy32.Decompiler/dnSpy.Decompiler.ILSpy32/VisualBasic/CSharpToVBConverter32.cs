@@ -2057,6 +2057,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		public AstNode VisitConstructorDeclaration(CS.ConstructorDeclaration constructorDeclaration, object data)
 		{
 			ResetMethodState(constructorDeclaration);
+			// A Module's constructor must not be Shared (BC30433); methods get the same
+			// treatment before their modifiers are converted.
+			if (IsOwnerAModule(constructorDeclaration))
+				constructorDeclaration.Modifiers &= ~CS.Modifiers.Static;
 			var result = new ConstructorDeclaration();
 
 			ConvertNodes(constructorDeclaration.Attributes, result.Attributes);

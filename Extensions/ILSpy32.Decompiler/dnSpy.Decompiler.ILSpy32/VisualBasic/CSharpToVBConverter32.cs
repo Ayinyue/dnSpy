@@ -341,18 +341,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			}
 		}
 
-		bool IsCharExpression(CS.Expression expression) {
-			switch (expression) {
-			case CS.PrimitiveExpression primitive:
-				return primitive.Value is char;
-			case CS.CastExpression cast:
-				return IsCharTypeName(cast.Type.ToString());
-			case CS.IdentifierExpression identifier:
-				return variableTypes.TryGetValue(identifier.Identifier, out var typeName) && IsCharTypeName(typeName);
-			default:
-				return false;
-			}
-		}
+		bool IsCharExpression(CS.Expression expression) =>
+			IsCharTypeName(typeResolver.GetTypeName(expression));
 
 		static bool IsCharTypeName(string name) => name == "char" || name == "Char" || name == "System.Char";
 

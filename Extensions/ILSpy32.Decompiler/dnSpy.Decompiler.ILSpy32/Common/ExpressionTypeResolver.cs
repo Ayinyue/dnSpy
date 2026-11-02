@@ -83,7 +83,9 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 					return "char";
 				if (indexed.EndsWith("[]", StringComparison.Ordinal))
 					return indexed.Substring(0, indexed.Length - 2);
-				return null;
+				// Anything else with an Item indexer (StringBuilder, IList<T>, ...) yields the
+				// indexer's return type.
+				return IndexerResultType(indexed);
 			default:
 				return null;
 			}
@@ -112,6 +114,11 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 					var external = LookupExternalType(name);
 					if (external != null)
 						result = !external.IsValueType;
+					else {
+						var runtimeType = Type.GetType(name, throwOnError: false);
+						if (runtimeType != null)
+							result = !runtimeType.IsValueType;
+					}
 				}
 			}
 
@@ -194,6 +201,41 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			foreach (var property in type.Properties) {
 				if (property.Name == memberName)
 					return property.PropertySig?.RetType?.FullName;
+			}
+			return null;
+		}
+
+		/// <summary>Return type of the Item indexer of the given type, if known.</summary>
+		string IndexerResultType(string typeName) {
+			var name = Normalize(typeName);
+			var type = LookupLocalTypeDef(name);
+			if (type != null) {
+				foreach (var property in type.Properties) {
+					if (property.Name == "Item")
+						return property.PropertySig?.RetType?.FullName;
+				}
+			}
+			var external = LookupExternalType(name);
+			if (external != null) {
+				// An indexer is called Item in C# but keeps its metadata name (StringBuilder
+				// uses Chars), so accept any property that takes parameters.
+				foreach (var property in external.Properties) {
+					if (property.Name == "Item")
+						return property.PropertyType?.FullName;
+				}
+				foreach (var property in external.Properties) {
+					if (property.HasParameters)
+						return property.PropertyType?.FullName;
+				}
+			}
+
+			// Framework types often fail to resolve through cecil; reflection is reliable there.
+			var runtimeType = Type.GetType(name, throwOnError: false);
+			if (runtimeType != null) {
+				foreach (var property in runtimeType.GetProperties()) {
+					if (property.GetIndexParameters().Length > 0)
+						return property.PropertyType.FullName;
+				}
 			}
 			return null;
 		}

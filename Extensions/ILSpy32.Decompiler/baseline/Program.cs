@@ -630,6 +630,12 @@ namespace EngineBaseline {
 		// reference assembly (the very assembly being dumped). Its internal members are missing
 		// from the latter, so a qualified call to one reports "is not a member".
 		static bool IsShadowedMemberNoise(Microsoft.CodeAnalysis.Diagnostic diagnostic, DumpEntry current, List<DumpEntry> all) {
+			// A type declared in another file of the dump cannot resolve when a single file is
+			// compiled, and a member of such a type is missing from the reference assembly.
+			if (diagnostic.Id == "BC30002" || diagnostic.Id == "CS0246") {
+				var typeName0 = ExtractQuoted(diagnostic.GetMessage(), "Type '");
+				return typeName0 != null && IsDefinedElsewhere(typeName0, current, all);
+			}
 			if (diagnostic.Id != "BC30456" && diagnostic.Id != "CS0117")
 				return false;
 			var message = diagnostic.GetMessage();
@@ -641,7 +647,19 @@ namespace EngineBaseline {
 			int end = message.IndexOf('\'', start);
 			if (end < 0)
 				return false;
-			var typeName = message.Substring(start, end - start);
+			return IsDefinedElsewhere(message.Substring(start, end - start), current, all);
+		}
+
+		static string ExtractQuoted(string message, string marker) {
+			int start = message.IndexOf(marker, StringComparison.Ordinal);
+			if (start < 0)
+				return null;
+			start += marker.Length;
+			int end = message.IndexOf('\'', start);
+			return end < 0 ? null : message.Substring(start, end - start);
+		}
+
+		static bool IsDefinedElsewhere(string typeName, DumpEntry current, List<DumpEntry> all) {
 			foreach (var other in all) {
 				if (ReferenceEquals(other, current))
 					continue;
@@ -660,7 +678,8 @@ namespace EngineBaseline {
 		}
 
 		static int RunCompile(string[] args) {
-			string dir = null, lang = null, outPath = null, refsDir = null;
+			string dir = null, lang = null, outPath = null;
+			var refsDirs = new List<string>();
 			int top = 10, max = int.MaxValue;
 			bool whole = false;
 			string onlyDiagnostic = null;
@@ -669,7 +688,9 @@ namespace EngineBaseline {
 				case "--dir": dir = Next(args, ref i); break;
 				case "--lang": lang = Next(args, ref i); break;
 				case "--out": outPath = Next(args, ref i); break;
-				case "--refs": refsDir = Next(args, ref i); break;
+				// Several directories may be needed: the output directory of the dumped assembly
+				// plus a shared framework (WPF lives in Microsoft.WindowsDesktop.App).
+				case "--refs": refsDirs.AddRange(Next(args, ref i).Split(';', StringSplitOptions.RemoveEmptyEntries)); break;
 				case "--top": top = int.Parse(Next(args, ref i)); break;
 				case "--max": max = int.Parse(Next(args, ref i)); break;
 				case "--whole": whole = true; break;
@@ -677,7 +698,7 @@ namespace EngineBaseline {
 				default: throw new ArgumentException("Unknown option: " + args[i]);
 				}
 			}
-			if (dir is null || lang is null || refsDir is null)
+			if (dir is null || lang is null || refsDirs.Count == 0)
 				throw new ArgumentException("--dir, --lang and --refs are required");
 			bool vb = lang == "vb";
 
@@ -689,9 +710,13 @@ namespace EngineBaseline {
 					try { refs.Add(Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(path)); } catch { }
 				}
 			}
-			foreach (var path in Directory.EnumerateFiles(refsDir, "*.dll", SearchOption.TopDirectoryOnly)) {
-				if (!seen.Add(path)) continue;
-				try { refs.Add(Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(path)); } catch { }
+			foreach (var refsDir in refsDirs) {
+				if (!Directory.Exists(refsDir))
+					throw new ArgumentException("Reference directory not found: " + refsDir);
+				foreach (var path in Directory.EnumerateFiles(refsDir, "*.dll", SearchOption.TopDirectoryOnly)) {
+					if (!seen.Add(path)) continue;
+					try { refs.Add(Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(path)); } catch { }
+				}
 			}
 
 			var entries = ReadSummary(dir).Values.Where(e => e.Status == "ok")

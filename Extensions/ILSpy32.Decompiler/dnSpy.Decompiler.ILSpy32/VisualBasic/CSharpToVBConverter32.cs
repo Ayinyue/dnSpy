@@ -1524,6 +1524,18 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitExpressionStatement(CS.ExpressionStatement expressionStatement, object data)
 		{
+			// "x.Event += handler" is AddHandler in VB; += on an event is not an operator there.
+			if (expressionStatement.Expression is CS.AssignmentExpression subscription &&
+					(subscription.Operator == CS.AssignmentOperatorType.Add || subscription.Operator == CS.AssignmentOperatorType.Subtract) &&
+					IsEventAccess(subscription.Left)) {
+				var handler = new AddRemoveHandlerStatement() {
+					IsAddHandler = subscription.Operator == CS.AssignmentOperatorType.Add
+				};
+				handler.EventExpression = (Expression)subscription.Left.AcceptVisitor(this, data);
+				handler.DelegateExpression = (Expression)subscription.Right.AcceptVisitor(this, data);
+				return EndNode(expressionStatement, handler);
+			}
+
 			// C# raises an event by invoking it like a delegate; VB needs a RaiseEvent statement
 			// (BC32022). Checked before the expression is converted so nothing is converted twice.
 			var raisedEvent = expressionStatement.Expression is CS.InvocationExpression inv ? GetRaisedEventName(inv) : null;
@@ -1550,6 +1562,21 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					node = new ExpressionStatement((Expression)node);
 			}
 			return EndNode(expressionStatement, node);
+		}
+
+		/// <summary>True when the expression names an event (this.Event or obj.Event).</summary>
+		bool IsEventAccess(CS.Expression expression) {
+			switch (expression) {
+			case CS.IdentifierExpression identifier:
+				return IsEventName(identifier.Identifier);
+			case CS.MemberReferenceExpression member:
+				var targetType = typeResolver.GetTypeName(member.Target);
+				if (targetType is null)
+					return false;
+				return typeResolver.HasEvent(targetType, member.MemberName) ?? true;
+			default:
+				return false;
+			}
 		}
 
 		/// <summary>Name of the event the invocation raises, or null.</summary>

@@ -219,6 +219,88 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		}
 
 		/// <summary>
+		/// True/false when the member is known to be an event, null when the type cannot be
+		/// resolved (types from assemblies that are not referenced here).
+		/// </summary>
+		public bool? HasEvent(string typeName, string memberName) {
+			if (string.IsNullOrEmpty(typeName) || string.IsNullOrEmpty(memberName))
+				return null;
+			var name = Normalize(typeName);
+			var local = LookupLocalTypeDef(name);
+			if (local != null)
+				return HasEventIn(local, memberName);
+			var external = LookupExternalType(name);
+			if (external != null)
+				return HasEventIn(external, memberName);
+			var runtime = GetRuntimeType(name);
+			if (runtime is null)
+				return null;
+			foreach (var type in SelfAndInterfaces(runtime)) {
+				foreach (var ev in type.GetEvents())
+					if (ev.Name == memberName)
+						return true;
+			}
+			return false;
+		}
+
+		// Events are often declared on a base type or a base interface (ITextView.Closed), so the
+		// lookup follows both hierarchies.
+		static bool? HasEventIn(TypeDef type, string memberName) {
+			var visited = new HashSet<string>(StringComparer.Ordinal);
+			var queue = new Queue<TypeDef>();
+			queue.Enqueue(type);
+			while (queue.Count > 0) {
+				var current = queue.Dequeue();
+				if (current is null || !visited.Add(current.FullName))
+					continue;
+				foreach (var ev in current.Events) {
+					if (ev.Name == memberName)
+						return true;
+				}
+				var baseType = current.BaseType?.ResolveTypeDef();
+				if (baseType != null)
+					queue.Enqueue(baseType);
+				foreach (var iface in current.Interfaces) {
+					var resolved = iface.Interface?.ResolveTypeDef();
+					if (resolved != null)
+						queue.Enqueue(resolved);
+				}
+			}
+			return false;
+		}
+
+		static bool? HasEventIn(Mono.Cecil.TypeDefinition type, string memberName) {
+			var visited = new HashSet<string>(StringComparer.Ordinal);
+			var queue = new Queue<Mono.Cecil.TypeDefinition>();
+			queue.Enqueue(type);
+			while (queue.Count > 0) {
+				var current = queue.Dequeue();
+				if (current is null || !visited.Add(current.FullName))
+					continue;
+				foreach (var ev in current.Events) {
+					if (ev.Name == memberName)
+						return true;
+				}
+				var baseType = current.BaseType?.Resolve();
+				if (baseType != null)
+					queue.Enqueue(baseType);
+				foreach (var iface in current.Interfaces) {
+					var resolved = iface.InterfaceType?.Resolve();
+					if (resolved != null)
+						queue.Enqueue(resolved);
+				}
+			}
+			return false;
+		}
+
+		static IEnumerable<Type> SelfAndInterfaces(Type type) {
+			for (var current = type; current != null; current = current.BaseType)
+				yield return current;
+			foreach (var iface in type.GetInterfaces())
+				yield return iface;
+		}
+
+		/// <summary>
 		/// True when the type is a delegate, i.e. "New T(AddressOf M)" can be written as just
 		/// "AddressOf M". Everything else must keep its constructor call.
 		/// </summary>

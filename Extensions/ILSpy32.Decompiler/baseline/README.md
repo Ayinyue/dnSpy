@@ -259,6 +259,26 @@ value = (dictionary([key]))                        ' 同一个实例
     现在用 `ParametersMatch` 复核；`ref/out` 参数要剥掉尾部 `&` 再比，否则
     `ref object` 永远比不上，反而把正确的那条子句丢掉（`BC30149`）。
 
+25. **泛型类型完全没有注解**（影响面最大的一处）。`AstAnnotationBinder` 用元数据全名匹配
+    语法树里的类型名，而泛型类型的元数据名带 arity（``BulkObservableCollection`1``），
+    语法树不带 → **整个类型绑定失败**，所有依赖注解的功能（接口子句、事件副本抑制、
+    修饰符判定）对它静默失效。修法：给类型字典补一份剥掉 arity 的键（两遍填充，
+    避免遮蔽同名的非泛型类型）。
+
+26. **C# 自定义事件在 VB 里必须有 `RaiseEvent` 访问器**（`BC31132` / `BC30149`）。
+    编译器生成的字段式事件（add/remove 都标 `[CompilerGenerated]`）没有 raise 访问器，
+    而 VB 的 `Custom Event` 三件套缺一不可。判定为「自动事件」时改写成字段式
+    `Public Event X As T`——add/remove 里那段 `Interlocked.CompareExchange` 循环正是
+    字段事件自带的行为，语义等价。改写后原先的事件副本也能被消掉，直接输出 `RaiseEvent`。
+
+27. **`UTF8String + String`**（`BC30452`）。C# 会把「隐式转换到 String」折进 `+`，
+    VB 不会把用户定义转换和内置运算符串起来。新增 `HasImplicitStringConversion`
+    （在元数据里找返回 `String` 的 `op_Implicit`），只在一侧确实是文本时给另一侧插 `CStr`。
+    ⚠️ `CStr` 也是 VB 关键字：用 `InvocationExpression` 调用会被转义成 `[CStr](...)`，
+    必须用 `CastType.CStr` 的 `CastExpression` 节点。
+    顺带修了成员类型查找：`MemberTypeOf` 原来只查**声明**的成员，而 `IAssembly.Name`
+    声明在基接口上，查不到就推不出操作数类型。
+
 修复后的语法错误文件数：
 
 | 程序集 | 语言 | 语法错误文件 |
@@ -319,12 +339,17 @@ Contracts.Logic（84 个 public 类型）的首次结果：**54 个文件编译�
 | `BC30180` 关键字大小写（dnSpy.dll）| 1 | **0** |
 | `BC30205` 属性初始化顺序（dnSpy.dll）| 1 | **0** |
 | 元组表达式/类型（dnSpy.dll 降级）| 18 | **0** |
-| `BC30452` 泛型实例的引用比较 | 201 | **116**（剩余全为 `UTF8String + String`，另一根因）|
-| `BC30583` 重复的接口子句 | 168 | **0** |
+| `BC30452` 泛型实例的引用比较 | 201 | **92**（余下两侧类型都推不出的情况）|
+| `BC30583` 重复的接口子句 | 168 | **45**（其中 34 个文件全为噪声）|
 | `BC30149` 成员子句未限定命名空间 | 3956（whole）| **0** |
+| `BC30452` `UTF8String + String` | 116 | **0** |
+| `BC30452` Char 与数值比较 | 112 | **0** |
+| 泛型类型的注解绑定（整类静默失效）| — | 已修，见第 25 条 |
+| `BC32022` 事件当委托调用（dnSpy.dll）| 379 | **266** |
+| `BC31132` 自定义事件缺 `RaiseEvent` | 92 | **81**（余下是真正带逻辑的自定义事件）|
 
-Contracts.Logic 的真实失败文件 54 → **10**；AsmEditor 906 → 896 → 825 → **583**；
-dnSpy.dll（3266 类型）2039 → 1408 → **1120**。
+Contracts.Logic 的真实失败文件 54 → **10**；AsmEditor 906 → 896 → 825 → 583 → **565**；
+dnSpy.dll（3266 类型）2039 → 1408 → 1120 → **1096**。
 
 ### 度量口径：Count 是文件数，Noise 列是全为噪声的文件数
 
@@ -341,6 +366,20 @@ dnSpy.dll（3266 类型）2039 → 1408 → **1120**。
 `Inherits` / `Implements` 子句中时，同一文件的 `BC30284` / `BC30401` / `BC30149` /
 `BC30583` / `BC30610` / `BC30794` / `BC30517` 才算噪声——基类看不见时，VB 无法匹配
 任何覆盖/实现关系，这些诊断必然是连锁反应。
+
+### 不是转换缺陷：LINQ 推断族（`BC36645` / `BC32050` / `BC30518`）
+
+`System.Linq.Enumerable.ToArray(x)` / `FirstOrDefault(x)` 报「无法推断 TSource」看起来很
+像转换器丢了类型实参，实测是**不可见类型的连锁**：
+
+- 整份编译（`--whole`，被 dump 的程序集内部类型可解析）时，`BC36645` 从 **163 个文件**
+  掉到 **3 条诊断**；
+- 逐文件样本 `RegisteredCommandElement:167` 的接收者是 `Friend` 类型
+  `dnSpy.Commands.KeyShortcutCollection`（同文件 5 条 `BC30389`），VB 根本不知道参数类型，
+  自然推不出 `TSource`。
+
+所以这一族没有改转换器，也没有并入上面的级联判据（那会把「同一个文件里另有一处
+Friend 引用、但推断确实有问题」的场面一起藏掉）。要复核类似结论，用 `--whole` 跑一遍最快。
 
 另有两点关于「缺引用」的实测结论：
 

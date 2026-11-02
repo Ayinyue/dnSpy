@@ -2940,8 +2940,66 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			if (type.IsInterface)
 				return;
 
-			foreach (var t in GetMethods(md))
+			var matched = GetMethods(md).ToList();
+			foreach (var t in matched)
 				result.ImplementsClause.Add(InterfaceMemberSpecifier.CreateWithData(CreateType(t.Type), t.OriginalName, t.Reference));
+			// VB requires the implementation to repeat the Optional/default of the interface
+			// member (BC30401); C# only needs it on the interface declaration.
+			foreach (var t in matched)
+				ApplyOptionalParameters(result, t);
+		}
+
+		/// <summary>
+		/// Copies Optional and the default value from the implemented member onto the parameters
+		/// that lack them (VB rejects the implementation otherwise, BC30401). The interface member
+		/// is looked up by name and arity because the matched reference may be the implementation
+		/// itself - that is what the cecil fallback yields.
+		/// </summary>
+		void ApplyOptionalParameters(MethodDeclaration result, ImplementsResult target) {
+			if (result.Parameters.Count == 0)
+				return;
+			var iface = target.Type?.Resolve();
+			if (iface != null) {
+				foreach (var method in iface.Methods) {
+					if (method.Name != target.OriginalName)
+						continue;
+					var parameters = method.Parameters.Where(p => p.IsNormalMethodParameter).ToList();
+					if (parameters.Count != result.Parameters.Count)
+						continue;
+					if (!parameters.Any(p => p.ParamDef?.IsOptional == true))
+						continue;
+					for (int i = 0; i < parameters.Count; i++) {
+						var paramDef = parameters[i].ParamDef;
+						if (paramDef != null && paramDef.IsOptional)
+							SetOptionalValue(result.Parameters.ElementAt(i), paramDef.Constant?.Value);
+					}
+					return;
+				}
+				return;
+			}
+			var cecilType = DnlibCecilBridge.TryGetTypeReference(module, target.Type)?.Resolve();
+			if (cecilType is null)
+				return;
+			foreach (var method in cecilType.Methods) {
+				if (method.Name != target.OriginalName)
+					continue;
+				if (method.Parameters.Count != result.Parameters.Count)
+					continue;
+				if (!method.Parameters.Any(p => p.IsOptional))
+					continue;
+				for (int i = 0; i < method.Parameters.Count; i++) {
+					if (method.Parameters[i].IsOptional)
+						SetOptionalValue(result.Parameters.ElementAt(i), method.Parameters[i].HasConstant ? method.Parameters[i].Constant : null);
+				}
+				return;
+			}
+		}
+
+		static void SetOptionalValue(ParameterDeclaration parameter, object value) {
+			if (!parameter.OptionalValue.IsNull)
+				return;
+			parameter.Modifiers |= Modifiers.Optional;
+			parameter.OptionalValue = new PrimitiveExpression(value);
 		}
 
 		void CreateImplementsClausesForProperty(CS.IndexerDeclaration orig, PropertyDeclaration result) {

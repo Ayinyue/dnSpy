@@ -48,12 +48,28 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 					types[stripped] = type;
 			}
 
+			// A nested type is dumped on its own, so its declaring types are not in the tree and the
+			// computed full name is just the short name. Fall back to a unique simple-name match.
+			var bySimpleName = new Dictionary<string, TypeDef>(StringComparer.Ordinal);
+			var ambiguousNames = new HashSet<string>(StringComparer.Ordinal);
+			foreach (var type in module.GetTypes()) {
+				var simpleName = type.Name?.String;
+				if (string.IsNullOrEmpty(simpleName))
+					continue;
+				if (bySimpleName.ContainsKey(simpleName))
+					ambiguousNames.Add(simpleName);
+				else
+					bySimpleName[simpleName] = type;
+			}
+
 			var renames = new Dictionary<string, string>(StringComparer.Ordinal);
 			var methodNames = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
 			foreach (var typeDeclaration in tree.Descendants.OfType<ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration>()) {
 				var fullName = GetFullTypeName(typeDeclaration);
-				if (fullName is null || !types.TryGetValue(fullName, out var typeDef))
-					continue;
+				if (fullName is null || !types.TryGetValue(fullName, out var typeDef)) {
+					if (!bySimpleName.TryGetValue(typeDeclaration.Name, out typeDef) || ambiguousNames.Contains(typeDeclaration.Name))
+						continue;
+				}
 				typeDeclaration.AddAnnotation(typeDef);
 				AttachMembers(typeDef, typeDeclaration);
 				CollectIdentifierRenames(typeDef, typeDeclaration, renames);

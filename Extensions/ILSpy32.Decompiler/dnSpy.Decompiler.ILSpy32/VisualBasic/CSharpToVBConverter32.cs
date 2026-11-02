@@ -54,6 +54,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		int catchVariableCount;
 		int unusedObjectCounter;
 		int incrementTempCounter;
+		// Increments that belong to a loop condition: they are emitted at the top of the loop
+		// body, so the converter must not hoist them a second time.
+		readonly Dictionary<CS.UnaryOperatorExpression, bool> loopConditionUpdates =
+			new Dictionary<CS.UnaryOperatorExpression, bool>();
 		readonly Stack<string> namespaceStack = new Stack<string>();
 		readonly Dictionary<string, string> variableTypes = new Dictionary<string, string>(StringComparer.Ordinal);
 		// VB forbids a local that hides an enclosing one (BC30616) and a second declaration of
@@ -383,6 +387,13 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		// old helper call is kept, even though no such helper exists - it is at least visible.
 		Expression ConvertIncrement(CS.UnaryOperatorExpression unaryOperatorExpression, object data, bool increment, bool postfix) {
 			var target = (Expression)unaryOperatorExpression.Expression.AcceptVisitor(this, data);
+			// The update already ran at the top of the loop body, so the expression is just the
+			// target: prefix yields the new value, postfix the old one.
+			if (loopConditionUpdates.TryGetValue(unaryOperatorExpression, out var postfixUpdate))
+				return postfix
+					? new BinaryOperatorExpression((Expression)target.Clone(),
+						increment ? BinaryOperatorType.Add : BinaryOperatorType.Subtract, new PrimitiveExpression(1))
+					: (Expression)target.Clone();
 			var op = increment ? AssignmentOperatorType.Add : AssignmentOperatorType.Subtract;
 			var assign = new AssignmentExpression((Expression)target.Clone(), op, new PrimitiveExpression(1));
 
@@ -1908,12 +1919,101 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitWhileStatement(CS.WhileStatement whileStatement, object data)
 		{
+			// "while (--i >= 0)" has no direct VB form: an assignment is not an expression, and a
+			// helper function would have to exist. Lower it to
+			//     While True
+			//         i -= 1
+			//         If Not (i >= 0) Then Exit While
+			//         <body>
+			//     End While
+			// which re-runs the update on every iteration, exactly like the original condition.
+			var updates = new List<CS.UnaryOperatorExpression>();
+			if (TryCollectConditionUpdates(whileStatement.Condition, updates)) {
+				foreach (var update in updates)
+					loopConditionUpdates[update] = update.Operator == CS.UnaryOperatorType.PostDecrement ||
+						update.Operator == CS.UnaryOperatorType.PostIncrement;
+				Expression condition;
+				try {
+					condition = (Expression)whileStatement.Condition.AcceptVisitor(this, data);
+				}
+				finally {
+					foreach (var update in updates)
+						loopConditionUpdates.Remove(update);
+				}
+				var body = (BlockStatement)whileStatement.EmbeddedStatement.AcceptVisitor(this, data);
+
+				var loop = new WhileStatement();
+				loop.Condition = new PrimitiveExpression(true);
+				var block = new BlockStatement();
+				foreach (var update in updates) {
+					var target = (Expression)update.Expression.AcceptVisitor(this, data);
+					block.Add(new ExpressionStatement(new AssignmentExpression(target,
+						update.Operator == CS.UnaryOperatorType.Increment || update.Operator == CS.UnaryOperatorType.PostIncrement
+							? AssignmentOperatorType.Add
+							: AssignmentOperatorType.Subtract,
+						new PrimitiveExpression(1))));
+				}
+				var guard = new IfElseStatement();
+				// The parentheses are required: without them "Not a AndAlso b" negates only a.
+				var negated = new ParenthesizedExpression();
+				negated.Expression = condition;
+				guard.Condition = new UnaryOperatorExpression(UnaryOperatorType.Not, negated);
+				guard.Body = new ExitStatement(ExitKind.While);
+				block.Add(guard);
+				foreach (var statement in body.Statements.ToList()) {
+					body.Statements.Remove(statement);
+					block.Add(statement);
+				}
+				loop.Body = block;
+
+				return EndNode(whileStatement, loop);
+			}
+
 			var stmt = new WhileStatement() {
 				Condition = (Expression)whileStatement.Condition.AcceptVisitor(this, data),
 				Body = (BlockStatement)whileStatement.EmbeddedStatement.AcceptVisitor(this, data)
 			};
 
 			return EndNode(whileStatement, stmt);
+		}
+
+		static bool IsIncrementOrDecrement(CS.UnaryOperatorType op) {
+			return op == CS.UnaryOperatorType.Increment || op == CS.UnaryOperatorType.Decrement ||
+				op == CS.UnaryOperatorType.PostIncrement || op == CS.UnaryOperatorType.PostDecrement;
+		}
+
+		/// <summary>
+		/// Collects the increments a loop condition performs before any short-circuit can skip
+		/// them. Returns false when the condition holds an increment that cannot be lowered this
+		/// way, in which case the caller falls back to the previous behaviour.
+		/// </summary>
+		static bool TryCollectConditionUpdates(CS.Expression expression, List<CS.UnaryOperatorExpression> updates) {
+			switch (expression) {
+			case CS.UnaryOperatorExpression unary when IsIncrementOrDecrement(unary.Operator):
+				// The target must be re-evaluated safely: an identifier or member reference.
+				if (!(unary.Expression is CS.IdentifierExpression) && !(unary.Expression is CS.MemberReferenceExpression))
+					return false;
+				// Only the prefix forms are lowered; the postfix value needs the old one, which
+				// complicates the rewrite for no gain (the helper is not used for those anyway).
+				if (unary.Operator != CS.UnaryOperatorType.Increment && unary.Operator != CS.UnaryOperatorType.Decrement)
+					return false;
+				updates.Add(unary);
+				return true;
+			case CS.BinaryOperatorExpression binary:
+				// The left operand is always evaluated; the right one may be short-circuited.
+				if (!TryCollectConditionUpdates(binary.Left, updates))
+					return false;
+				return !ContainsIncrement(binary.Right);
+			case CS.ParenthesizedExpression parenthesized:
+				return TryCollectConditionUpdates(parenthesized.Expression, updates);
+			default:
+				return !ContainsIncrement(expression);
+			}
+		}
+
+		static bool ContainsIncrement(CS.Expression expression) {
+			return expression.Descendants.OfType<CS.UnaryOperatorExpression>()
+				.Any(u => IsIncrementOrDecrement(u.Operator));
 		}
 
 		public AstNode VisitYieldBreakStatement(CS.YieldBreakStatement yieldBreakStatement, object data)

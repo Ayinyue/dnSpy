@@ -58,6 +58,15 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			var r = IsReference(right);
 			if (l == false || r == false)
 				return false;
+			// C# '==' between strings binds String.op_Equality (value comparison), and VB '=' is
+			// the matching operator; 'Is' would compare references. When the other side is a
+			// known object reference, C# really did bind reference equality, so 'Is' stays.
+			var lString = IsStringType(GetTypeName(left));
+			var rString = IsStringType(GetTypeName(right));
+			if (lString && (rString || r is null))
+				return false;
+			if (rString && l is null)
+				return false;
 			return l == true || r == true;
 		}
 
@@ -125,19 +134,40 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 				return PrimitiveName(primitive.Value);
 			case ICSharpCode.Decompiler.CSharp.Syntax.CastExpression cast:
 				return cast.Type?.ToString();
+			case ICSharpCode.Decompiler.CSharp.Syntax.AsExpression asCast:
+				// 'x as T' and 'x is T' — the latter yields a bool (a known value type, which
+				// vetoes a reference comparison on that side).
+				return asCast.Type?.ToString();
+			case ICSharpCode.Decompiler.CSharp.Syntax.IsExpression:
+				return "bool";
 			case ICSharpCode.Decompiler.CSharp.Syntax.ObjectCreateExpression created:
 				return created.Type?.ToString();
 			case ICSharpCode.Decompiler.CSharp.Syntax.ArrayCreateExpression array:
 				return array.Type?.ToString();
 			case ICSharpCode.Decompiler.CSharp.Syntax.IdentifierExpression identifier:
 				return LookupVariable(identifier.Identifier) ?? MemberType(identifier.Identifier);
+			case ICSharpCode.Decompiler.CSharp.Syntax.BaseReferenceExpression:
+				// MyBase.X resolves members against the base type.
+				return CurrentType?.BaseType?.FullName;
 			case ICSharpCode.Decompiler.CSharp.Syntax.MemberReferenceExpression member:
 				if (member.Target is ICSharpCode.Decompiler.CSharp.Syntax.ThisReferenceExpression)
 					return MemberType(member.MemberName);
 				var targetType = GetTypeName(member.Target);
 				return targetType is null ? null : MemberTypeOf(targetType, member.MemberName);
+			case ICSharpCode.Decompiler.CSharp.Syntax.InvocationExpression invocation:
+				return InvocationResultType(invocation);
 			case ICSharpCode.Decompiler.CSharp.Syntax.ParenthesizedExpression parenthesized:
 				return GetTypeName(parenthesized.Expression);
+			case ICSharpCode.Decompiler.CSharp.Syntax.UnaryOperatorExpression unary:
+				switch (unary.Operator) {
+				case ICSharpCode.Decompiler.CSharp.Syntax.UnaryOperatorType.Not:
+					return "bool";
+				case ICSharpCode.Decompiler.CSharp.Syntax.UnaryOperatorType.Minus:
+				case ICSharpCode.Decompiler.CSharp.Syntax.UnaryOperatorType.Plus:
+				case ICSharpCode.Decompiler.CSharp.Syntax.UnaryOperatorType.BitNot:
+					return GetTypeName(unary.Expression);
+				}
+				return null;
 			case ICSharpCode.Decompiler.CSharp.Syntax.ConditionalExpression conditional:
 				// "cond ? a : b" has the type the two branches share.
 				var whenTrue = GetTypeName(conditional.TrueExpression);
@@ -163,6 +193,31 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			default:
 				return null;
 			}
+		}
+
+		/// <summary>
+		/// Static type of a method call. Only metadata-backed answers are produced: the return
+		/// type of a method found on the target type (or of Invoke when a delegate is called).
+		/// </summary>
+		string InvocationResultType(ICSharpCode.Decompiler.CSharp.Syntax.InvocationExpression invocation) {
+			switch (invocation.Target) {
+			case ICSharpCode.Decompiler.CSharp.Syntax.MemberReferenceExpression member:
+				var targetType = GetTypeName(member.Target);
+				if (targetType is null)
+					return null;
+				return MemberReturnTypeOf(targetType, member.MemberName);
+			case ICSharpCode.Decompiler.CSharp.Syntax.IdentifierExpression identifier:
+				var localType = LookupVariable(identifier.Identifier);
+				if (localType != null) {
+					// A local or parameter of delegate type is being invoked.
+					var invokeResult = MemberReturnTypeOf(localType, "Invoke");
+					if (invokeResult != null)
+						return invokeResult;
+				}
+				// A plain method on the type being converted.
+				return CurrentType is null ? null : MemberReturnTypeOfOn(CurrentType, identifier.Identifier, null);
+			}
+			return null;
 		}
 
 		/// <summary>true: reference type, false: value type, null: unknown.</summary>
@@ -552,6 +607,175 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			// Types from other assemblies (dnlib.DotNet.MethodDef, ...) resolve through cecil.
 			var external = LookupExternalType(bare, arity) ?? LookupExternalType(name);
 			return external is null ? null : FindMemberType(external, memberName);
+		}
+
+		/// <summary>
+		/// Return type of a method (or of a delegate's Invoke when a delegate field/property is
+		/// invoked) on the given type. This is what 'x.M(...) == y' needs on the call side.
+		/// </summary>
+		string MemberReturnTypeOf(string typeName, string memberName) {
+			var name = Normalize(typeName);
+			var bare = StripGenericArgs(name, out var arity);
+			var local = LookupLocalTypeDef(bare, arity) ?? LookupLocalTypeDef(name);
+			if (local != null) {
+				var result = MemberReturnTypeOfOn(local, memberName, name);
+				if (result != null)
+					return result;
+			}
+			var external = LookupExternalType(bare, arity) ?? LookupExternalType(name);
+			if (external != null) {
+				var result = MemberReturnTypeOfOnExternal(external, memberName, name);
+				if (result != null)
+					return result;
+			}
+			return null;
+		}
+
+		string MemberReturnTypeOfOn(TypeDef type, string memberName, string constructedName) {
+			// Methods come first: invoking a name means a method group unless a delegate field
+			// with the same name shadows it (the field case is handled below).
+			var methodResult = FindMethodReturnType(type, memberName);
+			if (methodResult != null)
+				return SubstituteGenericArgument(type, methodResult, constructedName);
+			var fieldResult = FindMemberType(type, memberName);
+			if (fieldResult is null)
+				return null;
+			if (IsDelegateType(fieldResult))
+				return MemberReturnTypeOf(fieldResult, "Invoke");
+			return null;
+		}
+
+		string MemberReturnTypeOfOnExternal(Mono.Cecil.TypeDefinition type, string memberName, string constructedName) {
+			foreach (var typeOrBase in SelfAndBases(type)) {
+				foreach (var method in typeOrBase.Methods) {
+					if (method.Name == memberName && method.ReturnType != null)
+						return SubstituteGenericArgument(typeOrBase, method.ReturnType.FullName, constructedName);
+				}
+			}
+			return null;
+		}
+
+		static IEnumerable<Mono.Cecil.TypeDefinition> SelfAndBases(Mono.Cecil.TypeDefinition type) {
+			var visited = new HashSet<string>(StringComparer.Ordinal);
+			var queue = new Queue<Mono.Cecil.TypeDefinition>();
+			queue.Enqueue(type);
+			while (queue.Count > 0) {
+				var current = queue.Dequeue();
+				if (current is null || !visited.Add(current.FullName))
+					continue;
+				yield return current;
+				var baseType = TryResolve(current.BaseType);
+				if (baseType != null)
+					queue.Enqueue(baseType);
+				foreach (var iface in current.Interfaces) {
+					var resolved = TryResolve(iface.InterfaceType);
+					if (resolved != null)
+						queue.Enqueue(resolved);
+				}
+			}
+		}
+
+		/// <summary>Method return type on the type or any of its bases/interfaces, as a short name.</summary>
+		static string FindMethodReturnType(TypeDef type, string memberName) {
+			var visited = new HashSet<string>(StringComparer.Ordinal);
+			var queue = new Queue<TypeDef>();
+			queue.Enqueue(type);
+			while (queue.Count > 0) {
+				var current = queue.Dequeue();
+				if (current is null || !visited.Add(current.FullName))
+					continue;
+				foreach (var method in current.Methods) {
+					if (method.Name == memberName && method.MethodSig != null)
+						return method.MethodSig.RetType?.RemovePinnedAndModifiers()?.TypeName;
+				}
+				var baseType = current.BaseType?.ResolveTypeDef();
+				if (baseType != null)
+					queue.Enqueue(baseType);
+				foreach (var iface in current.Interfaces) {
+					var resolved = iface.Interface?.ResolveTypeDef();
+					if (resolved != null)
+						queue.Enqueue(resolved);
+				}
+			}
+			return null;
+		}
+
+		/// <summary>
+		/// Replaces a generic parameter name ('T', 'TKey') from a generic definition with the
+		/// corresponding argument of the constructed type name the member was accessed through.
+		/// </summary>
+		string SubstituteGenericArgument(TypeDef definitionType, string memberTypeName, string constructedName) {
+			if (memberTypeName is null || constructedName is null)
+				return memberTypeName;
+			var index = IndexOfGenericParameter(definitionType.GenericParameters, memberTypeName);
+			if (index < 0)
+				return memberTypeName;
+			var args = ParseGenericArgs(constructedName);
+			return index < args.Count ? args[index] : memberTypeName;
+		}
+
+		string SubstituteGenericArgument(Mono.Cecil.TypeDefinition definitionType, string memberTypeName, string constructedName) {
+			if (memberTypeName is null || constructedName is null)
+				return memberTypeName;
+			var index = IndexOfGenericParameter(definitionType.GenericParameters, memberTypeName);
+			if (index < 0)
+				return memberTypeName;
+			var args = ParseGenericArgs(constructedName);
+			return index < args.Count ? args[index] : memberTypeName;
+		}
+
+		static int IndexOfGenericParameter(System.Collections.Generic.IList<GenericParam> parameters, string name) {
+			for (int i = 0; i < parameters.Count; i++) {
+				if (parameters[i].Name == name)
+					return i;
+			}
+			return -1;
+		}
+
+		static int IndexOfGenericParameter(System.Collections.Generic.IList<Mono.Cecil.GenericParameter> parameters, string name) {
+			for (int i = 0; i < parameters.Count; i++) {
+				if (parameters[i].Name == name)
+					return i;
+			}
+			return -1;
+		}
+
+		/// <summary>
+		/// Splits the arguments of a constructed type name: 'Lazy&lt;A, B&gt;',
+		/// 'System.Lazy`1&lt;A&gt;' and 'Lazy(Of A)' all yield [A].
+		/// </summary>
+		static System.Collections.Generic.List<string> ParseGenericArgs(string name) {
+			var result = new System.Collections.Generic.List<string>();
+			int start = -1, end = -1;
+			char open, close;
+			var angle = name.IndexOf('<');
+			if (angle >= 0) {
+				open = '<'; close = '>'; start = angle + 1;
+			} else {
+				var of = name.IndexOf("(Of ", StringComparison.Ordinal);
+				if (of >= 0) {
+					open = '('; close = ')'; start = of + 4;
+				} else {
+					return result;
+				}
+			}
+			int depth = 1;
+			int argStart = start;
+			for (int i = start; i < name.Length; i++) {
+				var c = name[i];
+				if (c == open)
+					depth++;
+				else if (c == close) {
+					if (--depth == 0) { end = i; break; }
+				}
+				if (c == ',' && depth == 1) {
+					result.Add(name.Substring(argStart, i - argStart).Trim());
+					argStart = i + 1;
+				}
+			}
+			if (end > argStart)
+				result.Add(name.Substring(argStart, end - argStart).Trim());
+			return result;
 		}
 
 		// Members are inherited: dnlib's IAssembly declares no 'Name' of its own, it comes from a

@@ -313,6 +313,9 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		/// <summary>
 		/// Clears the per-member state. Constructors and operators are member bodies too, so they
 		/// must reset it as well; otherwise names leak from the previously converted method.
+		/// Property, indexer and custom-event accessors are member bodies in the same sense: they
+		/// used to run with whatever state the last converted method had left, so the resolver's
+		/// field and parameter lookups failed and reference comparisons fell back to '=' (BC30452).
 		/// </summary>
 		void ResetMethodState(CS.AstNode declaration) {
 			variableTypes.Clear();
@@ -331,8 +334,25 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				reservedLocalNames.Add(outVar.Variable.Name);
 			foreach (var forEach in declaration.Descendants.OfType<CS.ForeachStatement>())
 				reservedLocalNames.Add(forEach.VariableName);
-			typeResolver.CurrentType = declaration.Annotation<MethodDef>()?.DeclaringType;
+			typeResolver.CurrentType = ResolveCurrentType(declaration);
 			CollectSuppressedEventAliases(declaration);
+		}
+
+		/// <summary>
+		/// Declaring type of the member about to be converted. Methods and constructors carry the
+		/// MethodDef annotation themselves; for properties, indexers and custom events it lives on
+		/// the accessors.
+		/// </summary>
+		TypeDef ResolveCurrentType(CS.AstNode declaration) {
+			var fromSelf = declaration.Annotation<MethodDef>()?.DeclaringType;
+			if (fromSelf != null)
+				return fromSelf;
+			foreach (var accessor in declaration.Descendants.OfType<CS.Accessor>()) {
+				var fromAccessor = accessor.Annotation<MethodDef>()?.DeclaringType;
+				if (fromAccessor != null)
+					return fromAccessor;
+			}
+			return null;
 		}
 
 		/// <summary>
@@ -2409,6 +2429,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 			members.Push(new MemberInfo());
 
+			// Accessor bodies are member bodies: clear stale locals and set CurrentType so
+			// resolver lookups inside them work.
+			ResetMethodState(customEventDeclaration);
+
 			ConvertNodes(customEventDeclaration.Attributes, result.Attributes);
 			if (IsOwnerAModule(customEventDeclaration))
 				customEventDeclaration.Modifiers &= ~CS.Modifiers.Static;
@@ -2457,13 +2481,20 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 			members.Push(new MemberInfo());
 
+			// Same as VisitPropertyDeclaration: reset per-member state and register the
+			// synthesized setter parameter before the accessor bodies are converted. The index
+			// parameters move up with them: the getter body may reference them.
+			ResetMethodState(indexerDeclaration);
+			if (!indexerDeclaration.Setter.IsNull)
+				variableTypes["value"] = indexerDeclaration.ReturnType.ToString();
+			ConvertNodes(indexerDeclaration.Parameters, decl.Parameters);
+
 			ConvertNodes(indexerDeclaration.Attributes.Where(section => section.AttributeTarget != "return"), decl.Attributes);
 			decl.Getter = (Accessor)indexerDeclaration.Getter.AcceptVisitor(this, data);
 			if (IsOwnerAModule(indexerDeclaration))
 				indexerDeclaration.Modifiers &= ~CS.Modifiers.Static;
 			decl.Modifiers = ConvertModifiers(indexerDeclaration.Modifiers, indexerDeclaration);
 			decl.Name = Identifier.Create(BoxedTextColor.InstanceProperty, indexerDeclaration.Name);
-			ConvertNodes(indexerDeclaration.Parameters, decl.Parameters);
 			ConvertNodes(indexerDeclaration.Attributes.Where(section => section.AttributeTarget == "return"), decl.ReturnTypeAttributes);
 			CreateImplementsClausesForProperty(indexerDeclaration, decl);
 			decl.ReturnType = (AstType)indexerDeclaration.ReturnType.AcceptVisitor(this, data);
@@ -3378,6 +3409,12 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			var decl = new PropertyDeclaration();
 
 			members.Push(new MemberInfo());
+
+			// The setter's "value" parameter is synthesized below, after the bodies are converted;
+			// register its type first so the bodies can resolve it.
+			ResetMethodState(propertyDeclaration);
+			if (!propertyDeclaration.Setter.IsNull)
+				variableTypes["value"] = propertyDeclaration.ReturnType.ToString();
 
 			if (IsOwnerAModule(propertyDeclaration))
 				propertyDeclaration.Modifiers &= ~CS.Modifiers.Static;

@@ -298,6 +298,28 @@ value = (dictionary([key]))                        ' 同一个实例
     十六进制回绕形式（`&H8000000000000000L`）也可行，但成员引用与数字格式化选项无冲突。
     注意 `9223372036854775808UL`（ULong 的 2^63）是**合法**的，不需要处理。
 
+31. **属性/索引器/自定义事件的访问器没有成员状态**（Batch 1 主根因，`BC30452` 92→37）。
+    `ResetMethodState`（清 `variableTypes`、设 `CurrentType`）只在 ctor/dtor/method/operator
+    调用——访问器体带着**上一个方法残留的状态**或全空状态运行；而 setter 的 `value` 参数又是
+    在访问器体转换完之后才手工合成的，`variableTypes` 里根本没有。于是
+    `fontFamilyVM_2 <> value` 这类访问器内的引用比较两侧都推不出类型，回落 `=`/`<>`。
+    修法：三个声明访问器开头也调 `ResetMethodState`（`CurrentType` 从访问器节点上的
+    `MethodDef` 注解解析），并在转换访问器体**之前**注册 `value` 的类型。索引器的索引参数
+    一并提前（getter 体可以引用索引参数）。
+
+32. **方法调用结果的类型推断**（Batch 1，resolver 扩展）。`GetTypeName` 原来不处理
+    `InvocationExpression`/`BaseReferenceExpression`/一元运算/`as`，`svc.Value.Create(...) == x`
+    的右侧永远未知。新增：方法返回类型查找（沿基类/接口 BFS），委托字段/局部调用解析为
+    `Invoke` 的返回类型，`MyBase` 解析到基类型；泛型定义成员的类型（`T`）按构造名的实参
+    **按位置替换**（`Lazy<T>.Value` → `T` 换成实参类型）。
+
+33. **C# 字符串 `==` 被发成 `Is`（预存语义缺陷，本轮发现即修）**。C# 的 `s1 == s2` 绑定
+    `String.op_Equality`（值语义），VB 对应运算符是 `=`；`Is` 是引用比较——对非驻留字符串
+    行为不同。旧逻辑只看「是引用类型」就发 `Is`，`If e.PropertyName Is "HasDecompiled"`
+    就是这么来的。修法：任一侧是已知字符串且另一侧不是已知 `object` 时否决引用比较
+    （`object == literal` 在 C# 里确实是引用语义，`Is` 保留）。字符串是引用类型所以从不
+    报错，这类缺陷语法/编译门禁都测不到，只有语义走查能发现。
+
 修复后的语法错误文件数：
 
 | 程序集 | 语言 | 语法错误文件 |

@@ -56,6 +56,21 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		int incrementTempCounter;
 		readonly Stack<string> namespaceStack = new Stack<string>();
 		readonly Dictionary<string, string> variableTypes = new Dictionary<string, string>(StringComparer.Ordinal);
+		// VB forbids a local that hides an enclosing one (BC30616) and a second declaration of
+		// the same name in one block (BC30288); C# allows both. Locals are therefore tracked
+		// per VB block, and a conflicting declaration is emitted under a fresh name.
+		readonly Dictionary<BlockStatement, Dictionary<string, string>> blockScopes =
+			new Dictionary<BlockStatement, Dictionary<string, string>>();
+		readonly Dictionary<CS.VariableInitializer, string> localDeclarationNames =
+			new Dictionary<CS.VariableInitializer, string>();
+		// VB makes a declaration visible in its whole block, independent of the textual order,
+		// so an outer "Dim i" written below an inner one still gets hidden by it. Conflicts are
+		// therefore decided against every local name already used in the method.
+		readonly HashSet<string> methodLocalNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		readonly HashSet<string> emittedLocalNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		// Every local name the method declares. ILSpy already disambiguates repeats by appending
+		// a digit (array, array2), so a generated name must not reuse any of them.
+		readonly HashSet<string> reservedLocalNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 		readonly Common.ExpressionTypeResolver typeResolver;
 
 		/// <summary>
@@ -273,6 +288,93 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					return true;
 			}
 			return true;
+		}
+
+		/// <summary>
+		/// Clears the per-member state. Constructors and operators are member bodies too, so they
+		/// must reset it as well; otherwise names leak from the previously converted method.
+		/// </summary>
+		void ResetMethodState(CS.AstNode declaration) {
+			variableTypes.Clear();
+			blockScopes.Clear();
+			localDeclarationNames.Clear();
+			methodLocalNames.Clear();
+			emittedLocalNames.Clear();
+			reservedLocalNames.Clear();
+			foreach (var variableDeclaration in declaration.Descendants.OfType<CS.VariableDeclarationStatement>()) {
+				foreach (var variable in variableDeclaration.Variables)
+					reservedLocalNames.Add(variable.Name);
+			}
+			foreach (var outVar in declaration.Descendants.OfType<CS.OutVarDeclarationExpression>())
+				reservedLocalNames.Add(outVar.Variable.Name);
+			foreach (var forEach in declaration.Descendants.OfType<CS.ForeachStatement>())
+				reservedLocalNames.Add(forEach.VariableName);
+			typeResolver.CurrentType = declaration.Annotation<MethodDef>()?.DeclaringType;
+		}
+
+		Dictionary<string, string> GetScope(BlockStatement block) {
+			if (!blockScopes.TryGetValue(block, out var scope))
+				blockScopes[block] = scope = new Dictionary<string, string>(StringComparer.Ordinal);
+			return scope;
+		}
+
+		/// <summary>Emitted name for a reference to a local, following the enclosing blocks.</summary>
+		string ResolveLocalName(string name) {
+			// The block stack is the scope chain: nodes are not attached to their parents until
+			// their children have been converted, so walking Parent would miss outer blocks.
+			foreach (var block in blocks) {
+				if (blockScopes.TryGetValue(block, out var scope) && scope.TryGetValue(name, out var mapped))
+					return mapped;
+			}
+			return name;
+		}
+
+		/// <summary>
+		/// Registers a local declaration and returns the name to emit, renaming it when the name
+		/// is already visible in this block or an enclosing one.
+		/// </summary>
+		string DeclareLocal(string name) {
+			if (blocks.Count == 0)
+				return name;
+			var block = blocks.Peek();
+			var scope = GetScope(block);
+			bool conflicts = methodLocalNames.Contains(name) || scope.ContainsKey(name);
+			if (!conflicts) {
+				foreach (var enclosing in blocks) {
+					if (enclosing == block)
+						continue;
+					if (blockScopes.TryGetValue(enclosing, out var outer) && outer.ContainsKey(name)) {
+						conflicts = true;
+						break;
+					}
+				}
+			}
+			methodLocalNames.Add(name);
+			// "_" is not a legal VB identifier and the output visitor rewrites it to "__",
+			// which then collides with a real local of that name. Give discards their own names.
+			if (name == "_")
+				conflicts = true;
+			var emitted = conflicts
+				? (name == "_" ? MakeUniqueLocalName("_discard", 1) : MakeUniqueLocalName(name, 2))
+				: name;
+			emittedLocalNames.Add(emitted);
+			scope[name] = emitted;
+			return emitted;
+		}
+
+		string MakeUniqueLocalName(string name, int start = 2) {
+			for (int suffix = start; ; suffix++) {
+				var candidate = name + suffix;
+				if (reservedLocalNames.Contains(candidate) || methodLocalNames.Contains(candidate))
+					continue;
+				if (emittedLocalNames.Contains(candidate))
+					continue;
+				if (variableTypes.ContainsKey(candidate))
+					continue;
+				if (ResolveLocalName(candidate) != candidate)
+					continue;
+				return candidate;
+			}
 		}
 
 		// VB has no ++/--. A standalone "x++;" becomes "x += 1". In an expression the value
@@ -575,7 +677,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		public AstNode VisitIdentifierExpression(CS.IdentifierExpression identifierExpression, object data)
 		{
 			var expr = new IdentifierExpression();
-			expr.Identifier = Identifier.Create(identifierExpression.IdentifierToken.Annotations, identifierExpression.Identifier);
+			expr.Identifier = Identifier.Create(identifierExpression.IdentifierToken.Annotations,
+				ResolveLocalName(identifierExpression.Identifier));
 			ConvertNodes(identifierExpression.TypeArguments, expr.TypeArguments);
 			if (provider.IsMethodGroup(identifierExpression)) {
 				return EndNode(identifierExpression, new UnaryOperatorExpression(UnaryOperatorType.AddressOf, expr));
@@ -1557,13 +1660,16 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		end:
 			convertedKind[forStatement] = ConvertedStatementKind.While;
+			// Visit the initializers first: they declare the loop variable, and VB needs the
+			// declaration to exist before the condition and body refer to it. Converting them
+			// afterwards also left the rename map empty while the body was being converted.
+			foreach (var initializer in forStatement.Initializers)
+				blocks.Peek().Statements.Add((Statement)initializer.AcceptVisitor(this, data));
 			var stmt = new WhileStatement() {
 				Condition = (Expression)forStatement.Condition.AcceptVisitor(this, data),
 				Body = (BlockStatement)forStatement.EmbeddedStatement.AcceptVisitor(this, data)
 			};
 			ConvertNodes(forStatement.Iterators, stmt.Body.Statements);
-			foreach (var initializer in forStatement.Initializers)
-				blocks.Peek().Statements.Add((Statement)initializer.AcceptVisitor(this, data));
 			convertedKind.Remove(forStatement);
 
 			return EndNode(forStatement, stmt);
@@ -1789,8 +1895,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitVariableDeclarationStatement(CS.VariableDeclarationStatement variableDeclarationStatement, object data)
 		{
-			foreach (var variable in variableDeclarationStatement.Variables)
+			foreach (var variable in variableDeclarationStatement.Variables) {
 				variableTypes[variable.Name] = variableDeclarationStatement.Type.ToString();
+				localDeclarationNames[variable] = DeclareLocal(variable.Name);
+			}
 			var decl = new LocalDeclarationStatement();
 			decl.Modifiers = Modifiers.Dim;
 			ConvertNodes(variableDeclarationStatement.Variables, decl.Variables);
@@ -1848,6 +1956,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitConstructorDeclaration(CS.ConstructorDeclaration constructorDeclaration, object data)
 		{
+			ResetMethodState(constructorDeclaration);
 			var result = new ConstructorDeclaration();
 
 			ConvertNodes(constructorDeclaration.Attributes, result.Attributes);
@@ -1881,6 +1990,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitDestructorDeclaration(CS.DestructorDeclaration destructorDeclaration, object data)
 		{
+			ResetMethodState(destructorDeclaration);
 			var finalizer = new MethodDeclaration() { Name = Identifier.Create(BoxedTextColor.InstanceMethod, "Finalize"), IsSub = true };
 
 			ConvertNodes(destructorDeclaration.Attributes, finalizer.Attributes);
@@ -2023,8 +2133,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		{
 			CS.Attribute attr;
 
-			variableTypes.Clear();
-			typeResolver.CurrentType = methodDeclaration.Annotation<MethodDef>()?.DeclaringType;
+			ResetMethodState(methodDeclaration);
 
 			if (IsOwnerAModule(methodDeclaration))
 				methodDeclaration.Modifiers &= ~CS.Modifiers.Static;
@@ -2490,6 +2599,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitOperatorDeclaration(CS.OperatorDeclaration operatorDeclaration, object data)
 		{
+			ResetMethodState(operatorDeclaration);
 			MemberDeclaration result;
 			members.Push(new MemberInfo());
 
@@ -2702,7 +2812,11 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			decl.Type = (AstType)variableInitializer.Parent
 				.GetChildByRole(CS.Roles.Type)
 				.AcceptVisitor(this, data);
-			decl.Identifiers.Add(new VariableIdentifier() { Name = Identifier.Create(variableInitializer.NameToken.Annotations, variableInitializer.Name) });
+			// Fields go through this visitor too; only locals have a recorded emitted name.
+			var emittedName = localDeclarationNames.TryGetValue(variableInitializer, out var mappedName)
+				? mappedName
+				: variableInitializer.Name;
+			decl.Identifiers.Add(new VariableIdentifier() { Name = Identifier.Create(variableInitializer.NameToken.Annotations, emittedName) });
 			decl.Initializer = (Expression)variableInitializer.Initializer.AcceptVisitor(this, data);
 
 			return EndNode(variableInitializer, decl);
@@ -3217,7 +3331,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			// ILSpy 3.2 writes the inferred type explicitly (not "var"), so no type inference
 			// is needed here. The declaration is added to the enclosing block while that block
 			// has not yet received the statement being converted, which keeps the right order.
-			string name = outVarDeclarationExpression.Variable.Name;
+			// DeclareLocal keeps the name valid in VB: it avoids hiding an enclosing local and
+			// gives a discard ("_") a usable unique name.
+			string name = DeclareLocal(outVarDeclarationExpression.Variable.Name);
+			variableTypes[name] = outVarDeclarationExpression.Type.ToString();
 			var decl = new LocalDeclarationStatement();
 			decl.Modifiers = Modifiers.Dim;
 			var variable = new VariableDeclaratorWithTypeAndInitializer();

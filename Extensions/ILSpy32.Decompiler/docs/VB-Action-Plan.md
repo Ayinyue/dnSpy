@@ -1,6 +1,7 @@
 # VB 语义正确性任务行动纲要（供新模型接手）
 
-> 本文件是交接用的**唯一行动依据**。配套阅读：`baseline/README.md`（29 条已修经验 + 度量口径）。
+> 本文件是交接用的**唯一行动依据**。配套阅读：`VB-Dev-Plan.md`（可勾选的开发计划）与
+> `baseline/README.md`（29 条已修经验 + 度量口径）。
 > 更新日期：2026-11-03。基线提交：`b13f42a34`。
 
 ## 1. 目标（不变）
@@ -85,6 +86,8 @@ $EXE compile --dir out/v32-vb-dnspy --lang vb --refs "$BIN;$WPF" --whole --id BC
 | `baseline/Program.cs` | 度量工具（dump/validate/compile；噪声判据在这里）|
 
 ## 6. 下一步候选（按优先级）
+
+> 本节是**候选池**；可勾选的执行版在 `VB-Dev-Plan.md`（批次、任务、验收标准）。
 
 ### P1 `BC30452`（92）：引用比较漏判
 - 现象：`IDocumentTab = TabContentImpl`，两侧类型都推不出 → 退化成 `=`。

@@ -2922,6 +2922,18 @@ namespace ICSharpCode.NRefactory.VB {
 			return EndNode(usingStatement);
 		}
 		
+		public object VisitRaiseEventStatement(RaiseEventStatement raiseEventStatement, object data)
+		{
+			StartNode(raiseEventStatement);
+
+			WriteKeyword("RaiseEvent");
+			Space();
+			raiseEventStatement.Event.AcceptVisitor(this, data);
+			WriteCommaSeparatedListInParenthesis(raiseEventStatement.Arguments, false, CodeBracesRangeFlags.Parentheses);
+
+			return EndNode(raiseEventStatement);
+		}
+
 		public object VisitCallStatement(CallStatement callStatement, object data)
 		{
 			StartNode(callStatement);

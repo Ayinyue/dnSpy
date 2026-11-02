@@ -157,6 +157,16 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 				if (eventDef != null)
 					eventDeclaration.AddAnnotation(eventDef);
 			}
+
+			// Field-like events ("public event EventHandler Changed;") are EventDeclaration nodes,
+			// and the Implements clause for them needs the EventDef just as much.
+			foreach (var eventDeclaration in declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.EventDeclaration>()) {
+				foreach (var variable in eventDeclaration.Variables) {
+					var eventDef = MatchEvent(typeDef, variable.Name);
+					if (eventDef != null)
+						eventDeclaration.AddAnnotation(eventDef);
+				}
+			}
 		}
 
 		static PropertyDef MatchProperty(TypeDef typeDef, string name, int parameterCount) {

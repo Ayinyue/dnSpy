@@ -75,6 +75,12 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		// Every local name the method declares. ILSpy already disambiguates repeats by appending
 		// a digit (array, array2), so a generated name must not reuse any of them.
 		readonly HashSet<string> reservedLocalNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		// C# raises events through a copy: "var handler = Changed; if (handler != null) handler(...)".
+		// The copy's name maps back to the event so the call becomes RaiseEvent.
+		readonly Dictionary<string, string> eventAliases = new Dictionary<string, string>(StringComparer.Ordinal);
+		// Copies that only exist to null-check the event before raising it. RaiseEvent performs
+		// that check itself, and VB cannot read an event, so both the copy and the guard go away.
+		readonly HashSet<string> suppressedEventAliases = new HashSet<string>(StringComparer.Ordinal);
 		readonly Common.ExpressionTypeResolver typeResolver;
 
 		/// <summary>
@@ -305,6 +311,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			methodLocalNames.Clear();
 			emittedLocalNames.Clear();
 			reservedLocalNames.Clear();
+			eventAliases.Clear();
+			suppressedEventAliases.Clear();
 			foreach (var variableDeclaration in declaration.Descendants.OfType<CS.VariableDeclarationStatement>()) {
 				foreach (var variable in variableDeclaration.Variables)
 					reservedLocalNames.Add(variable.Name);
@@ -314,6 +322,31 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			foreach (var forEach in declaration.Descendants.OfType<CS.ForeachStatement>())
 				reservedLocalNames.Add(forEach.VariableName);
 			typeResolver.CurrentType = declaration.Annotation<MethodDef>()?.DeclaringType;
+			CollectSuppressedEventAliases(declaration);
+		}
+
+		/// <summary>
+		/// Marks an event copy as removable when it is used exactly twice: in the null check and
+		/// as the target of the invocation inside that guard's body.
+		/// </summary>
+		void CollectSuppressedEventAliases(CS.AstNode declaration) {
+			foreach (var variableDeclaration in declaration.Descendants.OfType<CS.VariableDeclarationStatement>()) {
+				if (variableDeclaration.Variables.Count != 1)
+					continue;
+				var variable = variableDeclaration.Variables.First();
+				if (GetEventName(variable.Initializer) == null)
+					continue;
+				var uses = declaration.Descendants.OfType<CS.IdentifierExpression>()
+					.Where(u => u.Identifier == variable.Name).ToList();
+				if (uses.Count != 2)
+					continue;
+				bool nullCheck = uses.Any(u => u.Parent is CS.BinaryOperatorExpression comparison &&
+					(comparison.Operator == CS.BinaryOperatorType.InEquality || comparison.Operator == CS.BinaryOperatorType.Equality) &&
+					(comparison.Right is CS.NullReferenceExpression || comparison.Left is CS.NullReferenceExpression));
+				bool call = uses.Any(u => u.Parent is CS.InvocationExpression invocation && invocation.Target == u);
+				if (nullCheck && call)
+					suppressedEventAliases.Add(variable.Name);
+			}
 		}
 
 		Dictionary<string, string> GetScope(BlockStatement block) {
@@ -1153,7 +1186,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			// NullableAttribute / NullableContextAttribute are C# compiler metadata for nullable
 			// reference types. VB cannot apply them (BC30662) and does not need them.
 			var attributes = attributeSection.Attributes
-				.Where(a => !IsNullableMetadataAttribute(a)).ToList();
+				.Where(a => !IsIgnoredCompilerAttribute(a)).ToList();
 			if (attributes.Count == 0)
 				return null;
 
@@ -1165,9 +1198,12 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			return EndNode(attributeSection, block);
 		}
 
-		static bool IsNullableMetadataAttribute(CS.Attribute attribute) {
+		static bool IsIgnoredCompilerAttribute(CS.Attribute attribute) {
 			var name = NormalizeAttributeName(attribute.Type?.ToString());
-			return name == "Nullable" || name == "NullableContext";
+			// Nullable*/NullableContext describe C# nullable annotations; TupleElementNames
+			// describes tuple element names, which VB cannot apply explicitly (BC37269).
+			// Neither carries meaning for VB, so both are dropped.
+			return name == "Nullable" || name == "NullableContext" || name == "TupleElementNames";
 		}
 
 		public AstNode VisitDelegateDeclaration(CS.DelegateDeclaration delegateDeclaration, object data)
@@ -1443,6 +1479,18 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitExpressionStatement(CS.ExpressionStatement expressionStatement, object data)
 		{
+			// C# raises an event by invoking it like a delegate; VB needs a RaiseEvent statement
+			// (BC32022). Checked before the expression is converted so nothing is converted twice.
+			var raisedEvent = expressionStatement.Expression is CS.InvocationExpression inv ? GetRaisedEventName(inv) : null;
+			if (raisedEvent != null) {
+				var eventInvocation = (CS.InvocationExpression)expressionStatement.Expression;
+				var raise = new RaiseEventStatement();
+				raise.Event = MakeIdentifierExpression(ResolveLocalName(raisedEvent));
+				foreach (var argument in eventInvocation.Arguments)
+					raise.Arguments.Add((Expression)argument.AcceptVisitor(this, data));
+				return EndNode(expressionStatement, raise);
+			}
+
 			var node = expressionStatement.Expression.AcceptVisitor(this, data);
 			if (node is Expression) {
 				// VB rejects a statement that begins with New. A call chain can use "Call":
@@ -1457,6 +1505,37 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					node = new ExpressionStatement((Expression)node);
 			}
 			return EndNode(expressionStatement, node);
+		}
+
+		/// <summary>Name of the event the invocation raises, or null.</summary>
+		string GetRaisedEventName(CS.InvocationExpression invocation) {
+			if (!(invocation.Target is CS.IdentifierExpression identifier))
+				return null;
+			if (eventAliases.TryGetValue(identifier.Identifier, out var aliased))
+				return aliased;
+			return IsEventName(identifier.Identifier) ? identifier.Identifier : null;
+		}
+
+		/// <summary>Name of the event the expression evaluates to, or null.</summary>
+		string GetEventName(CS.Expression expression) {
+			switch (expression) {
+			case CS.IdentifierExpression identifier:
+				return IsEventName(identifier.Identifier) ? identifier.Identifier : null;
+			case CS.MemberReferenceExpression member when member.Target is CS.ThisReferenceExpression:
+				return IsEventName(member.MemberName) ? member.MemberName : null;
+			default:
+				return null;
+			}
+		}
+
+		bool IsEventName(string name) {
+			for (var current = typeResolver.CurrentType; current != null; current = current.BaseType?.Resolve()) {
+				foreach (var ev in current.Events) {
+					if (ev.Name == name)
+						return true;
+				}
+			}
+			return false;
 		}
 
 		LocalDeclarationStatement CreateDiscardedObjectDeclaration(ObjectCreationExpression created) {
@@ -1739,6 +1818,18 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitIfElseStatement(CS.IfElseStatement ifElseStatement, object data)
 		{
+			// "If h IsNot Nothing Then RaiseEvent ..." where h is a suppressed copy: RaiseEvent
+			// already skips the call when there are no subscribers.
+			if (ifElseStatement.FalseStatement.IsNull && ifElseStatement.TrueStatement is CS.BlockStatement guardBody &&
+					guardBody.Statements.Count == 1 && ifElseStatement.Condition is CS.BinaryOperatorExpression guardCondition &&
+					guardCondition.Operator == CS.BinaryOperatorType.InEquality &&
+					guardCondition.Left is CS.IdentifierExpression guardedIdentifier &&
+					guardCondition.Right is CS.NullReferenceExpression &&
+					suppressedEventAliases.Contains(guardedIdentifier.Identifier)) {
+				if (guardBody.Statements.First().AcceptVisitor(this, data) is Statement guardedStatement)
+					return EndNode(ifElseStatement, guardedStatement);
+			}
+
 			var stmt = new IfElseStatement();
 
 			stmt.Condition = (Expression)ifElseStatement.Condition.AcceptVisitor(this, data);
@@ -1906,10 +1997,19 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitVariableDeclarationStatement(CS.VariableDeclarationStatement variableDeclarationStatement, object data)
 		{
+			bool allSuppressed = variableDeclarationStatement.Variables.Count > 0;
 			foreach (var variable in variableDeclarationStatement.Variables) {
+				var eventName = GetEventName(variable.Initializer);
+				if (eventName != null)
+					eventAliases[variable.Name] = eventName;
+				if (!suppressedEventAliases.Contains(variable.Name))
+					allSuppressed = false;
 				variableTypes[variable.Name] = variableDeclarationStatement.Type.ToString();
 				localDeclarationNames[variable] = DeclareLocal(variable.Name);
 			}
+			// The copy exists only for the null check that RaiseEvent makes redundant.
+			if (allSuppressed)
+				return null;
 			var decl = new LocalDeclarationStatement();
 			decl.Modifiers = Modifiers.Dim;
 			ConvertNodes(variableDeclarationStatement.Variables, decl.Variables);
@@ -2443,7 +2543,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					continue;
 				}
 				foreach (var ifaceMethod in iface.Methods) {
-					if (ifaceMethod.Name != method.Name)
+					if (ifaceMethod.Name != method.Name && !method.Name.EndsWith("." + ifaceMethod.Name, StringComparison.Ordinal))
 						continue;
 					var ifaceMethodSig = GetMethodBaseSig(ii.Interface, ifaceMethod.MethodSig);
 					if (!comparer.Equals(ifaceMethodSig, method.MethodSig))
@@ -2455,7 +2555,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			}
 		}
 
-		static IEnumerable<ImplementsResult> GetProperties(PropertyDef prop) {
+		IEnumerable<ImplementsResult> GetProperties(PropertyDef prop) {
 			List<ImplementsResult> overrides = null;
 			var pm = prop.GetMethod ?? prop.SetMethod;
 			if (pm != null) {
@@ -2478,10 +2578,27 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			var comparer = new SigComparer(0, prop.Module);
 			foreach (var ii in prop.DeclaringType.Interfaces) {
 				var iface = ii.Interface.Resolve();
-				if (iface == null)
+				if (iface == null) {
+					// See GetEvents: cecil resolves the interface when dnlib cannot, which keeps
+					// the Implements clause for properties declared in referenced assemblies.
+					var cecilType = DnlibCecilBridge.TryGetTypeReference(module, ii.Interface)?.Resolve();
+					if (cecilType != null) {
+						foreach (var ifaceProp in cecilType.Properties) {
+							if (ifaceProp.Name != prop.Name && !prop.Name.EndsWith("." + ifaceProp.Name, StringComparison.Ordinal))
+								continue;
+							if (ifaceProp.Parameters.Count != prop.PropertySig.Params.Count)
+								continue;
+							if (ifaceProp.PropertyType?.FullName != prop.PropertySig.RetType?.FullName)
+								continue;
+							if (IsSameType(overrides, ii.Interface, ifaceProp.Name))
+								continue;
+							yield return new ImplementsResult(ii.Interface, ifaceProp.Name, ifaceProp);
+						}
+					}
 					continue;
+				}
 				foreach (var ifaceProp in iface.Properties) {
-					if (ifaceProp.Name != prop.Name)
+					if (ifaceProp.Name != prop.Name && !prop.Name.EndsWith("." + ifaceProp.Name, StringComparison.Ordinal))
 						continue;
 					var ifaceMethodSig = GetMethodBaseSig(ii.Interface, ifaceProp.PropertySig);
 					// mcs doesn't set HasThis if it's an instance property
@@ -2526,7 +2643,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			return null;
 		}
 
-		static IEnumerable<ImplementsResult> GetEvents(EventDef evt) {
+		IEnumerable<ImplementsResult> GetEvents(EventDef evt) {
 			List<ImplementsResult> overrides = null;
 			var em = evt.AddMethod ?? evt.RemoveMethod ?? evt.InvokeMethod;
 			if (em != null) {
@@ -2549,10 +2666,25 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			var comparer = new SigComparer(0, evt.Module);
 			foreach (var ii in evt.DeclaringType.Interfaces) {
 				var iface = ii.Interface.Resolve();
-				if (iface == null)
+				if (iface == null) {
+					// dnlib cannot resolve the interface here; cecil can, and the event is matched
+					// by name and type so the Implements clause is still emitted (BC30149).
+					var cecilType = DnlibCecilBridge.TryGetTypeReference(module, ii.Interface)?.Resolve();
+					if (cecilType != null) {
+						foreach (var ifaceEvent in cecilType.Events) {
+							if (ifaceEvent.Name != evt.Name && !evt.Name.EndsWith("." + ifaceEvent.Name, StringComparison.Ordinal))
+								continue;
+							if (ifaceEvent.EventType?.FullName != evt.EventType?.FullName)
+								continue;
+							if (IsSameType(overrides, ii.Interface, ifaceEvent.Name))
+								continue;
+							yield return new ImplementsResult(ii.Interface, ifaceEvent.Name, ifaceEvent);
+						}
+					}
 					continue;
+				}
 				foreach (var ifaceEvent in iface.Events) {
-					if (ifaceEvent.Name != evt.Name)
+					if (ifaceEvent.Name != evt.Name && !evt.Name.EndsWith("." + ifaceEvent.Name, StringComparison.Ordinal))
 						continue;
 					var eventType = GetReplacedType(ii.Interface, ifaceEvent.EventType);
 					if (!comparer.Equals(eventType, evt.EventType))

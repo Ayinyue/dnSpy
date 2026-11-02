@@ -356,22 +356,30 @@ Contracts.Logic（84 个 public 类型）的首次结果：**54 个文件编译�
 | 泛型类型的注解绑定（整类静默失效）| — | 已修，见第 25 条 |
 | `BC32022` 事件当委托调用（dnSpy.dll）| 379 | **266** |
 | `BC31132` 自定义事件缺 `RaiseEvent` | 92 | **81**（余下是真正带逻辑的自定义事件）|
-| `BC30149` 接口实现缺 `Optional` | 255 | **237** |
-| `BC30401` 同上（另一条诊断）| 108 | **97** |
+| `BC30149` 接口实现缺 `Optional` | 255 | **156** |
+| `BC30401` 同上/签名不符 | 108 | **109**（子句都发出来了，反而多暴露 12 处真不符）|
+| `BC30002` 带元组实参的接口子句 | 675 | **669** |
 
 Contracts.Logic 的真实失败文件 54 → **10**；AsmEditor 906 → 896 → 825 → 583 → 565 → **565**；
-dnSpy.dll（3266 类型）2039 → 1408 → 1120 → 1096 → **1088**。
+dnSpy.dll（3266 类型）2039 → 1408 → 1120 → 1096 → 1088 → **1068**。
 
-### 一次回退：带元组实参的接口（`IEqualityComparer(Of (Code, String, CpuidFeature()))`）
+### 带元组实参的接口（`IEqualityComparer(Of (Code, String, CpuidFeature()))`）
 
-`DnlibCecilBridge` 无法把这种 TypeSpec 转成 cecil，于是 `MatchViaCecil` 什么也拿不到，
-成员子句整条消失（`BC30149`）。试过按「泛型类型定义」兜底 + 用元数据限定元组元素类型：
-单类型确实修好了（`MnemonicComparer` 43 → 35 个诊断），但全局 **BC30002 从 675 涨到 750**——
-`CreateType` 的兜底分支会把原始元数据名（``IEqualityComparer`1<...>``）当类型名输出。
-加上 75 个文件的代价大于收益，已回退。
+`DnlibCecilBridge` 无法把这种 TypeSpec 转成 cecil，`MatchViaCecil` 什么也拿不到，成员子句整条
+消失（`BC30149`）。第一次尝试按「泛型定义兜底 + 用元数据补限定元组元素」时，单类型是修好了
+（`MnemonicComparer` 43 → 35），但全局 `BC30002` 从 675 涨到 750——根因是 `CreateType` 的兜底
+分支会把原始元数据名（``IEqualityComparer`1<...>``）当类型名输出。那次已回退。
 
-要做对，得给「元组作为泛型实参」单独构造 VB 类型节点（`Of(Global.A, Global.B)`），
-而不是指望 `CSharpDecompiler.ConvertType` 的默认设置（它开着元组语法，且给的元素类型是短名）。
+真正的修法是**不再借道 cecil 生成子句类型**：`CreateTypeFromSig` 直接walk dnlib 的 `TypeSig`
+（`GenericInstSig` / `ArraySigBase` / `GenericSig` / `TypeDefOrRefSig`），按元数据拼
+`Global.<ns>.<name>`（每段剥掉 arity）并递归处理实参。于是
+
+```vb
+Implements Global.System.Collections.Generic.IEqualityComparer(Of Global.System.ValueTuple(Of Global.Iced.Intel.Code, Global.System.String, Global.Iced.Intel.CpuidFeature()))
+```
+
+元组实参用 `ValueTuple(Of ...)` 而不是 `(A, B)` 语法——和本文件里其它签名一致，也不依赖
+`Imports`。配合「按泛型定义匹配接口成员」（`ResolveInterfaceDefinition`），这一类子句就齐了。
 
 ### 度量口径：Count 是文件数，Noise 列是全为噪声的文件数
 

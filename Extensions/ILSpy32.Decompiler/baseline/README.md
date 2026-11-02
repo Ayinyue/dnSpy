@@ -218,6 +218,15 @@ value = (dictionary([key]))                        ' 同一个实例
     静态构造函数与方法一样要先剔除 `Static`；`TupleElementNames` 与 `Nullable*` 同属
     C# 编译器元数据，VB 无法显式应用。
 
+13. **`Char` 与数值互转**（`BC32006` / `BC32007`）。VB 的 `CType` 没有这种转换：
+    `CChar(n)` 非法、`Dim n As UShort = c` 也非法，必须 `ChrW` / `AscW`。
+    为此补全了类型推断的三个分支：二元运算（`char` 提升为 `int`）、`If(c, a, b)`、
+    以及**括号表达式**——`(char)(val + 48)` 的操作数被包在 `ParenthesizedExpression` 里，
+    不解包就永远判不出源类型。
+14. **`as` 用在值类型上**（`BC30792`）。`TryCast` 只接受引用类型，`Boolean?` 走 `DirectCast`
+    （即 CLR 的拆箱）。注意与 `as` 的差别：类型不符时 `DirectCast` 抛异常而非返回 `Nothing`。
+15. **抽象事件**（`BC30243`）。VB 没有抽象事件，去掉 `MustOverride`，退化为字段式事件。
+
 修复后的语法错误文件数：
 
 | 程序集 | 语言 | 语法错误文件 |
@@ -238,7 +247,9 @@ value = (dictionary([key]))                        ' 同一个实例
 
 `compile` 用 `--refs` 目录里的程序集 + 运行时程序集做真正的语义编译。
 **注意**：反编译出的类型与它引用的内部成员不在同一程序集，可访问性错误属于
-测量假阳性，报告里单列为 noise（`CS0122` / `BC30390` 等）。
+测量假阳性，报告里单列为 noise（`CS0122` / `BC30390` 等）。同一文件里通过**类型限定**
+访问内部成员（`MethodRefComparer.CompareNoName`）也属此类：类型来自"被 dump 的那个程序集"，
+其中没有 internal 成员——用 `--whole` 全量编译可验证这些错误会消失。
 
 Contracts.Logic（84 个 public 类型）的首次结果：**54 个文件编译失败**，真实问题包括：
 
@@ -269,8 +280,11 @@ Contracts.Logic（84 个 public 类型）的首次结果：**54 个文件编译�
 | `BC32022` 事件当委托调用（AsmEditor）| 36 | **0** |
 | `BC30433` Module 构造函数 `Shared` | 4 | **0** |
 | `BC37269` TupleElementNames | 2 | **0** |
+| `BC32006/BC32007` Char 与数值互转 | 10 | **0** |
+| `BC30792` `as` 用于值类型 | 2 | **0** |
+| `BC30243` 抽象事件 | 1 | **0** |
 
-Contracts.Logic 的真实失败文件 54 → **15**；AsmEditor 因缺 WPF 引用等外部因素，
+Contracts.Logic 的真实失败文件 54 → **10**；AsmEditor 因缺 WPF 引用等外部因素，
 真实失败文件 906 → **896**（BC30389/BC30002 等引用缺失为主，已单列噪声）。
 
 这些都是「语义正确性」层面的后续工作，不影响「能否产出代码」。

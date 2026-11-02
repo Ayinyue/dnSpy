@@ -293,6 +293,24 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 							break;
 					}
 				}
+				// Member types sometimes come back with a short name ("MethodDef"), which no
+				// full-name lookup can match; fall back to the simple name.
+				if (result is null && name.IndexOf('.') < 0) {
+					foreach (var assemblyRef in cecilModule.AssemblyReferences) {
+						var referenced = ResolveAssembly(assemblyRef);
+						var module = referenced?.MainModule;
+						if (module is null)
+							continue;
+						foreach (var type in module.GetTypes()) {
+							if (type.Name == name) {
+								result = type;
+								break;
+							}
+						}
+						if (result != null)
+							break;
+					}
+				}
 			}
 			externalTypes[name] = result;
 			return result;

@@ -157,6 +157,8 @@ Batch 1~5 = 里程碑 M2（质量对齐）；M3/M4 见「里程碑任务」节
 
 ### M3 切换默认反编译器（先勘察，再动手）
 
+> 详细实施方案（接线事实、A/B/C 方案对比、兼容与回滚）见 `Migration-3.2-Plan.md`。
+
 - [ ] 勘察 `dnSpy/dnSpy/Decompiler/DecompilerService.cs`：3.2 后端的注册方式、`OrderUI` 相对 2.3 的值
 - [ ] 确认 `DecompilerServiceSettings.LanguageGuid` 的持久化行为：老用户设置仍指向 2.3 时的回退路径
 - [ ] 方案评审（至少两案：默认直接切 3.2 / 保持用户可选仅调 `OrderUI`），确认后实施

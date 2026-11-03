@@ -213,10 +213,10 @@ Batch 1~5 = 里程碑 M2（质量对齐）；M3/M4 见「里程碑任务」节
 
 > 详细实施方案（接线事实、A/B/C 方案对比、兼容与回滚）见 `Migration-3.2-Plan.md`。
 
-- [ ] 勘察 `dnSpy/dnSpy/Decompiler/DecompilerService.cs`：3.2 后端的注册方式、`OrderUI` 相对 2.3 的值
-- [ ] 确认 `DecompilerServiceSettings.LanguageGuid` 的持久化行为：老用户设置仍指向 2.3 时的回退路径
-- [ ] 方案评审（至少两案：默认直接切 3.2 / 保持用户可选仅调 `OrderUI`），确认后实施
-- [ ] 全功能走查：代码窗口、导出工程、书签格式化、工具提示、`DummyDecompiler` 兜底路径
+- [x] 勘察 `dnSpy/dnSpy/Decompiler/DecompilerService.cs`：3.2 后端经 MEF 注册、`OrderUI` 排在 2.3 之后；两代 GUID 常量已核对（见 Migration-3.2-Plan M3 勘察节）
+- [x] 确认 `DecompilerServiceSettings.LanguageGuid` 持久化行为：保存值恒为 UniqueGuid；老设置指向 2.3 UniqueGuid 时精确命中 2.3——迁移落点在 `DecompilerServiceSettingsImpl` 构造器
+- [x] 方案 B 实施完成（2026-11-04，用户确认后）：一次性迁移 + `LanguageGuidMigratedTo32` 标记位 + 新装默认值切 3.2 C#；构建 0 错误，独立 commit
+- [ ] 全功能走查：代码窗口、导出工程、书签格式化、工具提示、`DummyDecompiler` 兜底路径（手动，待执行）
 - [ ] 如发现 3.2 输出阻塞切换的缺陷，回到对应 Batch 修复后重走本清单
 
 ### M4 下线 2.3

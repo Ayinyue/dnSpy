@@ -30,6 +30,13 @@ namespace dnSpy.Decompiler {
 	}
 
 	class DecompilerServiceSettings : ViewModelBase, IDecompilerServiceSettings {
+		// The 3.2 engine's language GUIDs. The extension assemblies register them through MEF and
+		// the main program has no assembly reference, so the values are spelled out here; they
+		// come from Extensions/ILSpy32.Decompiler/dnSpy.Decompiler.ILSpy32/
+		// {CSharp/CSharpDecompiler32.cs, VisualBasic/VBDecompiler32.cs}.
+		internal static readonly Guid LANGUAGE_CSHARP_ILSPY32 = new Guid("8C1F4A62-9D3B-4E77-8A51-2F6B0C9D4E13");
+		internal static readonly Guid LANGUAGE_VISUALBASIC_ILSPY32 = new Guid("9C5E4C7A-1F2B-4E6D-9A30-8B7D2E5F6A41");
+
 		public Guid LanguageGuid {
 			get => languageGuid;
 			set {
@@ -39,7 +46,20 @@ namespace dnSpy.Decompiler {
 				}
 			}
 		}
-		Guid languageGuid = DecompilerConstants.LANGUAGE_CSHARP;
+		// Fresh installs get the 3.2 decompiler (M3). A saved setting always overrides this:
+		// the UI stores UniqueGuids, so the generic LANGUAGE_CSHARP never reaches the file.
+		Guid languageGuid = LANGUAGE_CSHARP_ILSPY32;
+
+		public bool LanguageGuidMigratedTo32 {
+			get => languageGuidMigratedTo32;
+			set {
+				if (languageGuidMigratedTo32 != value) {
+					languageGuidMigratedTo32 = value;
+					OnPropertyChanged(nameof(LanguageGuidMigratedTo32));
+				}
+			}
+		}
+		bool languageGuidMigratedTo32;
 	}
 
 	[Export, Export(typeof(IDecompilerServiceSettings))]
@@ -54,12 +74,31 @@ namespace dnSpy.Decompiler {
 
 			var sect = settingsService.GetOrCreateSection(SETTINGS_GUID);
 			LanguageGuid = sect.Attribute<Guid?>(nameof(LanguageGuid)) ?? LanguageGuid;
+			LanguageGuidMigratedTo32 = sect.Attribute<bool?>(nameof(LanguageGuidMigratedTo32)) ?? false;
 			PropertyChanged += DecompilerServiceSettingsImpl_PropertyChanged;
+			if (!LanguageGuidMigratedTo32) {
+				// One-time migration (M3, docs/Migration-3.2-Plan.md, scheme B): point a saved 2.3
+				// language at its 3.2 counterpart. The 2.3 registrations stay until M4, so a user
+				// who deliberately switches back keeps that choice — the flag stops the rewrite.
+				var migratedGuid = MigrateTo32(LanguageGuid);
+				if (migratedGuid != LanguageGuid)
+					LanguageGuid = migratedGuid;
+				LanguageGuidMigratedTo32 = true;
+			}
+		}
+
+		internal static Guid MigrateTo32(Guid guid) {
+			if (guid == DecompilerConstants.LANGUAGE_VISUALBASIC_ILSPY)
+				return LANGUAGE_VISUALBASIC_ILSPY32;
+			if (guid == DecompilerConstants.LANGUAGE_CSHARP_ILSPY)
+				return LANGUAGE_CSHARP_ILSPY32;
+			return guid;
 		}
 
 		void DecompilerServiceSettingsImpl_PropertyChanged(object? sender, PropertyChangedEventArgs e) {
 			var sect = settingsService.RecreateSection(SETTINGS_GUID);
 			sect.Attribute(nameof(LanguageGuid), LanguageGuid);
+			sect.Attribute(nameof(LanguageGuidMigratedTo32), LanguageGuidMigratedTo32);
 		}
 	}
 }

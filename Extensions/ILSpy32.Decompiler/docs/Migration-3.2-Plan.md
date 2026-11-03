@@ -1,6 +1,6 @@
 # 2.3 → 3.2 反编译后端迁移方案记录
 
-> 状态：🟡 方案待评审（未实施）。前置阅读：`VB-Dev-Plan.md`（里程碑 M2/M3/M4 的定义）。
+> 状态：🟢 M3 已实施（2026-11-04，待手动全功能走查确认后进入 M4）。前置阅读：`VB-Dev-Plan.md`（里程碑 M2/M3/M4 的定义）。
 > 本文是 M3「切换默认」与 M4「下线 2.3」的**实施方案记录**，勘察日期 2026-11-03。
 
 ## 1. 现状：两代引擎如何并存
@@ -63,11 +63,17 @@ DecompilerService(ctor)
 - [ ] 切换决策点：realBadFiles 稳定低于 2.3 基线 2039，且连续两轮全量回归无回退
 
 ### M3 切换默认
-- [ ] **勘察补全**：核对 `DecompilerConstants` 里 `LANGUAGE_VISUALBASIC_ILSPY` / C# 侧各常量的确切 GUID 值
-- [ ] 实现 `LanguageGuid` 一次性迁移（含迁移标记，见方案 B）
-- [ ] C# 侧同样迁移 `LANGUAGE_CSHARP_ILSPY` → 3.2 C# 的 UniqueGuid
-- [ ] 单独 commit；构建 0 错误
-- [ ] **全功能走查**（手动）：
+- [x] **勘察补全**（2026-11-04 核对，`dnSpy/dnSpy.Contracts.Logic/Decompiler/DecompilerConstants.cs`）：
+  2.3 VB `BBA40092-76B2-4184-8E81-0F1E3ED14E72`、2.3 C# `4162DADA-67C3-4DE4-A5F3-6552C8353ECE`、
+  3.2 VB `9C5E4C7A-1F2B-4E6D-9A30-8B7D2E5F6A41`、3.2 C# `8C1F4A62-9D3B-4E77-8A51-2F6B0C9D4E13`；
+  UI 写回恒为 UniqueGuid（`DecompilerService.cs:55`），新装用户无保存值、落字段默认
+  `LANGUAGE_CSHARP`（Generic，按 OrderUI 命中 2.3）
+- [x] 实现 `LanguageGuid` 一次性迁移（含迁移标记 `LanguageGuidMigratedTo32`，见方案 B；
+  落点 `dnSpy/dnSpy/Decompiler/DecompilerServiceSettings.cs`——主程序无扩展程序集引用，
+  3.2 GUID 以字面量书写并注明来源；**新装默认值一并切到 3.2 C#**）
+- [x] C# 侧同样迁移 `LANGUAGE_CSHARP_ILSPY` → 3.2 C# 的 UniqueGuid（同一映射函数）
+- [x] 单独 commit；构建 0 错误（2 个警告为上游 MessagePack 包既有漏洞通告，与本次无关）
+- [ ] **全功能走查**（手动，待执行）：
   - [ ] 代码窗口反编译（C# / VB / IL / ILAst / Mixed 各一次）
   - [ ] 导出工程（Export to Project）
   - [ ] 书签格式化、工具提示、`DummyDecompiler` 兜底路径（无程序集时启动）

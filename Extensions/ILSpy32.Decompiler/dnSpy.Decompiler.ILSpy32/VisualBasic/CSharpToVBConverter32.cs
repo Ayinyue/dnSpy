@@ -2470,6 +2470,230 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				HasAttribute(declaration.RemoveAccessor.Attributes, "System.Runtime.CompilerServices.CompilerGeneratedAttribute", out attribute);
 		}
 
+		/// <summary>
+		/// Builds the RaiseEvent body BC31132 requires, when the C# accessors say raising is
+		/// expressible in VB. Three deterministic forms (verified against the corpus classification):
+		/// - empty add/remove: the event has no storage, raising does nothing;
+		/// - a single Throw in both accessors: the event is a stub, VB throws the same;
+		/// - both accessors delegate to one private delegate-typed field: raising invokes that
+		///   field (the copy+guard pattern the class itself uses for manual raises).
+		/// List-backed (WeakEventList.Add/Remove) and forwarding accessors stay unsynthesized:
+		/// their raise semantics cannot be expressed in VB, so they keep the explicit compile
+		/// error instead of silently dropping the raise.
+		/// </summary>
+		BlockStatement CreateSynthesizedRaiseEventBody(CS.CustomEventDeclaration declaration, List<ParameterDeclaration> parameters) {
+			parameters.Clear();
+			var eventDef = declaration.Annotation<EventDef>();
+			if (eventDef is null || eventDef.DeclaringType?.IsInterface == true)
+				return null;
+			var addAccessor = declaration.AddAccessor;
+			var removeAccessor = declaration.RemoveAccessor;
+			if (addAccessor is null || removeAccessor is null || addAccessor.Body is null || removeAccessor.Body is null)
+				return null;
+
+			// (a) empty add/remove
+			if (addAccessor.Body.Statements.Count == 0 && removeAccessor.Body.Statements.Count == 0)
+				return new BlockStatement();
+
+			// (b) both accessors are a single throw
+			var addThrow = SingleThrowStatement(addAccessor.Body);
+			if (addThrow != null) {
+				var removeThrow = SingleThrowStatement(removeAccessor.Body);
+				if (removeThrow != null) {
+					var throwBody = new BlockStatement();
+					throwBody.Add((Statement)addThrow.AcceptVisitor(this, null));
+					return throwBody;
+				}
+				return null;
+			}
+
+			// (c) both accessors assign the same private delegate-typed field
+			var typeDef = eventDef.DeclaringType;
+			var addFields = AssignedFieldNames(addAccessor.Body, typeDef);
+			var removeFields = AssignedFieldNames(removeAccessor.Body, typeDef);
+			var commonFields = addFields.Where(removeFields.Contains).ToList();
+			if (commonFields.Count != 1)
+				return null;
+			var field = typeDef.Fields.FirstOrDefault(f => f.Name == commonFields[0]);
+			if (field is null || !IsFieldOfDelegateType(field.FieldType, eventDef.EventType))
+				return null;
+			var delegateParameters = GetDelegateInvokeParameters(eventDef);
+			if (delegateParameters is null)
+				return null;
+
+			var copyName = "copy";
+			while (delegateParameters.Any(p => string.Equals(p.Name, copyName, StringComparison.OrdinalIgnoreCase)) ||
+					string.Equals(field.Name?.String, copyName, StringComparison.OrdinalIgnoreCase))
+				copyName += "_";
+			var copyLocal = MakeIdentifierExpression(copyName);
+
+			var decl = new LocalDeclarationStatement();
+			decl.Modifiers = Modifiers.Dim;
+			var declarator = new VariableDeclaratorWithTypeAndInitializer();
+			declarator.Identifiers.Add(new VariableIdentifier() { Name = Identifier.Create((object)null, copyName) });
+			declarator.Type = CreateType(field.FieldType.ToTypeDefOrRef());
+			declarator.Initializer = MakeIdentifierExpression(field.Name?.String ?? commonFields[0]);
+			decl.Variables.Add(declarator);
+
+			var guard = new IfElseStatement();
+			guard.Condition = new BinaryOperatorExpression((Expression)copyLocal.Clone(),
+				BinaryOperatorType.ReferenceInequality, new PrimitiveExpression(null));
+			var guardedBody = new BlockStatement();
+			var invoke = new InvocationExpression((Expression)copyLocal.Clone());
+			foreach (var parameter in delegateParameters)
+				invoke.Arguments.Add(MakeIdentifierExpression(parameter.Name));
+			guardedBody.Add(new ExpressionStatement(invoke));
+			guard.Body = guardedBody;
+
+			var body = new BlockStatement();
+			body.Add(decl);
+			body.Add(guard);
+			parameters.AddRange(delegateParameters.Select(p => new ParameterDeclaration() {
+				Name = Identifier.Create((object)null, p.Name),
+				Type = p.Type,
+			}));
+			return body;
+		}
+
+		/// <summary>The body's only statement when it is a throw, null otherwise.</summary>
+		static CS.ThrowStatement SingleThrowStatement(CS.BlockStatement body) {
+			if (body is null || body.Statements.Count != 1)
+				return null;
+			return body.Statements.First() as CS.ThrowStatement;
+		}
+
+		/// <summary>
+		/// Names of fields of <paramref name="typeDef"/> directly assigned in the block. Event
+		/// subscription statements (left side is a member of another object) are not field
+		/// assignments and do not participate.
+		/// </summary>
+		static HashSet<string> AssignedFieldNames(CS.BlockStatement body, TypeDef typeDef) {
+			var result = new HashSet<string>(StringComparer.Ordinal);
+			if (body is null || typeDef is null)
+				return result;
+			foreach (var assignment in body.Descendants.OfType<CS.AssignmentExpression>()) {
+				if (assignment.Operator != CS.AssignmentOperatorType.Assign)
+					continue;
+				if (!(assignment.Left is CS.IdentifierExpression identifier))
+					continue;
+				if (typeDef.Fields.Any(f => f.Name == identifier.Identifier))
+					result.Add(identifier.Identifier);
+			}
+			return result;
+		}
+
+		/// <summary>
+		/// True when the field's type is the event's delegate type (name-level comparison, both
+		/// sides through the same normalization - the arity and generic arguments differ in
+		/// spelling between the metadata field and the event reference).
+		/// </summary>
+		static bool IsFieldOfDelegateType(TypeSig fieldType, ITypeDefOrRef delegateType) {
+			if (fieldType is null || delegateType is null)
+				return false;
+			var expected = AstAnnotationBinder.NormalizeParameterTypeName(fieldType.TypeName ?? "");
+			var actual = AstAnnotationBinder.NormalizeParameterTypeName(delegateType.FullName ?? "");
+			return expected.Length > 0 && string.Equals(expected, actual, StringComparison.OrdinalIgnoreCase);
+		}
+
+		sealed class DelegateParameter {
+			public string Name;
+			public AstType Type;
+		}
+
+		/// <summary>
+		/// The RaiseEvent accessor must repeat the delegate's Invoke signature. The delegate is
+		/// resolved in this module first, then through cecil for framework delegates
+		/// (System.EventHandler&lt;T&gt;); unresolvable delegates mean the raise cannot be
+		/// synthesized safely and the caller keeps the BC31132 error.
+		/// </summary>
+		List<DelegateParameter> GetDelegateInvokeParameters(EventDef eventDef) {
+			var delegateType = eventDef.EventType;
+			if (delegateType is null)
+				return null;
+
+			// The event's own generic arguments, used to substitute the delegate's type
+			// parameters ("TEventArgs" in EventHandler<T>).
+			GenericInstSig constructed = null;
+			if (delegateType is TypeSpec spec && spec.TypeSig?.RemovePinnedAndModifiers() is GenericInstSig generic)
+				constructed = generic;
+
+			var delegateDef = delegateType.ResolveTypeDef() ?? constructed?.GenericType?.TypeDefOrRef?.ResolveTypeDef();
+			if (delegateDef != null)
+				return GetInvokeParameters(delegateDef, constructed);
+
+			var cecilReference = DnlibCecilBridge.TryGetTypeReference(module, delegateType);
+			var cecilDelegate = cecilReference?.Resolve();
+			if (cecilDelegate != null)
+				return GetInvokeParameters(cecilDelegate, cecilReference as Mono.Cecil.GenericInstanceType);
+			return null;
+		}
+
+		List<DelegateParameter> GetInvokeParameters(TypeDef delegateDef, GenericInstSig constructed) {
+			var invoke = delegateDef.Methods.FirstOrDefault(m => m.Name == "Invoke" && m.MethodSig != null);
+			var sig = invoke?.MethodSig;
+			if (invoke is null || sig is null)
+				return null;
+			var normalParameters = invoke.Parameters.Where(p => p.IsNormalMethodParameter).ToList();
+			if (normalParameters.Count != sig.Params.Count)
+				return null;
+			var result = new List<DelegateParameter>();
+			for (int i = 0; i < sig.Params.Count; i++) {
+				var parameter = normalParameters[i];
+				var parameterSig = sig.Params[i];
+				// A delegate's own type parameter ("TEventArgs") is replaced by the argument the
+				// event spelled out; anything still generic cannot be spelled and fails synthesis.
+				if (parameterSig.RemovePinnedAndModifiers() is GenericSig genericParameter) {
+					var argument = constructed?.GenericArguments.ElementAtOrDefault(genericParameter.GenericParam?.Number ?? -1);
+					if (argument is null)
+						return null;
+					parameterSig = argument;
+				}
+				var type = CreateTypeFromSig(parameterSig);
+				if (type is null)
+					return null;
+				result.Add(new DelegateParameter { Name = parameter.Name ?? "arg" + (i + 1), Type = type });
+			}
+			return result;
+		}
+
+		List<DelegateParameter> GetInvokeParameters(Mono.Cecil.TypeDefinition delegateDef, Mono.Cecil.GenericInstanceType constructed) {
+			// Invoke is abstract on delegates (no IL body), so only the name decides.
+			var invoke = delegateDef.Methods.FirstOrDefault(m => m.Name == "Invoke");
+			if (invoke is null)
+				return null;
+			var result = new List<DelegateParameter>();
+			foreach (var parameter in invoke.Parameters) {
+				var parameterType = parameter.ParameterType;
+				if (parameterType is Mono.Cecil.GenericParameter genericParameter) {
+					if (constructed is null || genericParameter.Position >= constructed.GenericArguments.Count)
+						return null;
+					parameterType = constructed.GenericArguments[genericParameter.Position];
+				}
+				var type = CreateTypeFromCecil(parameterType);
+				if (type is null)
+					return null;
+				result.Add(new DelegateParameter { Name = string.IsNullOrEmpty(parameter.Name) ? "arg" + (result.Count + 1) : parameter.Name, Type = type });
+			}
+			return result;
+		}
+
+		/// <summary>
+		/// Same conversion path as <see cref="CreateType"/>, for a type that only exists as a
+		/// cecil reference (framework delegates reached through the bridge).
+		/// </summary>
+		AstType CreateTypeFromCecil(Mono.Cecil.TypeReference cecilType) {
+			if (cecilType is null)
+				return null;
+			try {
+				var csAstType = ICSharpCode.Decompiler.CSharp.CSharpDecompiler.ConvertType(cecilType);
+				var vbType = (AstType)csAstType.AcceptVisitor(this, null);
+				return QualifyMemberType(vbType, cecilType);
+			}
+			catch {
+				return null;
+			}
+		}
+
 		public AstNode VisitCustomEventDeclaration(CS.CustomEventDeclaration customEventDeclaration, object data)
 		{
 			var result = new EventDeclaration();
@@ -2495,6 +2719,18 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			if (result.IsCustom) {
 				result.AddHandlerBlock = (Accessor)customEventDeclaration.AddAccessor.AcceptVisitor(this, data);
 				result.RemoveHandlerBlock = (Accessor)customEventDeclaration.RemoveAccessor.AcceptVisitor(this, data);
+				// A VB Custom Event must declare RaiseEvent (BC31132) and the C# tree has no raise
+				// accessor at all. Only the forms whose raise semantics VB can express get one
+				// synthesized; list-backed or forwarding accessors keep the explicit error.
+				var parameters = new List<ParameterDeclaration>();
+				var raiseBody = CreateSynthesizedRaiseEventBody(customEventDeclaration, parameters);
+				if (raiseBody != null) {
+					var raiseAccessor = new Accessor();
+					foreach (var parameter in parameters)
+						raiseAccessor.Parameters.Add(parameter);
+					raiseAccessor.Body = raiseBody;
+					result.RaiseEventBlock = raiseAccessor;
+				}
 			}
 
 			members.Pop();

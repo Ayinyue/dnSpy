@@ -183,6 +183,30 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 					method.AddAnnotation(methodDef);
 			}
 
+			// Constructors, destructors and operators are member bodies too: without a MethodDef
+			// annotation the converter ran their bodies with CurrentType=null, which silently
+			// disabled every resolver-based decision inside them (event subscriptions stayed
+			// "+=" instead of AddHandler, reference comparisons fell back to '='). The metadata
+			// names are ".ctor"/".cctor"/"op_*", which MatchMethod's qualified-name rule skips,
+			// so each gets its own matcher.
+			foreach (var constructor in declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.ConstructorDeclaration>()) {
+				var methodDef = MatchConstructor(typeDef, constructor);
+				if (methodDef != null)
+					constructor.AddAnnotation(methodDef);
+			}
+
+			foreach (var destructor in declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.DestructorDeclaration>()) {
+				var methodDef = MatchDestructor(typeDef, destructor);
+				if (methodDef != null)
+					destructor.AddAnnotation(methodDef);
+			}
+
+			foreach (var operatorDeclaration in declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.OperatorDeclaration>()) {
+				var methodDef = MatchOperator(typeDef, operatorDeclaration);
+				if (methodDef != null)
+					operatorDeclaration.AddAnnotation(methodDef);
+			}
+
 			foreach (var property in declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.PropertyDeclaration>()) {
 				var propertyDef = MatchProperty(typeDef, property.Name, 0, property.PrivateImplementationType);
 				if (propertyDef != null)
@@ -196,21 +220,125 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			}
 
 			foreach (var eventDeclaration in declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.CustomEventDeclaration>()) {
-				var eventDef = MatchEvent(typeDef, eventDeclaration.Name);
+				var eventDef = MatchEvent(typeDef, eventDeclaration.Name,
+					eventDeclaration.PrivateImplementationType is { IsNull: false });
 				if (eventDef != null)
 					eventDeclaration.AddAnnotation(eventDef);
 			}
 
 			// Field-like events ("public event EventHandler Changed;") are EventDeclaration nodes,
-			// and the Implements clause for them needs the EventDef just as much.
+			// and the Implements clause for them needs the EventDef just as much. They have no
+			// private-implementation syntax (explicit interface events always carry accessors,
+			// i.e. CustomEventDeclaration), so they only bind the plain name.
 			foreach (var eventDeclaration in declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.EventDeclaration>()) {
 				foreach (var variable in eventDeclaration.Variables) {
-					var eventDef = MatchEvent(typeDef, variable.Name);
+					var eventDef = MatchEvent(typeDef, variable.Name, wantsQualified: false);
 					if (eventDef != null)
 						eventDeclaration.AddAnnotation(eventDef);
 				}
 			}
+
+			// Accessor bodies run with the owning member's state: ResetMethodState reads the
+			// accessor's MethodDef for CurrentType, and the synthesized setter's "value"
+			// parameter claims its dnlib parameter through the same annotation. The accessors of
+			// an already-matched property/event follow from its definition, so no separate
+			// matching pass is needed (explicit implementations too - their accessors live on
+			// the PropertyDef/EventDef itself).
+			foreach (var property in declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.PropertyDeclaration>()) {
+				var propertyDef = property.Annotation<PropertyDef>();
+				if (propertyDef is null)
+					continue;
+				AttachAccessor(propertyDef.GetMethod, property.Getter);
+				AttachAccessor(propertyDef.SetMethod, property.Setter);
+			}
+
+			foreach (var indexer in declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.IndexerDeclaration>()) {
+				var propertyDef = indexer.Annotation<PropertyDef>();
+				if (propertyDef is null)
+					continue;
+				AttachAccessor(propertyDef.GetMethod, indexer.Getter);
+				AttachAccessor(propertyDef.SetMethod, indexer.Setter);
+			}
+
+			foreach (var customEvent in declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.CustomEventDeclaration>()) {
+				var eventDef = customEvent.Annotation<EventDef>();
+				if (eventDef is null)
+					continue;
+				AttachAccessor(eventDef.AddMethod, customEvent.AddAccessor);
+				AttachAccessor(eventDef.RemoveMethod, customEvent.RemoveAccessor);
+			}
 		}
+
+		static void AttachAccessor(MethodDef? accessor, ICSharpCode.Decompiler.CSharp.Syntax.Accessor node) {
+			if (accessor is null || node is null || node.IsNull)
+				return;
+			node.AddAnnotation(accessor);
+		}
+
+		static MethodDef? MatchConstructor(TypeDef typeDef, ICSharpCode.Decompiler.CSharp.Syntax.ConstructorDeclaration declaration) {
+			bool wantsStatic = declaration.HasModifier(ICSharpCode.Decompiler.CSharp.Syntax.Modifiers.Static);
+			MethodDef? fallback = null;
+			foreach (var method in typeDef.Methods) {
+				bool staticConstructor = method.Name == ".cctor";
+				if (staticConstructor != wantsStatic)
+					continue;
+				if (!staticConstructor && method.Name != ".ctor")
+					continue;
+				var parameters = method.Parameters.Where(p => p.IsNormalMethodParameter).ToList();
+				if (parameters.Count != declaration.Parameters.Count)
+					continue;
+				if (ParameterTypesMatch(parameters, declaration.Parameters))
+					return method;
+				// A same-arity constructor with different parameter types; keep the first
+				// candidate as the fallback, same as MatchMethod.
+				fallback ??= method;
+			}
+			return fallback;
+		}
+
+		static MethodDef? MatchDestructor(TypeDef typeDef, ICSharpCode.Decompiler.CSharp.Syntax.DestructorDeclaration declaration) {
+			// A C# finalizer compiles to the single virtual parameterless Finalize override; a
+			// non-virtual Finalize helper must not claim it. The node is a member of the very
+			// typeDef that was matched for the enclosing declaration, so no name comparison is
+			// needed (it would miss generic types, whose tree name lacks the "`1" arity), and
+			// the destructor syntax has no parameter list to compare against.
+			foreach (var method in typeDef.Methods) {
+				if (method.IsStatic || !method.IsVirtual)
+					continue;
+				if (method.Name != "Finalize")
+					continue;
+				var parameters = method.Parameters.Where(p => p.IsNormalMethodParameter).ToList();
+				if (parameters.Count == 0)
+					return method;
+			}
+			return null;
+		}
+
+		static MethodDef? MatchOperator(TypeDef typeDef, ICSharpCode.Decompiler.CSharp.Syntax.OperatorDeclaration declaration) {
+			MethodDef? parameterMatch = null;
+			foreach (var method in typeDef.Methods) {
+				var name = method.Name?.String;
+				if (name is null || !name.StartsWith("op_", StringComparison.Ordinal))
+					continue;
+				// op_Implicit/op_Explicit are shared by every conversion operator, so the
+				// parameter and return types decide; unresolvable spellings keep the candidate.
+				if (CSOperatorType(method.Name) != declaration.OperatorType)
+					continue;
+				if (!method.IsStatic)
+					continue;
+				var parameters = method.Parameters.Where(p => p.IsNormalMethodParameter).ToList();
+				if (parameters.Count != declaration.Parameters.Count)
+					continue;
+				if (ParameterTypesMatch(parameters, declaration.Parameters) && ReturnTypeMatches(method, declaration))
+					return method;
+				parameterMatch ??= method;
+			}
+			return parameterMatch;
+		}
+
+		/// <summary>Maps an "op_*" metadata name to its operator type, null when unknown.</summary>
+		static ICSharpCode.Decompiler.CSharp.Syntax.OperatorType? CSOperatorType(UTF8String? name) =>
+			ICSharpCode.Decompiler.CSharp.Syntax.OperatorDeclaration.GetOperatorType(name?.String);
 
 		/// <summary>
 		/// Exact name wins over the qualified form ("IFoo.Bar" ends with ".Bar"): an override
@@ -234,12 +362,21 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			return wantsQualified ? suffix ?? exact : exact ?? suffix;
 		}
 
-		static EventDef MatchEvent(TypeDef typeDef, string name) {
+		/// <summary>
+		/// Exact name wins over the qualified form ("IWpfTextView.BackgroundBrushChanged" ends
+		/// with ".BackgroundBrushChanged"): an explicit interface event implementation's EventDef
+		/// is named after the interface in metadata, and without accepting the qualified spelling
+		/// the event bound nothing - no EventDef, no RaiseEvent synthesis, no Implements clause.
+		/// </summary>
+		static EventDef MatchEvent(TypeDef typeDef, string name, bool wantsQualified) {
+			EventDef? exact = null, suffix = null;
 			foreach (var ev in typeDef.Events) {
 				if (ev.Name == name)
-					return ev;
+					exact ??= ev;
+				else if (ev.Name.EndsWith("." + name, StringComparison.Ordinal))
+					suffix ??= ev;
 			}
-			return null;
+			return wantsQualified ? suffix ?? exact : exact ?? suffix;
 		}
 
 		/// <summary>
@@ -269,7 +406,7 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 					continue;
 				if (method.IsStatic != declaration.HasModifier(ICSharpCode.Decompiler.CSharp.Syntax.Modifiers.Static))
 					continue;
-				if (ParameterTypesMatch(parameters, declaration)) {
+				if (ParameterTypesMatch(parameters, declaration.Parameters)) {
 					// Full signature match; a same-params candidate with a different return type
 					// (Equals(object) vs Equals(T), explicit impl vs helper) must not win.
 					if (ReturnTypeMatches(method, declaration))
@@ -294,7 +431,7 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		public static bool ParametersMatch(MethodDef method, ICSharpCode.Decompiler.CSharp.Syntax.MethodDeclaration declaration) {
 			var parameters = method.Parameters.Where(p => p.IsNormalMethodParameter).ToList();
 			return parameters.Count == declaration.Parameters.Count &&
-				ParameterTypesMatch(parameters, declaration) &&
+				ParameterTypesMatch(parameters, declaration.Parameters) &&
 				ReturnTypeMatches(method, declaration);
 		}
 
@@ -302,7 +439,7 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		/// Return type comparison as a tie-breaker between candidates that share name, arity and
 		/// parameters. Unresolvable names on either side keep the candidate alive (return true).
 		/// </summary>
-		static bool ReturnTypeMatches(MethodDef method, ICSharpCode.Decompiler.CSharp.Syntax.MethodDeclaration declaration) {
+		static bool ReturnTypeMatches(MethodDef method, ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration declaration) {
 			var retType = method.MethodSig?.RetType?.RemovePinnedAndModifiers();
 			// The syntax tree spells Nullable<T> as "T?", which normalizes to the underlying name;
 			// compare against the same name from the metadata side.
@@ -322,10 +459,10 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			return string.Equals(expected, actual, StringComparison.OrdinalIgnoreCase);
 		}
 
-		static bool ParameterTypesMatch(List<Parameter> parameters, ICSharpCode.Decompiler.CSharp.Syntax.MethodDeclaration declaration) {
+		static bool ParameterTypesMatch(List<Parameter> parameters, IEnumerable<ICSharpCode.Decompiler.CSharp.Syntax.ParameterDeclaration> declarationParameters) {
 			for (int i = 0; i < parameters.Count; i++) {
 				var expected = parameters[i].Type?.TypeName;
-				var actual = GetAstTypeName(declaration.Parameters.ElementAt(i).Type);
+				var actual = GetAstTypeName(declarationParameters.ElementAt(i).Type);
 				if (string.IsNullOrEmpty(expected) || string.IsNullOrEmpty(actual))
 					continue;
 				// 'ref/out' shows up as a trailing '&' in the metadata name but as a modifier on

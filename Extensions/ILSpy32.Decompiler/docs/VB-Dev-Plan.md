@@ -1,6 +1,6 @@
 # VB 语义正确性开发计划（TASK 清单）
 
-> 配套阅读：`VB-Action-Plan.md`（方向与规矩）、`baseline/README.md`（29 条已修经验）。
+> 配套阅读：`VB-Action-Plan.md`（方向与规矩）、`baseline/README.md`（45 条已修经验）。
 > 本文件是**可勾选的执行计划**：每批 = 一类根因，独立验收，可独立回退。
 > 状态标记：`[ ]` 未开始 / `[x]` 完成 / `[~]` 进行中 / `[!]` 受阻待确认。
 > 基线提交：`50433f691`。基线数字（2026-11-02 实测）见下表，**回归时逐项对照**。
@@ -36,16 +36,18 @@ VB 语义正确性只是迁移验收的一关：3.2 的输出质量必须**不�
 
 ### 当前差距（M2）
 
-realBadFiles 1030 / 554 / 10，可归零部分约 350~450（`BC30456 真缺成员/BC32022/BC30521/BC30583/BC31132`，BC30401 已收敛），
-其余为度量口径问题（见第 3 节）。语法 0 / 0 / 0（`BC30036` 已修）。
+realBadFiles 989 / 527 / 10（Batch 4 后，2026-11-04 实测），可归零部分余约 200~350
+（`BC30456 真缺成员/BC30521/BC30583`；`BC32022` 已收敛至「引擎解析不到目标类型」形态
+66+25、`BC31132` 余 43+12 均为按策略保留的不可表达形态），其余为度量口径问题（见第 3 节）。
+语法 0 / 0 / 0（`BC30036` 已修）。
 
-## 0. 基线与验收红线（每批通用）## 0. 基线与验收红线（每批通用）
+## 0. 基线与验收红线（每批通用）
 
 | 指标 | dnSpy.dll (3266) | AsmEditor.x (1278) | Contracts.Logic (84) |
 |---|---|---|---|
 | 转换 | 3266 ok / 0 degraded | 1278 ok / 0 degraded | 84 ok / 0 degraded |
 | 语法错误 | 0 | 0 | 0 |
-| realBadFiles | **1030** | **554** | **10** |
+| realBadFiles | **989**（Batch 4 后） | **527**（Batch 4 后） | **10** |
 
 **验收红线（任一违背即该批不通过）**
 - [ ] 引擎构建 0 错误（`dotnet build -c Release -f net10.0-windows --no-restore`）
@@ -126,13 +128,17 @@ Batch 1~5 = 里程碑 M2（质量对齐）；M3/M4 见「里程碑任务」节
 
 ### Batch 4 事件族（`BC32022` 266 / `BC31132` 81）
 
-- [ ] `BC32022`：放宽事件副本抑制的「恰好两次引用」条件（允许守卫与调用跨层级/多一层中间量），逐个样本验证语义
-- [ ] `BC31132`：为带真实逻辑的自定义事件合成 `RaiseEvent` 访问器——**语义难点**：VB 自定义事件没有隐式 backing 字段，需要先确认类内是否有可用的私有委托字段，没有就不能合成
-- [ ] 单类型回归 + 全量回归
+- [x] 取样定性（2026-11-04）：`BC32022` 的订阅形态（`+=`/`-=` 残留）与副本形态（`Dim x As T = Me.Evt`）是**同一根因**——事件订阅判定链在 ctor/dtor/访问器里断掉（`MethodDef` 注解缺失，265/266 个残留文件含 ctor 上下文）。预设的「放宽副本抑制『恰好两次引用』」被取样证伪：语料中全部事件副本在 C# 树里都恰好 guard+call 两用，`uses>2` 的仅 4 处 `GetInvocationList` 形态（守卫是 `== null` 早退、调用是列表元素间接调用，谓词本就不匹配），放宽救不了它们，反而会新增孤儿守卫——修复落在注解缺失上，不动引用计数
+- [x] 补注解：ctor（`.ctor`/`.cctor`+参数+静态）、dtor（唯一 virtual `Finalize` 覆写）、operator（`op_*`+参数+返回类型）、accessor（从已匹配的 PropertyDef/EventDef 带下 Get/Set/Add/Remove）（README 第 41 条）
+- [x] `HasEventIn` 跨模块断链返回 null（未知≠否定，`IsEventAccess` 的 `?? true` 兜底恢复生效；泛型实例基类 `Base<T>` 解链）（README 第 42 条）
+- [x] `BC31132`：E1 空 add/remove / E4-stub 双 Throw / E4d 私有委托字段三种可确定形态合成 `RaiseEvent`（签名重复委托 `Invoke`，`TEventArgs` 按事件实参替换）；E2 列表型 / E4c/E4e 转发型无法在 VB 确定表达，按策略保留显式报错（README 第 43 条）
+- [x] 顺带修两处实施中发现的缺陷：显式接口事件的限定名绑定 `IFoo.Bar`（README 第 44 条）、`Type.GetType("System.Nullable")` 别名解析到非值类型运行时类型（`BC32128` 1→0，README 第 45 条）
+- [x] 单类型回归（WinSysButton ctor 订阅、HexBufferImpl 的 E4d 合成、BookmarkTagger 的 E1 合成、DecompilerService 的 E2 保留逐一验证输出）+ 全量回归（三样本 dump+validate+compile，门禁通过）
 
-**已知事实**：自动事件（双访问器都标 `[CompilerGenerated]`）已改写字段式事件；剩下 81 个是**真带逻辑**的自定义事件。
-**风险**：合成 `RaiseEvent` 若语义不成立，宁可保持 BC31132 显式报错。
-**验收**：`BC31132` = 0 或剩「确实无法表达」并写明；`BC32022` 下降且 `RaiseEvent` 输出与 C# 调用点一一对应。
+**已知事实**：自动事件（双访问器都标 `[CompilerGenerated]`）已改写字段式事件；`BC31133`（81/12）是 E 形态自定义事件的伴生诊断，Batch 3 基线报告里就有（compile-r4ref-dnspy.md 同为 81），非本批引入。事件读点现直接输出 `RaiseEvent`（全量 dump 内 34+32+30+26… 按事件名分布）；C# 树里直接引用 backing 字段的引发点保持 copy+guard（合法 VB，语义相同）。
+**风险（已规避）**：合成 `RaiseEvent` 语义不成立的形态一律不合成，保持 BC31132 显式报错。
+**验收**：`BC31132` 剩「确实无法表达」并已写明 ✅（43 dnSpy + 12 asm，全部 E2/E4c/E4e）；`BC32022` 266→66（dnSpy）✅、`RaiseEvent`/`AddHandler` 输出与 C# 调用点一一对应 ✅；realBadFiles 1030→989 / 554→527 / 10→10 ✅。
+**余量（待后续 batch，M3 口径）**：`BC32022` 66（dnSpy，`Lazy`1` 链如 `documentTabService.Value.DocumentCollectionChanged`）+ 25（asm，`CommandManager.RequerySuggested` 静态外部事件）——目标类型本身解析不到（cecil 不跟随 type forward、WindowsBase 不在 bin 目录），`GetTypeName` 返回 null 在 `IsEventAccess` :1706 提前 false，与本批修的 `HasEventIn` 兜底（:1707）是两个不同入口。
 
 ### Batch 5 重复实现与重载歧义（`BC30583` 45 / `BC30521` 108）
 
@@ -166,6 +172,8 @@ Batch 1~5 = 里程碑 M2（质量对齐）；M3/M4 见「里程碑任务」节
 1. 批次顺序：默认按 1 → 2 → 3 → 4 → 5，Batch 6 可选——是否调整？
 2. Batch 0 的回归脚本要不要做（不做则每次手敲四条命令）？
 3. Batch 4 的 `RaiseEvent` 合成：语义不成立时允许保留显式报错（BC31132），还是要求清零？
+   ——Batch 4 已按「保留显式报错」执行（E2/E4c/E4e 不合成，见 README 第 43 条）；若要求
+   清零，需要先给出列表 API 映射/跨对象转发的 VB 引发语义，属新决策。
 4. Batch 6 选 A / B / C / 不做？
 
 ## 4.5 里程碑任务（M3 / M4，迁移收口）

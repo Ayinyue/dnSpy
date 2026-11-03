@@ -406,10 +406,14 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		}
 
 		// Events are often declared on a base type or a base interface (ITextView.Closed), so the
-		// lookup follows both hierarchies.
+		// lookup follows both hierarchies. A base that lives in another module cannot be walked
+		// (ResolveTypeDef only reaches the same module); that is "unknown", not "no": treating
+		// it as false made IsEventAccess reject a real event subscription (MyBase.Loaded with an
+		// external ButtonBase in the chain) and emit "+=" instead of AddHandler.
 		static bool? HasEventIn(TypeDef type, string memberName) {
 			var visited = new HashSet<string>(StringComparer.Ordinal);
 			var queue = new Queue<TypeDef>();
+			bool complete = true;
 			queue.Enqueue(type);
 			while (queue.Count > 0) {
 				var current = queue.Dequeue();
@@ -419,21 +423,42 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 					if (ev.Name == memberName)
 						return true;
 				}
-				var baseType = current.BaseType?.ResolveTypeDef();
+				var baseType = ResolveSameModule(current.BaseType);
 				if (baseType != null)
 					queue.Enqueue(baseType);
+				else if (current.BaseType != null)
+					complete = false;
 				foreach (var iface in current.Interfaces) {
-					var resolved = iface.Interface?.ResolveTypeDef();
+					var resolved = ResolveSameModule(iface.Interface);
 					if (resolved != null)
 						queue.Enqueue(resolved);
+					else if (iface.Interface != null)
+						complete = false;
 				}
 			}
-			return false;
+			return complete ? false : (bool?)null;
+		}
+
+		/// <summary>
+		/// Resolves a base/interface reference when the target is in this module. A generic
+		/// instance ("Base&lt;T&gt;") points at the generic definition through its signature, so
+		/// the arity is unwrapped before the resolve.
+		/// </summary>
+		static TypeDef? ResolveSameModule(ITypeDefOrRef? type) {
+			if (type is null)
+				return null;
+			var resolved = type.ResolveTypeDef();
+			if (resolved != null)
+				return resolved;
+			if (type is TypeSpec spec && spec.TypeSig?.RemovePinnedAndModifiers() is GenericInstSig generic)
+				return generic.GenericType?.TypeDefOrRef?.ResolveTypeDef();
+			return null;
 		}
 
 		static bool? HasEventIn(Mono.Cecil.TypeDefinition type, string memberName) {
 			var visited = new HashSet<string>(StringComparer.Ordinal);
 			var queue = new Queue<Mono.Cecil.TypeDefinition>();
+			bool complete = true;
 			queue.Enqueue(type);
 			while (queue.Count > 0) {
 				var current = queue.Dequeue();
@@ -446,13 +471,17 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 				var baseType = current.BaseType?.Resolve();
 				if (baseType != null)
 					queue.Enqueue(baseType);
+				else if (current.BaseType != null)
+					complete = false;
 				foreach (var iface in current.Interfaces) {
 					var resolved = iface.InterfaceType?.Resolve();
 					if (resolved != null)
 						queue.Enqueue(resolved);
+					else if (iface.InterfaceType != null)
+						complete = false;
 				}
 			}
-			return false;
+			return complete ? false : (bool?)null;
 		}
 
 		static IEnumerable<Type> SelfAndInterfaces(Type type) {
@@ -585,6 +614,12 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			if (string.IsNullOrEmpty(name))
 				return null;
 			try {
+				// Type.GetType resolves the compiler alias "System.Nullable" to a special
+				// runtime type whose IsValueType is false. Nullable<T> itself is a struct:
+				// misreading it as a reference type turned nullable comparisons into Is/IsNot
+				// (BC32128). Remap to the arity name, which resolves to the real struct.
+				if (name == "System.Nullable" || name == "Nullable")
+					name = "System.Nullable`1";
 				return Type.GetType(name, throwOnError: false);
 			}
 			catch {

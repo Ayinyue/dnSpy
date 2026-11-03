@@ -361,6 +361,71 @@ value = (dictionary([key]))                        ' 同一个实例
     a member of 'BookmarkInfo'` 这类**成员真的没生成**（属性/字段未输出，属转换缺陷，待后续
     batch）与**互操作类型成员跨 dump 文件**（度量口径，`--whole` 下消失）。本轮未再修。
 
+41. **ctor/dtor/operator/访问器没有 `MethodDef` 注解**（Batch 4 主根因，dnSpy.dll
+    `BC32022` 266→66）。第 39 条入档的缺口正是主犯：绑定器只给 `MethodDeclaration` 绑
+    `MethodDef`，于是 ctor/dtor/operator 体内 `CurrentType=null`，`GetTypeName(MyBase/字段/
+    属性/裸事件名)` 全部返回 null，`IsEventAccess`（CSharpToVBConverter32.cs:1699）在
+    :1706 提前 false → `x.Evt += h` 留成 `+=`（265/266 个残留文件在 ctor/dtor/访问器上下文）。
+    访问器虽然在 Batch 1 接了 `ResetMethodState`（第 31 条），但它读取的访问器注解从来没人绑
+    ——恒空转。事件副本抑制走同一条类型判定链，抑制失效时输出 `Dim x As T = Me.Evt`，而
+    VB 连**读**字段式事件都不允许，每个未抑制副本必报 BC32022（实测 98 处副本在 Set/Get
+    访问器、4 处在方法）。修法：三类声明各配匹配器——ctor 按「.ctor/.cctor + 参数类型 +
+    是否静态」（同元数不同参数时保留首个候选，与 MatchMethod 同口径）、dtor 匹配唯一的
+    virtual 无参 `Finalize` 覆写（非虚 Finalize 助手不得冒领）、operator 按 `op_*` 运算符
+    类型 + 参数 + 返回类型；访问器的 `MethodDef` 从已匹配的 PropertyDef/EventDef 的
+    Get/Set/Add/Remove 方法直接带下来（访问器定义就挂在成员定义上，无需二次匹配）。
+    为什么与原 IL 等价：本条只补**注解**（类型判定的输入），不改任何输出结构；判定翻真后
+    走的是第 19 条早已验证的 AddHandler/RemoveHandler 路径，而 AddHandler 与 C# 的
+    `event +=` 编译成同一个 `Event::add_X` 调用。
+
+42. **跨模块基链上的事件查找把「未知」当「否定」**（Batch 4 次根因）。事件声明在跨程序集的
+    基类/基接口上时（`WinSysButton` 的 `MyBase.Loaded`，基链 TabButton→ButtonBase(外部)；
+    `CultureSettingsImpl` → 外部 ViewModelBase 的 PropertyChanged），即使补了第 41 条注解仍
+    输出 `+=`。根因：`HasEventIn` 沿基类型/接口 BFS 用 `ResolveTypeDef()` 只能走**同模块**，
+    走到外部基类型即断链，而断链被当成「遍历完成且没找到」**确定地返回 false**——把
+    `IsEventAccess` :1707 的 `?? true`（查不到时乐观按事件处理）兜底堵死了。修法：遍历因
+    外部基类型/接口提前止步时返回 `null`（未知），只有完整走完且没找到才 `false`；顺带修了
+    泛型实例基类（`Base<T>`）的解链——从 `GenericInstSig` 取出泛型定义再解析。
+    为什么与原 IL 等价：`?? true` 只是把「证明它不是事件」改为「走得到就信」；C# 源码既然
+    写了 `+=`，IL 就是事件 add 调用，按事件处理不引入新语义。
+    **余量（未修）**：目标类型本身解析不到时 `GetTypeName` 直接 null（在 :1706 更早分支
+    false）：`documentTabService.Value.DocumentCollectionChanged`（`System.Lazy`1` 链，
+    dnSpy.dll 余 66 处）、`CommandManager.RequerySuggested`（WindowsBase 静态类，AsmEditor
+    余 25 处）——cecil `GetType` 不跟随 type forward、WindowsBase 又不在 bin 目录。本批改动
+    只会把 `+=` 转 AddHandler（false→null→true 单向），不会新增此形态；AsmEditor 本批前
+    的逐诊断分布未存档（out/ 逐轮覆盖），总数 554→527 为对账依据。待后续 batch。
+
+43. **Custom Event 缺 `RaiseEvent`：三种可确定形态合成，两种按策略保留报错**（dnSpy.dll
+    `BC31132` 81→43，AsmEditor 余 12）。扫描全部 dump 的 Custom Event 块，缺 RaiseEvent 的
+    共五形态：
+    - **E1 空 add/remove**（显式接口事件 `add{} remove{}`，38 处）：合成**空** RaiseEvent 体
+      ——事件没有存储，引发本来就无事发生；
+    - **E4-stub 双 Throw**（add/remove 各一个 Throw，20 处）：合成同一个 Throw；
+    - **E4d 私有委托字段支撑**（add=`[Delegate].Combine` / remove=`[Delegate].Remove`，字段
+      确认存在且类型与事件委托类型一致）：合成 copy+guard 引发——与类内自己手工引发用的
+      正是同一形态（HexBufferImpl 的 bufferSpanInvalidated_2）；
+    - **E2 列表型**（`list.Add/Remove(value)`，约 40 处，背后是 WeakEventList，引发走列表
+      内部 API）与 **E4c/E4e 转发型**（add 转发到另一对象的事件，52 处）：**不合成**。
+      VB 自定义事件没有隐式 backing 字段，这两种的引发语义无法确定表达，乱合成会静默丢掉
+      引发——宁可保持显式编译错误（既定策略，见 Dev-Plan 待确认项 3 的答案）。
+    为什么与原 IL 等价：C# 字段式事件的引发就是「读 backing 字段→非空调用 Invoke」，E4d
+    的类内手工 raise 段正是 copy+guard，合成访问器只是把同一段语义摆到 VB 要求的位置；
+    E1 的 IL 里根本没有 raise 代码，空体即「无操作」。配套细节：RaiseEvent 访问器必须重复
+    委托 `Invoke` 的签名——委托先在本模块解析，框架委托（`EventHandler<T>`）走 cecil 桥，
+    委托自己的类型参数（`TEventArgs`）按事件声明处的实参替换，替换不掉就不合成。
+
+44. **显式接口事件的元数据名带接口限定**（Batch 4 顺带）。`void IFoo.Bar { add … remove … }`
+    的 EventDef 在元数据里叫 ``Foo.Bar``，`MatchEvent` 只按短名精确匹配 → 不绑 → 没有
+    EventDef → 无 RaiseEvent 合成、无 Implements 子句。修法与方法侧第 34 条的限定名规则
+    同构：精确名优先、限定后缀（`.Bar` 结尾）兜底、按「是否显式实现」选择取向；字段式事件
+    无显式接口语法，只按短名。
+
+45. **`Type.GetType("System.Nullable")` 解析到错误运行时类型**（Batch 4 顺带，`BC32128`
+    1→0）。`GetRuntimeType` 把编译器别名 `System.Nullable` 原样交给 `Type.GetType`，解析到
+    一个 `IsValueType=false` 的特殊运行时类型，而 `Nullable<T>` 本体是 struct——误判成引用
+    类型让可空值比较发成 `Is/IsNot`。修法：别名重映射为 ``System.Nullable`1`` 再查
+    （ExpressionTypeResolver.cs:621）。
+
 修复后的语法错误文件数：
 
 | 程序集 | 语言 | 语法错误文件 |
@@ -410,7 +475,7 @@ Contracts.Logic（84 个 public 类型）的首次结果：**54 个文件编译�
 | `BC30260` / `BC31429` 大小写重名 | 18 | **0** |
 | `BC30288` 同块重名 | 4 | **0** |
 | `BC30616` 嵌套遮蔽（AsmEditor）| 9 | **0** |
-| `BC32022` 事件当委托调用（AsmEditor）| 36 | **0** |
+| `BC32022` 事件当委托调用（AsmEditor）| 36 | **25**（余量为 `CommandManager.RequerySuggested` 静态外部事件，第 42 条余量）|
 | `BC30433` Module 构造函数 `Shared` | 4 | **0** |
 | `BC37269` TupleElementNames | 2 | **0** |
 | `BC32006/BC32007` Char 与数值互转 | 10 | **0** |
@@ -426,14 +491,14 @@ Contracts.Logic（84 个 public 类型）的首次结果：**54 个文件编译�
 | `BC30452` `UTF8String + String` | 116 | **0** |
 | `BC30452` Char 与数值比较 | 112 | **0** |
 | 泛型类型的注解绑定（整类静默失效）| — | 已修，见第 25 条 |
-| `BC32022` 事件当委托调用（dnSpy.dll）| 379 | **266** |
-| `BC31132` 自定义事件缺 `RaiseEvent` | 92 | **81**（余下是真正带逻辑的自定义事件）|
+| `BC32022` 事件当委托调用（dnSpy.dll）| 379 | **66**（Batch 4 后；余量为 `Lazy`1` 链式类型解析失败，第 42 条余量）|
+| `BC31132` 自定义事件缺 `RaiseEvent` | 92 | **43**（dnSpy；余下列表型/转发型按策略保留，见第 43 条；AsmEditor 余 12）|
 | `BC30149` 接口实现缺 `Optional` | 255 | **156** |
 | `BC30401` 同上/签名不符 | 108 | **109**（子句都发出来了，反而多暴露 12 处真不符）|
 | `BC30002` 带元组实参的接口子句 | 675 | **669** |
 
-Contracts.Logic 的真实失败文件 54 → **10**；AsmEditor 906 → 896 → 825 → 583 → 565 → **565**；
-dnSpy.dll（3266 类型）2039 → 1408 → 1120 → 1096 → 1088 → **1068**。
+Contracts.Logic 的真实失败文件 54 → **10**；AsmEditor 906 → 896 → 825 → 583 → 565 → 565 → 554 → **527**；
+dnSpy.dll（3266 类型）2039 → 1408 → 1120 → 1096 → 1088 → 1068 → 1050 → 1030 → **989**。
 
 ### 带元组实参的接口（`IEqualityComparer(Of (Code, String, CpuidFeature()))`）
 

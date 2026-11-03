@@ -507,8 +507,11 @@ value = (dictionary([key]))                        ' 同一个实例
     只剩 `Show(Window)` 一个候选；**VB 的 `Nothing` 可以转任何类型的默认值**，`Show(Window)`
     与 `Show(Guid, [owner])` 同时适用且无法比出更具体者。可表达形式是按元数据参数类型给裸
     `Nothing` 实参插 `CType(Nothing, Window)`——需要方法组枚举与实参配对，暂缓。
-    ③`BC30456` 余量主体（含 `BookmarkInfo.ImageReference` 一族）经 `--whole` 实证为 **internal
+    ③`BC30456` 余量主体（含 `BookmarkInfo.ImageReference` 一族）经 `--whole` 定点实证为 **internal
     跨文件类型的逐文件口径问题**，不是转换缺陷；「真缺成员」子类待后续批次再定性。
+    ⚠️ 但 `--whole` 只能做**定点**实证：其聚合统计被嵌套类型重复声明支配（每个嵌套类型在
+    自身文件与外层文件各声明一次，BC30179 ×10 万、BC30663 ×21 万、级联无数）——聚合数不可
+    当缺陷度量用，只有「单簇 whole 编译干净」这类定点对比才算证据。
 
 修复后的语法错误文件数：
 

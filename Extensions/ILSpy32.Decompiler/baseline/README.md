@@ -499,6 +499,17 @@ value = (dictionary([key]))                        ' 同一个实例
     不变，只是把引擎的 C# 转发技巧翻译成 VB 的显式属性实现。
     效果：BC30401 49→15（余 12 文件全为噪声）、BC30521 11→8。
 
+49. **已知限制（打磨轮定性，不修）**。三组余量按「语义不成立时宁可保留显式报错」的既定哲学入档：
+    ①`BC30345` 3 文件——C# 合法的 `(SnapshotPoint, out WordKind)` / `(SnapshotPoint, WordKind)`
+    重载对，VB 的 ByRef/ByVal **不构成**重载差异（BC30345 直接拒绝）。可表达形式是改私有重载名
+    并重绑定调用点，但绑定需要调用点级重载裁决，风险大于 3 个文件的收益。
+    ②`BC30521` 8 文件——`Show(Nothing)` 单实参歧义：C# 的 `null` 不能隐式转值类型（Guid），
+    只剩 `Show(Window)` 一个候选；**VB 的 `Nothing` 可以转任何类型的默认值**，`Show(Window)`
+    与 `Show(Guid, [owner])` 同时适用且无法比出更具体者。可表达形式是按元数据参数类型给裸
+    `Nothing` 实参插 `CType(Nothing, Window)`——需要方法组枚举与实参配对，暂缓。
+    ③`BC30456` 余量主体（含 `BookmarkInfo.ImageReference` 一族）经 `--whole` 实证为 **internal
+    跨文件类型的逐文件口径问题**，不是转换缺陷；「真缺成员」子类待后续批次再定性。
+
 修复后的语法错误文件数：
 
 | 程序集 | 语言 | 语法错误文件 |

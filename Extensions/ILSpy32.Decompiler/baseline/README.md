@@ -477,6 +477,17 @@ value = (dictionary([key]))                        ' 同一个实例
       实测余量：`BC30521` 11 个文件（dnSpy 10 = `DocumentViewer.get_DocumentTab`、
       AsmEditor 1 = `HexBufferService.GetOrCreate`，均为「两个完全相同候选」的转发对）。
 
+47. **静态事件订阅与自定义事件访问器参数**（打磨轮，realBadFiles 962→942）。两个独立根因：
+    ①C# 静态事件订阅 `MetroWindow.MetroWindowCreated += h` 的接收者是**类型名**，`GetTypeName`
+    对 `TypeReferenceExpression` 无分支 → 判不出是事件 → 发成 `+=`（VB 报 BC30456/BC30451，
+    whole 模式 88 条）。修法：`IsEventAccess` 增加类型名目标分支，走 `HasEvent(类型名, 成员)`。
+    ②C# 自定义事件 add/remove 访问器的 `value` 参数是**隐式**的，VB 必须写在访问器头
+    （`AddHandler(value As EventHandler(Of T))`，BC31133 81→0），否则体内 `value` 被 VB 解析到
+    无关的 `Value` 结构体（BC31419 52→7，余 7 为 internal 跨文件口径）。修法：转换访问器体前
+    注册 `value` 类型，转换后给两个访问器合成参数节点（与 setter 的 `value` 合成同一模式）。
+    与原 IL 等价：AddHandler/remove 与 C# 的 add/remove 语义一致；合成参数只是把隐式参数显式化，
+    不改变访问器行为。
+
 修复后的语法错误文件数：
 
 | 程序集 | 语言 | 语法错误文件 |

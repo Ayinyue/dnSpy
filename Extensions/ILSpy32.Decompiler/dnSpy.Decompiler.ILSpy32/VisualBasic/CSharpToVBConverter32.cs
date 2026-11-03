@@ -1965,6 +1965,14 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			case CS.IdentifierExpression identifier:
 				return IsEventName(identifier.Identifier);
 			case CS.MemberReferenceExpression member:
+				if (member.Target is CS.TypeReferenceExpression typeReference) {
+					// Static event: "MetroWindow.MetroWindowCreated += handler" — the receiver is
+					// a type name, which GetTypeName cannot resolve.
+					var staticTypeName = typeReference.Type?.ToString();
+					if (string.IsNullOrEmpty(staticTypeName))
+						return false;
+					return typeResolver.HasEvent(staticTypeName, member.MemberName) ?? true;
+				}
 				var targetType = typeResolver.GetTypeName(member.Target);
 				if (targetType is null)
 					return false;
@@ -2745,6 +2753,20 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		/// their raise semantics cannot be expressed in VB, so they keep the explicit compile
 		/// error instead of silently dropping the raise.
 		/// </summary>
+		/// <summary>
+		/// VB's Custom Event accessors must carry their value parameter in the header
+		/// ("AddHandler(value As EventHandler(Of T))", BC31133) while C# keeps it implicit; the
+		/// parameter node is added here, after the body conversion has already run.
+		/// </summary>
+		void SynthesizeEventAccessorValueParameter(Accessor accessor, CS.CustomEventDeclaration customEventDeclaration, object data) {
+			if (accessor.Parameters.Any())
+				return;
+			accessor.Parameters.Add(new ParameterDeclaration {
+				Name = new Identifier(BoxedTextColor.Parameter, "value", ICSharpCode.NRefactory.TextLocation.Empty),
+				Type = (AstType)customEventDeclaration.ReturnType.AcceptVisitor(this, data),
+			});
+		}
+
 		BlockStatement CreateSynthesizedRaiseEventBody(CS.CustomEventDeclaration declaration, List<ParameterDeclaration> parameters) {
 			parameters.Clear();
 			var eventDef = declaration.Annotation<EventDef>();
@@ -2981,8 +3003,14 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			result.ReturnType = (AstType)customEventDeclaration.ReturnType.AcceptVisitor(this, data);
 			CreateImplementsClausesForEvent(customEventDeclaration, result);
 			if (result.IsCustom) {
+				// The C# add/remove accessors keep their value parameter implicit, but VB requires
+				// it in the accessor header ("AddHandler(value As EventHandler(Of T))", BC31133)
+				// and the bodies reference it. Register the type before the bodies are converted.
+				variableTypes["value"] = customEventDeclaration.ReturnType.ToString();
 				result.AddHandlerBlock = (Accessor)customEventDeclaration.AddAccessor.AcceptVisitor(this, data);
 				result.RemoveHandlerBlock = (Accessor)customEventDeclaration.RemoveAccessor.AcceptVisitor(this, data);
+				SynthesizeEventAccessorValueParameter(result.AddHandlerBlock, customEventDeclaration, data);
+				SynthesizeEventAccessorValueParameter(result.RemoveHandlerBlock, customEventDeclaration, data);
 				// A VB Custom Event must declare RaiseEvent (BC31132) and the C# tree has no raise
 				// accessor at all. Only the forms whose raise semantics VB can express get one
 				// synthesized; list-backed or forwarding accessors keep the explicit error.

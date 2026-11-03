@@ -3094,6 +3094,71 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			return EndNode(indexerDeclaration, decl);
 		}
 
+		/// <summary>
+		/// True when the method is the engine-generated forwarder for an accessor-level .override
+		/// that sits on an interface property's getter (its body carries the engine's ".override
+		/// directive" comment and the name follows the get_ convention). The real accessor keeps
+		/// its method form; only the forwarder becomes a property. Setter-only forwarders keep
+		/// the method form too: their return type is void, not the property type.
+		/// </summary>
+		bool IsGetterForwarderForInterfaceProperty(CS.MethodDeclaration method, MethodDef methodDef,
+				out ITypeDefOrRef interfaceType, out string propertyName) {
+			interfaceType = null!;
+			propertyName = null!;
+			if (!method.Name.StartsWith("get_", StringComparison.Ordinal) || methodDef.Overrides.Count == 0)
+				return false;
+			var body = method.Body;
+			if (body is null || !body.Descendants.OfType<CS.Comment>().Any(c => c.Content != null && c.Content.Contains(".override directive")))
+				return false;
+			foreach (var o in methodDef.Overrides) {
+				var declaration = o.MethodDeclaration;
+				var accessorName = declaration.Name;
+				if (accessorName is null || !accessorName.StartsWith("get_", StringComparison.Ordinal))
+					continue;
+				// dnlib cannot resolve types from other modules here, so cecil confirms that the
+				// override target really is an interface property getter.
+				var iface = DnlibCecilBridge.TryGetTypeReference(module, declaration.DeclaringType)?.Resolve();
+				if (iface is null || !iface.IsInterface)
+					continue;
+				var property = iface.Properties.FirstOrDefault(p => p.GetMethod?.Name == accessorName);
+				if (property is null)
+					continue;
+				interfaceType = declaration.DeclaringType;
+				propertyName = property.Name;
+				return true;
+			}
+			return false;
+		}
+
+		/// <summary>
+		/// Builds the VB property form of an accessor forwarder: a Private ReadOnly Property named
+		/// "&lt;iface&gt;_&lt;name&gt;" whose getter is the forwarding body, with an Implements clause
+		/// naming the interface property. The synthetic name avoids clashing with the real
+		/// accessor method and with any inherited member of the same name.
+		/// </summary>
+		PropertyDeclaration CreatePropertyFromGetterForwarder(CS.MethodDeclaration orig, ITypeDefOrRef interfaceType, string propertyName, object data) {
+			var result = new PropertyDeclaration();
+
+			members.Push(new MemberInfo());
+
+			ConvertNodes(orig.Attributes.Where(section => section.AttributeTarget != "return"), result.Attributes);
+			var ifaceName = interfaceType.Name ?? "I";
+			var tick = ifaceName.IndexOf('`');
+			if (tick >= 0)
+				ifaceName = ifaceName.Substring(0, tick);
+			result.Name = Identifier.Create(BoxedTextColor.InstanceProperty, ifaceName + "_" + propertyName);
+			result.ReturnType = (AstType)orig.ReturnType.AcceptVisitor(this, data);
+			var getter = new Accessor();
+			getter.Body = (BlockStatement)orig.Body.AcceptVisitor(this, data);
+			result.Getter = getter;
+			result.Modifiers = Modifiers.Private | Modifiers.ReadOnly;
+			result.ImplementsClause.Add(InterfaceMemberSpecifier.CreateWithData(CreateType(interfaceType), propertyName, orig.Body));
+
+			members.Pop();
+
+			return result;
+		}
+
 		public AstNode VisitMethodDeclaration(CS.MethodDeclaration methodDeclaration, object data)
 		{
 			CS.Attribute attr;
@@ -3135,6 +3200,16 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 				return EndNode(methodDeclaration, result);
 			} else {
+				// The engine renders an accessor-level .override to an interface property as a
+				// forwarding method named get_X plus a comment-marked helper; VB cannot implement
+				// a property member with a method (README 37). Turn the helper into a Private
+				// ReadOnly Property whose Implements clause names the property.
+				var accessorMethod = methodDeclaration.Annotation<MethodDef>();
+				if (accessorMethod != null &&
+						IsGetterForwarderForInterfaceProperty(methodDeclaration, accessorMethod, out var ifaceType, out var ifacePropertyName)) {
+					return EndNode(methodDeclaration, CreatePropertyFromGetterForwarder(methodDeclaration, ifaceType, ifacePropertyName, data));
+				}
+
 				var result = new MethodDeclaration();
 
 				members.Push(new MemberInfo());

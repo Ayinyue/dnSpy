@@ -488,6 +488,17 @@ value = (dictionary([key]))                        ' 同一个实例
     与原 IL 等价：AddHandler/remove 与 C# 的 add/remove 语义一致；合成参数只是把隐式参数显式化，
     不改变访问器行为。
 
+48. **`.override` 挂在属性访问器上的转发函数改为属性形态**（README 37 的收口，打磨轮）。
+    引擎对「类自身方法直接 `.override` 到接口属性 getter」的形态会额外生成一个注释标记的转发
+    函数（`get_DocumentTab`），旧输出让**函数**声称实现接口**属性**成员（VB 拒绝，BC30401）。
+    现在识别该转发函数（body 含引擎的 ".override directive" 注释且名为 get_*），改发
+    `Private ReadOnly Property <Iface>_<Prop> As T Implements I.<Prop>`——合成名避免与真实访问器
+    方法及继承成员撞名。判定不经 dnlib 的 ResolveMethodDef/ResolveTypeDef（对外部接口返回
+    null，既有 GetMethods 路径 1 因此静默失效），改走 Cecil 桥确认「目标是接口的属性 getter」。
+    setter-only 转发器保留方法形态（其返回类型是 void，不是属性类型）。与原 IL 等价：接口映射
+    不变，只是把引擎的 C# 转发技巧翻译成 VB 的显式属性实现。
+    效果：BC30401 49→15（余 12 文件全为噪声）、BC30521 11→8。
+
 修复后的语法错误文件数：
 
 | 程序集 | 语言 | 语法错误文件 |

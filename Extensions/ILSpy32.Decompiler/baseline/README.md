@@ -426,6 +426,57 @@ value = (dictionary([key]))                        ' 同一个实例
     类型让可空值比较发成 `Is/IsNot`。修法：别名重映射为 ``System.Nullable`1`` 再查
     （ExpressionTypeResolver.cs:621）。
 
+46. **重复实现子句与「仅返回类型不同」的成员对**（Batch 5 主根因，`BC30583`/`BC30521`
+    C+B 族）。两个独立缺陷、一处叠加：
+    - **BC30583**：`MatchViaCecil` 的两条候选路径（dnlib 解析不到接口时的 cecil 兜底与泛型
+      定义兜底）按「名字+参数个数+参数名」匹配、不比较返回类型。接口继承链上派生接口以不同
+      返回类型重定义同名成员时（`IWpfTextView.GetTextViewLineContainingBufferPosition`
+      隐藏 `ITextView` 的同签名成员；或 `IEnumerable(Of T).GetEnumerator` 与
+      `IEnumerable.GetEnumerator`），类里每个同签名方法都会把两个接口成员都认领成自己的
+      Implements 子句。修法：yield 前加**返回类型一致**过滤——两侧都是元数据拼写
+      （dnlib `MethodSig.RetType` vs cecil `ReturnType`），比较「泛型定义全名」：保留
+      arity（``IEnumerator`1`` ≠ `IEnumerator`）、剥掉泛型实参（``IEnumerator`1<T>`` 与
+      ``IEnumerator`1<Foo>`` 相等，因为子句点的是接口而不是实参）；任一侧是泛型参数、
+      多维数组、指针、modreq/modopt 时保持候选（只加确定事实）。
+      **与第 36 条红线的偏差说明**：此处刻意不用 `NormalizeParameterTypeName` 做比较器——
+      它剥 arity，会让非泛型 `IEnumerable.GetEnumerator` 冒领泛型孪生成员（GetEnumerator 族
+      33/45 文件全靠这条）；同函数既有的参数名比较（:`3261`-`3265`）仍走旧口径，与第 36 条
+      针对的「VB 拼写 vs 元数据拼写」场景不同——本条两侧都是元数据拼写，没有归一化的必要。
+    - **BC30521（C/B 族）**：上面两族修好后，同一类里还剩两个「名字+参数相同、仅返回类型
+      （或 ByRef/ByVal，BC30345）不同」的成员——VB 根本不允许（BC30301；补 Overloads 无效，
+      勘察已实测证伪），调用点全部歧义。修法：**改名 C# 显式接口实现那一侧**（VB 惯用法
+      `GetEnumerator1`）：C# 语法上显式接口实现永远不能以简单名调用，类内所有非限定调用点
+      都绑定另一个成员，因此改名零调用点重写、语义严格等价（接口分发经 Implements 子句，
+      子句跟着成员节点走）；跨文件同样安全——其它类型对显式实现的引用只能经接口成员。
+      任务书原述「改不带 Implements 子句的一侧+重写调用点」按同一确定性依据落实为改
+      「显式实现侧」：GetEnumerator 族两侧都带子句、WpfCommandService 族只有显式实现带，
+      只有这个判据对两族都成立且不需要调用点重写（300 型切片实测除目标类型外全部逐字节
+      不变）。判定在 `VisitTypeDeclaration` 预扫描：同名（VB 大小写不敏感）+同类型参数数+
+      同参数类型（保 arity 的结构比较，剥泛型实参）成组，组内返回类型拼写出现≥2 个不同值
+      （BC30301）或 ByRef/ByVal 模式不同（BC30345）才动手；组内无显式实现不动（C# 不允许
+      这种成员对没有显式实现，出现即保守跳过）；全显式组保留第一个。**改名等价性**：IL
+      可见方法名变了（`GetEnumerator`→`GetEnumerator1`），但接口映射经 Implements 子句保持，
+      输出与原 IL 的成员名不再逐一对应；反射字符串（`GetType().GetMethod("…")`）按原 IL
+      限定名书写时不再绑定——本语料未出现该形态。
+    - **BC30521（A 族）**：`[DefaultValue(null)]` 直译成 `DefaultValue(Nothing)`，无类型
+      Nothing 落到 `DefaultValueAttribute` 全部 14 个基元类型构造器上且无最具体候选。
+      修法：特性实参的 null 字面量发成 `DirectCast(Nothing, Object)`（`VisitAttribute`），
+      C# null 的 MemberValue 同为 null，语义不变；全语料扫描 null 特性实参仅
+      `DefaultValue(Nothing)` 一族（dnSpy.dll 18 处/14 文件，AsmEditor/Contracts 0 处）。
+    - **本条余量（未修，计数不变）**：属性对的子句归属仍由绑定器决定——
+      `MatchProperty`（AstAnnotationBinder.cs:350）没有返回类型决胜（`MatchMethod` 有，
+      第 34 条），显式实现属性对（`ITextView.TextViewLines` / `IWpfTextView.TextViewLines`，
+      返回 `ITextViewLineCollection` / `IWpfTextViewLineCollection`）两个语法节点都绑到
+      第一个限定名 PropertyDef，`IWpfTextView.TextViewLines` 无人认领（`HexTextView`
+      BC30149+BC30401，改前后各 2 条，本批未回升）。后续 batch 给 MatchProperty 加
+      `ReturnTypeMatches` 决胜即可。BC31035/BC30149 在 `HexToolTipInfoCollection` 一族是
+      Friend 可见性（BC30389，判噪声）级联出的真错误，whole 口径消失，属度量口径。
+      `BC30345` 余 3 个文件（`GetWordSpan`：两个 `Shared` 成员仅 ByRef/ByVal 不同，组内无
+      显式接口实现，按上述判据保守跳过）。
+      D 族（`.override` 挂在属性访问器上的转发函数）按第 37 条既定计划单列，本批不动——
+      实测余量：`BC30521` 11 个文件（dnSpy 10 = `DocumentViewer.get_DocumentTab`、
+      AsmEditor 1 = `HexBufferService.GetOrCreate`，均为「两个完全相同候选」的转发对）。
+
 修复后的语法错误文件数：
 
 | 程序集 | 语言 | 语法错误文件 |
@@ -486,7 +537,8 @@ Contracts.Logic（84 个 public 类型）的首次结果：**54 个文件编译�
 | `BC30205` 属性初始化顺序（dnSpy.dll）| 1 | **0** |
 | 元组表达式/类型（dnSpy.dll 降级）| 18 | **0** |
 | `BC30452` 泛型实例的引用比较 | 201 | **92**（余下两侧类型都推不出的情况）|
-| `BC30583` 重复的接口子句 | 168 | **45**（其中 34 个文件全为噪声）|
+| `BC30583` 重复的接口子句 | 168 | **0**（Batch 5 返回类型过滤，第 46 条；原 45 中 34 个文件全为噪声）|
+| `BC30521` 重载歧义（同名仅返回类型/ByRef 不同）| 108 | **11**（余为转发函数重复发出，第 37 条）|
 | `BC30149` 成员子句未限定命名空间 | 3956（whole）| **0** |
 | `BC30452` `UTF8String + String` | 116 | **0** |
 | `BC30452` Char 与数值比较 | 112 | **0** |
@@ -497,8 +549,8 @@ Contracts.Logic（84 个 public 类型）的首次结果：**54 个文件编译�
 | `BC30401` 同上/签名不符 | 108 | **109**（子句都发出来了，反而多暴露 12 处真不符）|
 | `BC30002` 带元组实参的接口子句 | 675 | **669** |
 
-Contracts.Logic 的真实失败文件 54 → **10**；AsmEditor 906 → 896 → 825 → 583 → 565 → 565 → 554 → **527**；
-dnSpy.dll（3266 类型）2039 → 1408 → 1120 → 1096 → 1088 → 1068 → 1050 → 1030 → **989**。
+Contracts.Logic 的真实失败文件 54 → **10**；AsmEditor 906 → 896 → 825 → 583 → 565 → 565 → 554 → **527** → **525**（Batch 5）；
+dnSpy.dll（3266 类型）2039 → 1408 → 1120 → 1096 → 1088 → 1068 → 1050 → 1030 → **989** → **962**（Batch 5）。
 
 ### 带元组实参的接口（`IEqualityComparer(Of (Code, String, CpuidFeature()))`）
 

@@ -1352,9 +1352,34 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			Enum.TryParse(((CS.AttributeSection)attribute.Parent).AttributeTarget, true, out target);
 			attr.Target = target;
 			attr.Type = (AstType)attribute.Type.AcceptVisitor(this, data);
-			ConvertNodes(attribute.Arguments, attr.Arguments);
+			foreach (var argument in attribute.Arguments) {
+				var converted = (Expression)argument.AcceptVisitor(this, data);
+				// An untyped null literal lands on every primitive constructor of an attribute
+				// like DefaultValueAttribute (15 overloads) and VB finds no most-specific one
+				// (BC30521) - C# only considers the reference-type constructors. Spelling the
+				// null as DirectCast(Nothing, Object) restores a single candidate and stores the
+				// same MemberValue (null) as the C# attribute.
+				if (IsNullLiteral(argument))
+					converted = new CastExpression {
+						CastType = CastType.DirectCast,
+						Expression = converted,
+						Type = new PrimitiveType("Object")
+					};
+				attr.Arguments.Add(converted);
+			}
 
 			return EndNode(attribute, attr);
+		}
+
+		static bool IsNullLiteral(CS.AstNode node) {
+			switch (node) {
+			case CS.NullReferenceExpression:
+				return true;
+			case CS.PrimitiveExpression primitive:
+				return primitive.Value is null;
+			default:
+				return false;
+			}
 		}
 
 		public AstNode VisitAttributeSection(CS.AttributeSection attributeSection, object data)
@@ -1509,6 +1534,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 				type.Name = Identifier.Create(typeDeclaration.NameToken.Annotations, typeDeclaration.Name);
 
+				CollectMemberRenames(typeDeclaration);
 				types.Push(type);
 				ConvertMembers(typeDeclaration, type, CS.Roles.TypeMemberRole, TypeDeclaration.MemberRole);
 				types.Pop();
@@ -1516,6 +1542,244 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				return EndNode(typeDeclaration, type);
 			}
 		}
+
+		// VB cannot declare two members whose signatures differ only by the return type
+		// (BC30301), and every call of that name then fails overload resolution (BC30521).
+		// C# builds such pairs around an explicit interface implementation - the non-generic
+		// GetEnumerator next to the IEnumerable(Of T) one, or a private helper next to an
+		// explicit implementation (GetCommands) - because two ordinary members with the same
+		// name and parameters are illegal in C# itself. The explicit implementation side is
+		// renamed (VB idiom: GetEnumerator1): C# can never call it with a simple name, so no
+		// call site - in this class or in any other dump - binds to it, and interface dispatch
+		// keeps working through the emitted Implements clause. The output's member name no
+		// longer matches the IL method name one-to-one; see README item 46 for the equivalence
+		// argument.
+		readonly Dictionary<CS.EntityDeclaration, string> memberRenames =
+			new Dictionary<CS.EntityDeclaration, string>();
+
+		class ConflictGroupMember {
+			public CS.EntityDeclaration Node;
+			public string RefPattern;
+			public string ReturnKey;
+		}
+
+		void CollectMemberRenames(CS.TypeDeclaration typeDeclaration) {
+			if (typeDeclaration.ClassType == CS.ClassType.Interface || typeDeclaration.ClassType == CS.ClassType.Enum)
+				return;
+			var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			var groups = new Dictionary<string, List<ConflictGroupMember>>(StringComparer.Ordinal);
+			foreach (var member in typeDeclaration.Members) {
+				var name = GetMemberDeclarationName(member);
+				if (name is null)
+					continue;
+				usedNames.Add(name);
+				var key = GetMemberSigKey(member, out var refPattern, out var returnKey);
+				if (key is null)
+					continue;
+				if (!groups.TryGetValue(key, out var group))
+					groups[key] = group = new List<ConflictGroupMember>();
+				group.Add(new ConflictGroupMember { Node = member, RefPattern = refPattern, ReturnKey = returnKey });
+			}
+			// The binder renames fields for VB's case-insensitive name space; do not reuse those
+			// names either (both declaration and references go through Identifier).
+			CS.AstNode root = typeDeclaration;
+			while (root.Parent != null)
+				root = root.Parent;
+			if (root is CS.SyntaxTree tree &&
+					tree.Annotation<Dictionary<string, string>>() is Dictionary<string, string> binderRenames) {
+				foreach (var value in binderRenames.Values)
+					usedNames.Add(value);
+			}
+			foreach (var group in groups.Values) {
+				// Rename only on a definite conflict: the members' VB signatures cannot coexist.
+				// VB signatures exclude the return type but include ref-ness, so two shapes are
+				// illegal: differing return types (BC30301) and ByRef/ByVal-only differences
+				// (BC30345). Each call of the name then fails overload resolution (BC30521).
+				// Unknown shapes keep the old output.
+				var returnKeys = new HashSet<string>(StringComparer.Ordinal);
+				var refPatterns = new HashSet<string>(StringComparer.Ordinal);
+				bool returnsKnown = true;
+				bool refsKnown = true;
+				foreach (var member in group) {
+					if (member.ReturnKey is null)
+						returnsKnown = false;
+					else
+						returnKeys.Add(member.ReturnKey);
+					if (member.RefPattern is null)
+						refsKnown = false;
+					else
+						refPatterns.Add(member.RefPattern);
+				}
+				bool conflicts = (returnsKnown && returnKeys.Count >= 2) || (refsKnown && refPatterns.Count >= 2);
+				if (!conflicts)
+					continue;
+				var explicitImpls = group.Where(m => IsExplicitInterfaceImplementation(m.Node)).Select(m => m.Node).ToList();
+				if (explicitImpls.Count == 0)
+					continue;
+				// A non-explicit member keeps its name: every simple-name call site in the class
+				// body binds to it (C# cannot call an explicit implementation by simple name), so
+				// renaming only the explicit implementations preserves every call site. When the
+				// whole group consists of explicit implementations, the first one keeps the name.
+				var targets = group.Any(m => !IsExplicitInterfaceImplementation(m.Node))
+					? explicitImpls
+					: explicitImpls.Skip(1).ToList();
+				foreach (var target in targets) {
+					var original = GetMemberDeclarationName(target);
+					if (string.IsNullOrEmpty(original))
+						continue;
+					var index = 1;
+					string renamed;
+					do {
+						renamed = original + index;
+						index++;
+					} while (usedNames.Contains(renamed));
+					usedNames.Add(renamed);
+					memberRenames[target] = renamed;
+				}
+			}
+		}
+
+		static string GetMemberDeclarationName(CS.AstNode member) {
+			switch (member) {
+			case CS.MethodDeclaration method:
+				return method.Name;
+			case CS.PropertyDeclaration property:
+				return property.Name;
+			case CS.IndexerDeclaration indexer:
+				return indexer.Name;
+			case CS.EventDeclaration @event:
+				return @event.Name;
+			case CS.CustomEventDeclaration customEvent:
+				return customEvent.Name;
+			case CS.FieldDeclaration field:
+				return field.Variables.FirstOrDefault()?.Name;
+			case CS.TypeDeclaration nested:
+				return nested.Name;
+			case CS.OperatorDeclaration op:
+				return op.Name;
+			default:
+				return null;
+			}
+		}
+
+		// Groups members that VB sees as candidates for the same call: same name (VB is
+		// case-insensitive), same number of type and value parameters and the same parameter
+		// types. The parameter type spelling keeps its arity (IEnumerator`1 vs IEnumerator) so
+		// the non-generic IEnumerable.GetEnumerator does not group with the generic one -
+		// NormalizeParameterTypeName strips the arity and must not be used here. Generic type
+		// arguments are stripped instead: two members returning IEnumerable`1 of different
+		// element types are exactly the "differ only by return type" conflict (VB signatures
+		// do not include the return type), while a real overload (different parameters) is not
+		// grouped and is left alone. ref-ness is deliberately left out of the key so the
+		// ByRef/ByVal-only pair (BC30345) lands in one group; the pattern itself is reported
+		// through refPattern and decides the conflict. Return keys never join the key.
+		string GetMemberSigKey(CS.AstNode member, out string refPattern, out string returnKey) {
+			refPattern = null;
+			returnKey = null;
+			string name;
+			int typeParameterCount;
+			IEnumerable<CS.ParameterDeclaration> parameters;
+			switch (member) {
+			case CS.MethodDeclaration method:
+				name = method.Name;
+				typeParameterCount = method.TypeParameters.Count;
+				parameters = method.Parameters;
+				returnKey = GetAstTypeKeyWithArity(method.ReturnType);
+				break;
+			case CS.PropertyDeclaration property:
+				name = property.Name;
+				typeParameterCount = 0;
+				parameters = GetIndexerParameters(property);
+				returnKey = GetAstTypeKeyWithArity(property.ReturnType);
+				break;
+			case CS.IndexerDeclaration indexer:
+				name = indexer.Name;
+				typeParameterCount = 0;
+				parameters = indexer.Parameters;
+				returnKey = GetAstTypeKeyWithArity(indexer.ReturnType);
+				break;
+			default:
+				return null;
+			}
+			if (string.IsNullOrEmpty(name))
+				return null;
+			var parts = new List<string>();
+			var refs = new StringBuilder();
+			foreach (var parameter in parameters) {
+				var part = GetAstTypeKeyWithArity(parameter?.Type);
+				if (part is null)
+					return null;
+				parts.Add(part);
+				// VB spells ref/out parameters ByRef; the modifier is part of the VB signature.
+				var modifier = parameter.ParameterModifier;
+				refs.Append(modifier == CS.ParameterModifier.Ref || modifier == CS.ParameterModifier.Out ? "R" : "V");
+			}
+			refPattern = refs.ToString();
+			return name.ToUpperInvariant() + "#" + typeParameterCount + "#" + parts.Count + "#" + string.Join("|", parts);
+		}
+
+		// ILSpy 3.2 keeps indexer parameters out of PropertyDeclaration.Parameters; the
+		// environment provider reconstructs them from the metadata annotation.
+		IEnumerable<CS.ParameterDeclaration> GetIndexerParameters(CS.PropertyDeclaration property) {
+			try {
+				return provider.GetParametersForProperty(property);
+			}
+			catch {
+				return Array.Empty<CS.ParameterDeclaration>();
+			}
+		}
+
+		static bool IsExplicitInterfaceImplementation(CS.AstNode member) {
+			switch (member) {
+			case CS.MethodDeclaration method:
+				return method.PrivateImplementationType is { IsNull: false };
+			case CS.PropertyDeclaration property:
+				return property.PrivateImplementationType is { IsNull: false };
+			case CS.IndexerDeclaration indexer:
+				return indexer.PrivateImplementationType is { IsNull: false };
+			default:
+				return false;
+			}
+		}
+
+		// Canonical spelling of a syntax-tree type that keeps the generic arity: IEnumerator
+		// and IEnumerator`1 compare unequal, IEnumerator`1<A> and IEnumerator`1<B> compare
+		// equal. Both sides come from the same decompiled tree and use the same conventions,
+		// so no normalisation against VB/metadata spellings is involved here.
+		static string GetAstTypeKeyWithArity(CS.AstType type) {
+			switch (type) {
+			case null:
+			case CS.AstType t when t.IsNull:
+				return null;
+			case CS.PrimitiveType primitive:
+				return primitive.Keyword?.ToUpperInvariant();
+			case CS.SimpleType simple:
+				var simpleName = simple.Identifier;
+				if (string.IsNullOrEmpty(simpleName))
+					return null;
+				return simple.TypeArguments.Count > 0 ? simpleName.ToUpperInvariant() + "`" + simple.TypeArguments.Count : simpleName.ToUpperInvariant();
+			case CS.MemberType memberType:
+				var targetKey = GetAstTypeKeyWithArity(memberType.Target);
+				if (string.IsNullOrEmpty(targetKey) || string.IsNullOrEmpty(memberType.MemberName))
+					return null;
+				var memberName = memberType.TypeArguments.Count > 0 ? memberType.MemberName.ToUpperInvariant() + "`" + memberType.TypeArguments.Count : memberType.MemberName.ToUpperInvariant();
+				return targetKey + "." + memberName;
+			case CS.ComposedType composed:
+				var baseKey = GetAstTypeKeyWithArity(composed.BaseType);
+				if (string.IsNullOrEmpty(baseKey))
+					return null;
+				if (composed.HasNullableSpecifier)
+					baseKey += "?";
+				foreach (var specifier in composed.ArraySpecifiers)
+					baseKey += "[" + specifier.Dimensions + "]";
+				return baseKey;
+			default:
+				return null;
+			}
+		}
+
+		string GetRenamedMemberName(CS.EntityDeclaration member, string original) =>
+			memberRenames.TryGetValue(member, out var renamed) ? renamed : original;
 
 		public AstNode VisitUsingAliasDeclaration(CS.UsingAliasDeclaration usingAliasDeclaration, object data)
 		{
@@ -2777,7 +3041,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			if (IsOwnerAModule(indexerDeclaration))
 				indexerDeclaration.Modifiers &= ~CS.Modifiers.Static;
 			decl.Modifiers = ConvertModifiers(indexerDeclaration.Modifiers, indexerDeclaration);
-			decl.Name = Identifier.Create(BoxedTextColor.InstanceProperty, indexerDeclaration.Name);
+			decl.Name = Identifier.Create(BoxedTextColor.InstanceProperty, GetRenamedMemberName(indexerDeclaration, indexerDeclaration.Name));
 			ConvertNodes(indexerDeclaration.Attributes.Where(section => section.AttributeTarget == "return"), decl.ReturnTypeAttributes);
 			CreateImplementsClausesForProperty(indexerDeclaration, decl);
 			decl.ReturnType = (AstType)indexerDeclaration.ReturnType.AcceptVisitor(this, data);
@@ -2849,7 +3113,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 				ConvertNodes(methodDeclaration.Attributes.Where(section => section.AttributeTarget != "return"), result.Attributes);
 				ConvertNodes(methodDeclaration.ModifierTokens, result.ModifierTokens);
-				result.Name = Identifier.Create(methodDeclaration.NameToken.Annotations, methodDeclaration.Name);
+				result.Name = Identifier.Create(methodDeclaration.NameToken.Annotations, GetRenamedMemberName(methodDeclaration, methodDeclaration.Name));
 				result.IsSub = IsSub(methodDeclaration.ReturnType);
 				ConvertNodes(methodDeclaration.Parameters, result.Parameters);
 				ConvertNodes(methodDeclaration.TypeParameters, result.TypeParameters);
@@ -2957,6 +3221,13 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 						continue;
 					if (ifaceMethod.Parameters.Count != method.MethodSig.Params.Count)
 						continue;
+					// Derived interfaces may redeclare a member with a different return type
+					// (IWpfTextView.GetTextViewLineContainingBufferPosition hides the ITextView one).
+					// A same-name/same-arity match against the wrong redeclaration makes one method
+					// emit two clauses (BC30583); the return types are both metadata spellings here,
+					// so a definite mismatch can be rejected outright.
+					if (!ReturnTypesCompatible(method.MethodSig.RetType, ifaceMethod.ReturnType))
+						continue;
 					yield return new ImplementsResult(iface, ifaceMethod.Name, ifaceMethod);
 				}
 				yield break;
@@ -2996,8 +3267,92 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 						break;
 					}
 				}
-				if (matches)
+				if (matches && ReturnTypesCompatible(method.MethodSig.RetType, ifaceMethod.ReturnType))
 					yield return new ImplementsResult(iface, ifaceMethod.Name, method);
+			}
+		}
+
+		/// <summary>
+		/// Return type filter for the cecil fallback matches. Both sides are metadata spellings
+		/// (dnlib signature vs cecil reference), so they are compared as the generic type
+		/// definition's full name: the arity is kept (IEnumerator`1 vs IEnumerator) while the
+		/// interface's own type arguments are stripped (IEnumerator`1&lt;T&gt; vs
+		/// IEnumerator`1&lt;Foo&gt; stay equal). <see cref="AstAnnotationBinder.NormalizeParameterTypeName"/>
+		/// must not be used here: it strips the arity, which would let the non-generic
+		/// IEnumerable.GetEnumerator claim the generic one and back (33 files). Any side that
+		/// cannot be expressed (a generic parameter, a multi-dimensional array, a pointer) keeps
+		/// the candidate - only a definite mismatch vetoes the clause.
+		/// </summary>
+		static bool ReturnTypesCompatible(TypeSig dnlibRetType, Mono.Cecil.TypeReference cecilRetType) {
+			var dnlibName = GetGenericDefFullName(dnlibRetType);
+			var cecilName = GetGenericDefFullName(cecilRetType);
+			if (dnlibName is null || cecilName is null)
+				return true;
+			return string.Equals(dnlibName, cecilName, StringComparison.Ordinal);
+		}
+
+		static string GetGenericDefFullName(TypeSig sig) {
+			while (true) {
+				switch (sig) {
+				case null:
+					return null;
+				case ByRefSig byRef:
+					sig = byRef.Next;
+					continue;
+				case PinnedSig pinned:
+					sig = pinned.Next;
+					continue;
+				case CModReqdSig:
+				case CModOptSig:
+					// A modreq/modopt is part of the signature identity; neither spelling both
+					// sides compatibly nor ignoring it is safe, so keep the candidate.
+					return null;
+				case GenericVar:
+				case GenericMVar:
+					return null;
+				case GenericInstSig genericInst:
+					return genericInst.GenericType?.TypeDefOrRef?.FullName;
+				case SZArraySig szArray:
+					var szElement = GetGenericDefFullName(szArray.Next);
+					return szElement is null ? null : szElement + "[]";
+				case TypeDefOrRefSig typeDefOrRef:
+					return typeDefOrRef.TypeDefOrRef?.FullName;
+				default:
+					// Multi-dimensional arrays, pointers and function pointers are too rare to
+					// spell both sides compatibly; keeping the candidate is always safe.
+					return null;
+				}
+			}
+		}
+
+		static string GetGenericDefFullName(Mono.Cecil.TypeReference type) {
+			while (true) {
+				if (type is null)
+					return null;
+				if (type is Mono.Cecil.GenericParameter)
+					return null;
+				if (type is Mono.Cecil.GenericInstanceType genericInst)
+					return genericInst.ElementType?.FullName;
+				if (type is Mono.Cecil.ByReferenceType byRef) {
+					type = byRef.ElementType;
+					continue;
+				}
+				if (type is Mono.Cecil.PinnedType pinned) {
+					type = pinned.ElementType;
+					continue;
+				}
+				if (type is Mono.Cecil.RequiredModifierType || type is Mono.Cecil.OptionalModifierType)
+					// See the dnlib side: a modreq/modopt cannot be spelled safely, keep the candidate.
+					return null;
+				if (type is Mono.Cecil.ArrayType arrayType) {
+					if (arrayType.Rank != 1)
+						return null;
+					var element = GetGenericDefFullName(arrayType.ElementType);
+					return element is null ? null : element + "[]";
+				}
+				if (type is Mono.Cecil.PointerType || type is Mono.Cecil.FunctionPointerType || type is Mono.Cecil.SentinelType)
+					return null;
+				return type.FullName;
 			}
 		}
 
@@ -3769,7 +4124,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			ConvertNodes(propertyDeclaration.Attributes.Where(section => section.AttributeTarget != "return"), decl.Attributes);
 			decl.Getter = (Accessor)propertyDeclaration.Getter.AcceptVisitor(this, data);
 			decl.Modifiers = ConvertModifiers(propertyDeclaration.Modifiers, propertyDeclaration);
-			decl.Name = Identifier.Create(propertyDeclaration.NameToken.Annotations, propertyDeclaration.Name);
+			decl.Name = Identifier.Create(propertyDeclaration.NameToken.Annotations, GetRenamedMemberName(propertyDeclaration, propertyDeclaration.Name));
 			ConvertNodes(propertyDeclaration.Attributes.Where(section => section.AttributeTarget == "return"), decl.ReturnTypeAttributes);
 			CreateImplementsClausesForProperty(propertyDeclaration, decl);
 			decl.ReturnType = (AstType)propertyDeclaration.ReturnType.AcceptVisitor(this, data);

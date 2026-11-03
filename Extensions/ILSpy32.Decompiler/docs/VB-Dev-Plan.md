@@ -1,6 +1,6 @@
 # VB 语义正确性开发计划（TASK 清单）
 
-> 配套阅读：`VB-Action-Plan.md`（方向与规矩）、`baseline/README.md`（45 条已修经验）。
+> 配套阅读：`VB-Action-Plan.md`（方向与规矩）、`baseline/README.md`（46 条已修经验）。
 > 本文件是**可勾选的执行计划**：每批 = 一类根因，独立验收，可独立回退。
 > 状态标记：`[ ]` 未开始 / `[x]` 完成 / `[~]` 进行中 / `[!]` 受阻待确认。
 > 基线提交：`50433f691`。基线数字（2026-11-02 实测）见下表，**回归时逐项对照**。
@@ -22,7 +22,7 @@ VB 语义正确性只是迁移验收的一关：3.2 的输出质量必须**不�
 ### M2 的验收（即原 Definition of Done，降级为里程碑门槛）
 
 1. 语法错误 0 / 0 / 0（2026-11-03 达成：`BC30036` 整数字面量溢出已修，见 baseline/README.md 第 30 条）
-2. realBadFiles 不高于 **2.3 基线 2039**（当前 1066 ✅ 已达成），并沿 Batch 1~5 继续收敛
+2. realBadFiles 不高于 **2.3 基线 2039**（当前 962 ✅ 已达成），并沿 Batch 1~5 继续收敛
 3. 不可归零的部分（互操作类型跨文件、internal 可见性）从度量口径剥离并写明证据
 4. 每条被消掉的诊断有「为什么与原 IL 等价」的说明（README 经验表）
 
@@ -36,8 +36,9 @@ VB 语义正确性只是迁移验收的一关：3.2 的输出质量必须**不�
 
 ### 当前差距（M2）
 
-realBadFiles 989 / 527 / 10（Batch 4 后，2026-11-04 实测），可归零部分余约 200~350
-（`BC30456 真缺成员/BC30521/BC30583`；`BC32022` 已收敛至「引擎解析不到目标类型」形态
+realBadFiles 962 / 525 / 10（Batch 5 后，2026-11-04 实测），可归零部分余约 200~350
+（`BC30456 真缺成员`；`BC30583` 已清零、`BC30521` 余 11（转发函数重复发出，第 37 条）；
+`BC32022` 已收敛至「引擎解析不到目标类型」形态
 66+25、`BC31132` 余 43+12 均为按策略保留的不可表达形态），其余为度量口径问题（见第 3 节）。
 语法 0 / 0 / 0（`BC30036` 已修）。
 
@@ -47,7 +48,7 @@ realBadFiles 989 / 527 / 10（Batch 4 后，2026-11-04 实测），可归零部�
 |---|---|---|---|
 | 转换 | 3266 ok / 0 degraded | 1278 ok / 0 degraded | 84 ok / 0 degraded |
 | 语法错误 | 0 | 0 | 0 |
-| realBadFiles | **989**（Batch 4 后） | **527**（Batch 4 后） | **10** |
+| realBadFiles | **962**（Batch 5 后） | **525**（Batch 5 后） | **10** |
 
 **验收红线（任一违背即该批不通过）**
 - [ ] 引擎构建 0 错误（`dotnet build -c Release -f net10.0-windows --no-restore`）
@@ -142,12 +143,42 @@ Batch 1~5 = 里程碑 M2（质量对齐）；M3/M4 见「里程碑任务」节
 
 ### Batch 5 重复实现与重载歧义（`BC30583` 45 / `BC30521` 108）
 
-- [ ] `BC30583`：剩余代表 `ITextView.GetTextViewLineContainingBufferPosition`，查去重键为何没命中（疑似接口继承链上同名成员）
-- [ ] `BC30521`：同名不同签名的重载歧义，可能需补 `Overloads` 或区分实现
-- [ ] 全量回归
+- [x] `BC30583` 定性（2026-11-04）：不是去重键没命中，是 `MatchViaCecil` 两条候选路径按
+  「名字+参数个数+参数名」匹配、不比较返回类型——接口继承链上派生接口以不同返回类型重定义
+  同名成员（`IWpfTextView`/`ITextView`）或非泛型孪生成员（`IEnumerable`/`IEnumerable(Of T)`）
+  时，每个同签名方法各得两条子句；`TryAddClause` 去重键含接口类型、Type 不等不去重
+- [x] `BC30583` 修复：`MatchViaCecil` yield 前加返回类型过滤——比较「泛型定义全名」（保留
+  arity、剥泛型实参；泛型参数/多维数组/指针/modreq 保持候选）。刻意不用
+  `NormalizeParameterTypeName`（剥 arity 会放过 GetEnumerator 族），偏差已在 README 第 46 条写明
+- [x] `BC30521` C/B 族修复：同一类里「名字+参数相同、仅返回类型（BC30301）或 ByRef/ByVal
+  （BC30345）不同」的成员对（任务书预设的「补 Overloads」被勘察实测证伪——两个 Overloads
+  成员仍报 BC30301），改为**改名 C# 显式接口实现侧**（VB 惯用法 `GetEnumerator1`）：C# 显式
+  实现永远不能以简单名调用，所有非限定调用点都绑定另一成员，改名零调用点重写、接口分发经
+  Implements 子句保持（README 第 46 条）。判定含 ByRef/ByVal 模式差异（勘察归入形态 C 的
+  `TryGetSymbol` 实为 BC30345 形态）
+- [x] `BC30521` A 族修复：特性实参 null 字面量发 `DirectCast(Nothing, Object)`
+  （`DefaultValue(Nothing)` → 15 个构造器无最具体候选；全语料 null 特性实参仅 DefaultValue
+  一族，dnSpy.dll 18 处/14 文件）
+- [x] 单类型验证（2026-11-04）：HexTextView（形态一）BC30583×2+BC30301×2→0；
+  HexToolTipInfoCollection（形态二+B）BC30583/BC30401/BC30301/BC30521 各×4→0；
+  WpfCommandService（C）BC30301+BC30521→0（realBad 1→0）；
+  DisassemblyContentProviderImpl（BC30345 形态）BC30345+BC30521→0；
+  IDeferrableTextViewRoleMetadata（A）BC30521→0（realBad 1→0）；
+  MethodSigCreatorOptions（asm，ICloneable 形态）BC30301×4+BC30521×5→0（realBad→0）；
+  300 型切片 dump 除 2 个目标类型外逐字节不变，编译 realBad 75→74，语法 0/0/0
+- [x] 全量回归（2026-11-04，run-regression.cmd 重跑三样本）：语法 0/0/0；realBadFiles
+  962/525/10（改前 989/527/10）；`BC30583` 45→0 文件、`BC30521` 108→11（余为转发函数对，
+  第 37 条）；RESULT: OK，无回升
 
-**风险**：去重逻辑改宽会重新引入 `Implements I.Foo, I.Foo`（上一轮已踩过：按名字去重会吞合法重载）。
-**验收**：两者下降；`BC30149` 不回升。
+**余量（已定性，计数不变）**：属性对的子句归属仍受绑定器 `MatchProperty` 无返回类型决胜限制
+（`HexTextView.TextViewLines` 的 BC30149/BC30401 改前后各 2 条，待给 MatchProperty 加
+`ReturnTypeMatches` 决胜）；`HexToolTipInfoCollection` 的 BC31035/BC30149 是 Friend 可见性
+（BC30389 判噪声）级联，whole 口径消失；`BC30345` 余 3（`GetWordSpan`，组内无显式实现按
+第 46 条判据保守跳过）；D 族转发函数按第 37 条单列。
+**风险（已规避）**：去重逻辑未动（`TryAddClause` 原样），不会重新引入按名字去重吞合法重载；
+返回类型过滤只在「两侧都元数据拼写且泛型定义全名确定不同」时丢子句，泛型参数等未知形态一律
+保持候选。
+**验收**：两者下降（单类型与切片证据如上）；`BC30149` 不回升（切片逐诊断一致）✅。
 
 ### Batch 6 度量口径改造（可选，需用户拍板）
 

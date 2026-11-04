@@ -134,13 +134,17 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				WriteNote(output, "// ILSpy 3.2: cannot bridge this module.");
 				return;
 			}
-			string text;
 			try {
 				lock (engineLock) {
 					var engine = GetOrCreateEngine(cecilModule, settings);
 					var tree = decompile(engine);
+					// Definitions on the tree (the resolver reads them for colors/references),
+					// then the uncompilable compiler-generated attributes, then render.
+					AstAnnotationBinder.Attach(module, tree);
 					RemoveUncompilableCompilerAttributes(tree);
-					text = RenderTree(tree);
+					tree.AcceptVisitor(new ICSharpCode.Decompiler.CSharp.OutputVisitor.CSharpOutputVisitor(
+						new DnSpyTokenWriter(output, engine, module as ModuleDefMD, VisualBasicMetadataTextColorProvider.Instance),
+						settings.EngineSettings.CSharpFormattingOptions));
 				}
 			}
 			catch (OperationCanceledException) {
@@ -150,7 +154,6 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				WriteNote(output, "// ILSpy 3.2 decompilation failed: " + DescribeException(ex));
 				return;
 			}
-			output.Write(text, null, DecompilerReferenceFlags.None, BoxedTextColor.Text);
 		}
 
 		/// <summary>
@@ -178,12 +181,6 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				if (removed && !section.Attributes.Any())
 					section.Remove();
 			}
-		}
-
-		string RenderTree(ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree) {
-			var w = new System.IO.StringWriter();
-			tree.AcceptVisitor(new ICSharpCode.Decompiler.CSharp.OutputVisitor.CSharpOutputVisitor(w, settings.EngineSettings.CSharpFormattingOptions));
-			return w.ToString();
 		}
 
 		static void WriteNote(IDecompilerOutput output, string text) =>

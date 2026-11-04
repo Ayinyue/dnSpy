@@ -665,6 +665,31 @@ GAC 层命中 `v4.0_4.0.0.0__b03f5f7f11d50a3a`、tier-1 精确匹配不破坏；
 完整 C#（原失败形态：整类型降级）。_dnlib 对外部接口的 Resolve 带 sourceModule 参数、
 ReaderParameters 无 Clone、cecil 读程序集用 ModuleDefinition.ReadModule 再取 .Assembly。_
 
+## GUI 走查修复：C# 着色/注释/跳转（2026-11-04，条目 51）
+
+走查发现 3.2 的 C# 视图两个缺陷，同根因不同层：
+
+1. **注释（XML 文档）没了**。2.3 管线显式调 `AddXmlDocumentation`，3.2 引擎的
+   `AddXmlDocumentationTransform` 也有——但它从 `ModuleDefinition.FileName` 找
+   `<程序集>.xml`，而桥接快照是**内存模块、FileName 为 null** → 静默无文档。
+   修法：桥接层把原始程序集路径回填进快照（cecil 私有字段 `file_name`，反射写，
+   失败仅损失文档查找）。dnSpy 进程里 dnlib 知道路径而 cecil 不知道。
+2. **着色与跳转缺失**。3.2 的 C# 路径把整棵树渲染成一个纯文本块
+   （`output.Write(text, null, None, Text)`）——无着色、无引用导航；VB 路径有
+   VBTextOutputFormatter32 所以一直正常。修法：新增 `DnSpyTokenWriter : TokenWriter`
+   （引擎的 `CSharpOutputVisitor(TokenWriter, options)` 构造器直通），把 2.3
+   TextTokenWriter 的语义移植到 3.2 AST——关键字/运算符/标点/字面量/注释着色、
+   成员与类型引用写入（引用经 `GetSymbol`/ResolveResult → `GetCecil` → dnlib
+   token 反查，PreserveRids 保证两侧 token 一致）、定义带 Definition 标志、
+   `///` 注释走 `output.WriteXmlDoc`（XML 文档的 cref 跳转随之恢复）。C# 路径
+   同时跑 `AstAnnotationBinder.Attach`（与 VB 管线一致）以提供定义注解。
+   两个坑：特性名去后缀之外，**关键字转义必须调引擎的 `CSharpOutputVisitor.IsKeyword`**
+   （public static；漏掉它 `namespace`/`event` 等标识符失去 `@` 前缀 → 105 个文件
+   语法错误，门禁当场拦下）；渲染改为直写 output，失败语义与 VB 路径一致。
+
+门禁：C# 635/300/8 语法 + 1427/701/81 realBad 与修复前**完全持平**（文本零漂移），
+VB 942/525/10 持平；新增能力 = C# 全量着色 + 引用跳转 + XML 文档注释（两语言）。
+
 ## C# 质量门禁（2026-11-04，M3 补充）
 
 M3 把 C# 默认引擎也切到了 3.2，但 VB 门禁从不度量 C# 输出。新增

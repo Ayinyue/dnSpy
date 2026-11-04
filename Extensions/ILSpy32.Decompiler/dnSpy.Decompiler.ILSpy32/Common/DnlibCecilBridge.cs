@@ -21,6 +21,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using dnlib.DotNet;
 using dnlib.DotNet.Writer;
@@ -110,12 +111,28 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 					ReadSymbols = false,
 				};
 				var cecilModule = ModuleDefinition.ReadModule(stream, readerParams);
+				// The engine's AddXmlDocumentationTransform locates the documentation file from
+				// ModuleDefinition.FileName; the snapshot came from a memory stream, so hand it
+				// the original assembly's path (dnlib knows it, cecil does not).
+				if (!string.IsNullOrEmpty(location))
+					SetCecilFileName(cecilModule, location);
 				return new Entry { Module = cecilModule, Stream = stream, Resolver = resolver };
 			}
 			catch {
 				resolver?.Dispose();
 				stream.Dispose();
 				return null;
+			}
+		}
+
+		static void SetCecilFileName(ModuleDefinition module, string location) {
+			try {
+				typeof(ModuleDefinition)
+					.GetField("file_name", BindingFlags.Instance | BindingFlags.NonPublic)?
+					.SetValue(module, location);
+			}
+			catch {
+				// the documentation lookup then just stays unavailable
 			}
 		}
 

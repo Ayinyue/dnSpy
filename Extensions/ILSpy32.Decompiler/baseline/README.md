@@ -651,7 +651,7 @@ Friend 引用、但推断确实有问题」的场面一起藏掉）。要复核�
 GUI 走查发现：反编译引用 `System.Management, 4.0.0.0`（.NET Framework GAC 版本）的外部程序集时
 整类型降级（`// ILSpy 3.2 decompilation failed: AssemblyResolutionException`）。根因：桥接层的
 cecil `DefaultAssemblyResolver` 只按「名字+版本+公钥令牌」精确匹配 4 个搜索目录，而传统 GAC
-（`C:\Windows\Microsoft.NETssembly\GAC_*`）不在其中且版本不容忍；2.3 引擎走 dnSpy 自己的
+（`C:\Windows\Microsoft.NET\assembly\GAC_*`）不在其中且版本不容忍；2.3 引擎走 dnSpy 自己的
 全局解析器所以很少失败。
 
 修法：`DnlibCecilBridge` 换成三级 fail-soft 解析器——①cecil 精确匹配（原行为）；②**dnlib 模块

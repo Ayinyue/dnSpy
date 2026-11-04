@@ -63,10 +63,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			var node = nodeStack.Peek();
 			if (node.Role == AstNode.Roles.Type && node.Parent is ObjectCreationExpression)
 				node = node.Parent;
-			var memberRef = node.Annotation<IMemberRef>();
+			var memberRef = (object?)node.Annotation<IMemberRef>() ?? node.Annotation<IMemberDef>();
 			if (memberRef is null && node is Identifier) {
 				node = node.Parent ?? node;
-				memberRef = node.Annotation<IMemberRef>();
+				memberRef = (object?)node.Annotation<IMemberRef>() ?? node.Annotation<IMemberDef>();
 			}
 			if (memberRef is null && node.Role == AstNode.Roles.TargetExpression && (node.Parent is InvocationExpression || node.Parent is ObjectCreationExpression)) {
 				memberRef = node.Parent.Annotation<IMemberRef>();

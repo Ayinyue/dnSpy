@@ -305,6 +305,22 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		static Version? ParseVersion(string s) => Version.TryParse(s, out var v) ? v : null;
 
 		/// <summary>
+		/// The engine's type system (private field), for callers that need to map type-system
+		/// symbols back to cecil and dnlib. Null when reflection fails.
+		/// </summary>
+		public static ICSharpCode.Decompiler.TypeSystem.DecompilerTypeSystem? TryGetTypeSystem(
+				ICSharpCode.Decompiler.CSharp.CSharpDecompiler engine) {
+			try {
+				return (ICSharpCode.Decompiler.TypeSystem.DecompilerTypeSystem?)typeof(ICSharpCode.Decompiler.CSharp.CSharpDecompiler)
+					.GetField("typeSystem", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?
+					.GetValue(engine);
+			}
+			catch {
+				return null;
+			}
+		}
+
+		/// <summary>
 		/// Maps a dnlib metadata token to the cecil definition, or null if not found.
 		/// </summary>
 		public static IMemberDefinition? TryGetMember(ModuleDefinition module, uint rawToken) {

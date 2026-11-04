@@ -271,6 +271,9 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			var rr = node.Annotation<MemberResolveResult>();
 			if (rr?.Member != null)
 				return ToDnlib(typeSystem.GetCecil(rr.Member));
+			var trr = node.Annotation<TypeResolveResult>();
+			if (trr?.Type?.GetDefinition() != null)
+				return ToDnlib(typeSystem.GetCecil(trr.Type.GetDefinition()));
 			var type = node.Annotation<ICSharpCode.Decompiler.TypeSystem.IType>();
 			if (type != null) {
 				var definition = type.GetDefinition();

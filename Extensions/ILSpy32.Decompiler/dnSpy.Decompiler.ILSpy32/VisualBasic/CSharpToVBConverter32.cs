@@ -112,10 +112,14 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			public bool inIterator;
 		}
 
-		public CSharpToVBConverter32(ModuleDef module, IEnvironmentProvider provider)
+		readonly ICSharpCode.Decompiler.TypeSystem.DecompilerTypeSystem? engineTypeSystem;
+
+		public CSharpToVBConverter32(ModuleDef module, IEnvironmentProvider provider,
+				ICSharpCode.Decompiler.TypeSystem.DecompilerTypeSystem? engineTypeSystem = null)
 		{
 			this.module = module;
 			this.provider = provider;
+			this.engineTypeSystem = engineTypeSystem;
 			this.blocks = new Stack<BlockStatement>();
 			this.types = new Stack<TypeDeclaration>();
 			this.members = new Stack<MemberInfo>();
@@ -945,7 +949,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 			memberAccessExpression.Target = (Expression)memberReferenceExpression.Target.AcceptVisitor(this, data);
 			memberAccessExpression.MemberName = Identifier.Create(memberReferenceExpression.MemberNameToken.Annotations, memberReferenceExpression.MemberName);
-			memberAccessExpression.MemberName.AddAnnotation(memberReferenceExpression.Annotation<IMemberRef>());
+			var memberRef = ResolveDnlibReference(memberReferenceExpression) ?? (object?)memberReferenceExpression.Annotation<IMemberRef>();
+			memberAccessExpression.MemberName.AddAnnotation(memberRef);
 			bool isExtensionMethod = false;
 			if (memberReferenceExpression.Parent is CS.InvocationExpression invocExpr) {
 				var method = invocExpr.Annotation<dnlib.DotNet.IMethod>().ResolveMethodDef();
@@ -4317,7 +4322,11 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitSimpleType(CS.SimpleType simpleType, object data)
 		{
-			var type = new SimpleType(simpleType.IdentifierToken.Annotations, simpleType.Identifier);
+			var resolvedSimpleRef = ResolveDnlibReference(simpleType);
+			var simpleAnnotations = resolvedSimpleRef is null
+				? simpleType.IdentifierToken.Annotations
+				: simpleType.IdentifierToken.Annotations.Concat(new[] { resolvedSimpleRef });
+			var type = new SimpleType(simpleAnnotations, simpleType.Identifier);
 			ConvertNodes(simpleType.TypeArguments, type.TypeArguments);
 
 			return EndNode(simpleType, type);
@@ -4338,7 +4347,13 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			else
 				target = (AstType)memberType.Target.AcceptVisitor(this, data);
 
-			var type = new QualifiedType(target, Identifier.Create(memberType.MemberNameToken.Annotations, memberType.MemberName));
+			// The CS type node carries the IType annotation; resolve it so the name keeps its
+			// color and navigation reference.
+			var resolvedTypeRef = ResolveDnlibReference(memberType);
+			var nameAnnotations = resolvedTypeRef is null
+				? memberType.MemberNameToken.Annotations
+				: memberType.MemberNameToken.Annotations.Concat(new[] { resolvedTypeRef });
+			var type = new QualifiedType(target, Identifier.Create(nameAnnotations, memberType.MemberName));
 			ConvertNodes(memberType.TypeArguments, type.TypeArguments);
 
 			return EndNode(memberType, type);
@@ -4591,8 +4606,53 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		public AstNode VisitIdentifier(CS.Identifier identifier, object data)
 		{
 			var ident = Identifier.Create(identifier.Annotations, identifier.Name, ToNRefactoryLocation(identifier.StartLocation));
-
+			// The 3.2 tree carries resolve results instead of the dnlib annotations the output
+			// formatter consumes; resolve them so identifiers keep their colors and references.
+			var reference = ResolveDnlibReference(identifier.Parent ?? identifier) ?? ResolveDnlibReference(identifier);
+			if (reference != null)
+				ident.AddAnnotation(reference);
 			return EndNode(identifier, ident);
+		}
+
+		/// <summary>
+		/// dnlib metadata reference for a node: resolve results and symbols map to cecil and
+		/// back through the shared dnlib/cecil token table (PreserveRids keeps them equal).
+		/// </summary>
+		object? ResolveDnlibReference(CS.AstNode node) {
+			if (engineTypeSystem is null || node is null)
+				return null;
+			var rr = node.Annotation<ICSharpCode.Decompiler.Semantics.MemberResolveResult>();
+			if (rr?.Member != null)
+				return ToDnlibRef(engineTypeSystem.GetCecil(rr.Member));
+			var trr = node.Annotation<ICSharpCode.Decompiler.Semantics.TypeResolveResult>();
+			if (trr?.Type?.GetDefinition() != null)
+				return ToDnlibRef(engineTypeSystem.GetCecil(trr.Type.GetDefinition()));
+			var type = node.Annotation<ICSharpCode.Decompiler.TypeSystem.IType>();
+			if (type != null) {
+				var definition = type.GetDefinition();
+				if (definition != null)
+					return ToDnlibRef(engineTypeSystem.GetCecil(definition));
+			}
+			var symbol = ICSharpCode.Decompiler.CSharp.AnnotationExtensions.GetSymbol(node);
+			switch (symbol) {
+			case ICSharpCode.Decompiler.TypeSystem.IMember member:
+				return ToDnlibRef(engineTypeSystem.GetCecil(member));
+			case ICSharpCode.Decompiler.TypeSystem.IType typeSymbol:
+				var typeDefinition = typeSymbol.GetDefinition();
+				return typeDefinition != null ? ToDnlibRef(engineTypeSystem.GetCecil(typeDefinition)) : null;
+			}
+			return null;
+		}
+
+		object? ToDnlibRef(Mono.Cecil.MemberReference? cecilMember) {
+			if (cecilMember is null || module is not ModuleDefMD moduleMd)
+				return null;
+			try {
+				return moduleMd.ResolveToken(new MDToken(cecilMember.MetadataToken.ToInt32())) as IMemberRef;
+			}
+			catch {
+				return null;
+			}
 		}
 
 		public AstNode VisitPatternPlaceholder(CS.AstNode placeholder, CS.PatternMatching.Pattern pattern, object data)

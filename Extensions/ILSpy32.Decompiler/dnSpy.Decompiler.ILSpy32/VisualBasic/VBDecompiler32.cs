@@ -120,10 +120,12 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				return;
 			}
 			ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree csharpUnit;
+			ICSharpCode.Decompiler.TypeSystem.DecompilerTypeSystem? engineTypeSystem = null;
 			try {
 				lock (CSharpDecompiler32.engineLock) {
 					var engine = CSharpDecompiler32.GetOrCreateEngine(cecilModule, settings);
 					csharpUnit = decompile(engine);
+					engineTypeSystem = DnlibCecilBridge.TryGetTypeSystem(engine);
 				}
 			}
 			catch (OperationCanceledException) {
@@ -137,7 +139,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			try {
 				// The 3.2 tree has no dnlib annotations; the ported converter needs them.
 				AstAnnotationBinder.Attach(module, csharpUnit);
-				var converter = new CSharpToVBConverter32(module, new ILSpyEnvironmentProvider32());
+				var converter = new CSharpToVBConverter32(module, new ILSpyEnvironmentProvider32(), engineTypeSystem);
 				var unit = (CompilationUnit)csharpUnit.AcceptVisitor(converter, null);
 				ApplyIdentifierRenames(csharpUnit, unit);
 				var outputFormatter = new VBTextOutputFormatter32(output);

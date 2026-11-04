@@ -646,6 +646,34 @@ Friend 引用、但推断确实有问题」的场面一起藏掉）。要复核�
 
 这些都是「语义正确性」层面的后续工作，不影响「能否产出代码」。
 
+## C# 质量门禁（2026-11-04，M3 补充）
+
+M3 把 C# 默认引擎也切到了 3.2，但 VB 门禁从不度量 C# 输出。新增
+`baseline/run-regression-cs.cmd`：三样本双引擎（3.2 + 2.3）dump + validate + compile，
+**3.2 任一指标差于 2.3 即失败**。首轮实测（2026-11-04）：
+
+| 样本 | 3.2 语法 | 2.3 语法 | 3.2 realBad | 2.3 realBad |
+|---|---|---|---|---|
+| dnSpy.dll | 635 | 908 | 1427 | 2167 |
+| AsmEditor.x | 300 | 326 | 701 | 976 |
+| Contracts.Logic | 8 | 9 | 81 | 81 |
+
+3.2 C# 全面不差于 2.3 —— C# 切换质量有对拍依据。
+
+### C# 侧已修与已知限制
+
+**已修**：3.2 引擎会把 `[IteratorStateMachine(typeof(<X>d__N))]` / `[AsyncStateMachine(...)]`
+带进输出——`typeof(<X>d__N)` 里的尖括号是 C# 无法表达的标识符（2.3 引擎不输出这两个特性）。
+扩展的 C# 反编译器现在在渲染前删除这两类特性：它们只命名编译器自己的状态机类型，重编译时会
+重新派生，删除无损。注意特性名可能写成**去后缀形式**（`IteratorStateMachine`），匹配须两种拼写
+都收。实现走引擎的树级 API（`Decompile`/`DecompileType` → 清理 → 自行用 `CSharpOutputVisitor`
+渲染），不动引擎子模块。
+
+**已知限制（引擎级，暂缓）**：3.2 引擎的 `YieldReturnDecompiler` 对部分迭代器形态拒绝重建，
+方法体退化为裸状态机桩（`<GetSecurityDeclarations>d__8 <GetSecurityDeclarations>d__ = ...`，
+同样含非法标识符）。原方法确是 `yield return`（源码实证），2.3 引擎能重建。该家族是 C# 语法
+错误的主导项（dnSpy.dll 上约 608 文件），修复需动引擎子模块的 IL→C# 变换（深水区），另立专项。
+
 ## 度量确定性：引用集必须显式（2026-11-03 教训）
 
 `compile` 的引用 = 进程 TPA + `--refs` 目录。TPA 是否包含 Microsoft.WindowsDesktop.App

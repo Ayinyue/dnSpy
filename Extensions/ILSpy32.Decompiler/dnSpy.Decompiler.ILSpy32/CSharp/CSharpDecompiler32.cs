@@ -19,6 +19,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using dnlib.DotNet;
 using dnSpy.Contracts.Decompiler;
@@ -100,7 +101,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				WriteNote(output, "// ILSpy 3.2: cannot bridge this module (no in-memory snapshot available).");
 				return;
 			}
-			DecompileCore(type.Module, output, ctx, d => d.DecompileTypeAsString(new ICSharpCode.Decompiler.TypeSystem.FullTypeName(Common.TypeNameHelper.ToReflectionName(cecilType.FullName))));
+			DecompileCore(type.Module, output, ctx, d => d.DecompileType(new ICSharpCode.Decompiler.TypeSystem.FullTypeName(Common.TypeNameHelper.ToReflectionName(cecilType.FullName))));
 		}
 
 		void DecompileMember(IMDTokenProvider? member, IDecompilerOutput output, DecompilationContext ctx) {
@@ -116,7 +117,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				WriteNote(output, "// ILSpy 3.2: cannot bridge this module (no in-memory snapshot available).");
 				return;
 			}
-			DecompileCore(module, output, ctx, d => d.DecompileAsString(cecilMember));
+			DecompileCore(module, output, ctx, d => d.Decompile(cecilMember));
 		}
 
 		static IMemberDefinition? TryGetCecil(ModuleDef module, uint rawToken) {
@@ -126,7 +127,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			return DnlibCecilBridge.TryGetMember(cecilModule, rawToken);
 		}
 
-		void DecompileCore(ModuleDef module, IDecompilerOutput output, DecompilationContext ctx, Func<ICSharpCode.Decompiler.CSharp.CSharpDecompiler, string> decompile) {
+		void DecompileCore(ModuleDef module, IDecompilerOutput output, DecompilationContext ctx, Func<ICSharpCode.Decompiler.CSharp.CSharpDecompiler, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree> decompile) {
 			ctx.CancellationToken.ThrowIfCancellationRequested();
 			var cecilModule = DnlibCecilBridge.TryGetModule(module);
 			if (cecilModule is null) {
@@ -137,7 +138,9 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			try {
 				lock (engineLock) {
 					var engine = GetOrCreateEngine(cecilModule, settings);
-					text = decompile(engine);
+					var tree = decompile(engine);
+					RemoveUncompilableCompilerAttributes(tree);
+					text = RenderTree(tree);
 				}
 			}
 			catch (OperationCanceledException) {
@@ -148,6 +151,39 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				return;
 			}
 			output.Write(text, null, DecompilerReferenceFlags.None, BoxedTextColor.Text);
+		}
+
+		/// <summary>
+		/// Drops the IteratorStateMachine/AsyncStateMachine attributes. Their typeof(&lt;X&gt;d__N)
+		/// argument names an identifier C# cannot express, so they render as syntax errors; they
+		/// only name the compiler's own state-machine type, which is re-derived when the decompiled
+		/// source compiles, and the 2.3 engine never emitted them.
+		/// </summary>
+		static void RemoveUncompilableCompilerAttributes(ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree) {
+			foreach (var section in tree.Descendants.OfType<ICSharpCode.Decompiler.CSharp.Syntax.AttributeSection>().ToList()) {
+				var removed = false;
+				foreach (var attribute in section.Attributes.ToList()) {
+					var name = attribute.Type switch {
+						ICSharpCode.Decompiler.CSharp.Syntax.SimpleType simple => simple.Identifier,
+						ICSharpCode.Decompiler.CSharp.Syntax.MemberType member => member.MemberName,
+						_ => null,
+					};
+					// C# lets attribute names drop the "Attribute" suffix, and the engine does.
+					if (name == "IteratorStateMachineAttribute" || name == "AsyncStateMachineAttribute" ||
+							name == "IteratorStateMachine" || name == "AsyncStateMachine") {
+						attribute.Remove();
+						removed = true;
+					}
+				}
+				if (removed && !section.Attributes.Any())
+					section.Remove();
+			}
+		}
+
+		string RenderTree(ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree) {
+			var w = new System.IO.StringWriter();
+			tree.AcceptVisitor(new ICSharpCode.Decompiler.CSharp.OutputVisitor.CSharpOutputVisitor(w, settings.EngineSettings.CSharpFormattingOptions));
+			return w.ToString();
 		}
 
 		static void WriteNote(IDecompilerOutput output, string text) =>

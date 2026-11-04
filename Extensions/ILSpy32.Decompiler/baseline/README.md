@@ -646,6 +646,25 @@ Friend 引用、但推断确实有问题」的场面一起藏掉）。要复核�
 
 这些都是「语义正确性」层面的后续工作，不影响「能否产出代码」。
 
+## GUI 走查修复：fail-soft 程序集解析器（2026-11-04，条目 50）
+
+GUI 走查发现：反编译引用 `System.Management, 4.0.0.0`（.NET Framework GAC 版本）的外部程序集时
+整类型降级（`// ILSpy 3.2 decompilation failed: AssemblyResolutionException`）。根因：桥接层的
+cecil `DefaultAssemblyResolver` 只按「名字+版本+公钥令牌」精确匹配 4 个搜索目录，而传统 GAC
+（`C:\Windows\Microsoft.NETssembly\GAC_*`）不在其中且版本不容忍；2.3 引擎走 dnSpy 自己的
+全局解析器所以很少失败。
+
+修法：`DnlibCecilBridge` 换成三级 fail-soft 解析器——①cecil 精确匹配（原行为）；②**dnlib 模块
+自带的解析器**（GUI 场景就是 dnSpy 全局解析器，GAC/已加载文档/版本容忍都有；独立工具拿到
+dnlib 默认解析器）；③按简单名在搜索目录+传统 GAC 四个根就近匹配（任意版本）。全部失败返回
+null 而非抛异常——引擎把缺失引用渲染为未解析类型而不是放弃整个类型。已解析的子模块由解析器
+持有并随其释放。
+
+验证：合成模块（引用 System.Management 4.0.0.0 + 字段 ManagementObject）反射驱动新解析器——
+GAC 层命中 `v4.0_4.0.0.0__b03f5f7f11d50a3a`、tier-1 精确匹配不破坏；端到端反编译该类型输出
+完整 C#（原失败形态：整类型降级）。_dnlib 对外部接口的 Resolve 带 sourceModule 参数、
+ReaderParameters 无 Clone、cecil 读程序集用 ModuleDefinition.ReadModule 再取 .Assembly。_
+
 ## C# 质量门禁（2026-11-04，M3 补充）
 
 M3 把 C# 默认引擎也切到了 3.2，但 VB 门禁从不度量 C# 输出。新增

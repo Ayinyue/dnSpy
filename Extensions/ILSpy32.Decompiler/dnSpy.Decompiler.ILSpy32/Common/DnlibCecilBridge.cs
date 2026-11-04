@@ -41,6 +41,7 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		sealed class Entry {
 			public ModuleDefinition Module = null!;
 			public MemoryStream Stream = null!;
+			public FailSoftAssemblyResolver? Resolver;
 		}
 
 		static readonly ConditionalWeakTable<ModuleDef, Entry> cache = new ConditionalWeakTable<ModuleDef, Entry>();
@@ -64,6 +65,7 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 				catch {
 					entry?.Module?.Dispose();
 					entry?.Stream?.Dispose();
+					entry?.Resolver?.Dispose();
 					return null;
 				}
 				if (entry is null)
@@ -100,31 +102,148 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 				}
 			}
 			stream.Position = 0;
+			FailSoftAssemblyResolver? resolver = null;
 			try {
+				resolver = (FailSoftAssemblyResolver)CreateResolver(location, module);
 				var readerParams = new ReaderParameters {
-					AssemblyResolver = CreateResolver(location),
+					AssemblyResolver = resolver,
 					ReadSymbols = false,
 				};
 				var cecilModule = ModuleDefinition.ReadModule(stream, readerParams);
-				return new Entry { Module = cecilModule, Stream = stream };
+				return new Entry { Module = cecilModule, Stream = stream, Resolver = resolver };
 			}
 			catch {
+				resolver?.Dispose();
 				stream.Dispose();
 				return null;
 			}
 		}
 
-		static Mono.Cecil.IAssemblyResolver CreateResolver(string? mainModuleLocation) {
-			var resolver = new DefaultAssemblyResolver();
-			foreach (var dir in GetSearchDirectories(mainModuleLocation)) {
-				try {
-					resolver.AddSearchDirectory(dir);
-				}
-				catch {
-					// ignore invalid directories
+		static Mono.Cecil.IAssemblyResolver CreateResolver(string? mainModuleLocation, ModuleDef module) {
+			var directories = GetSearchDirectories(mainModuleLocation).ToArray();
+			return new FailSoftAssemblyResolver(module, directories);
+		}
+
+		/// <summary>
+		/// Resolves assembly references without failing the whole decompilation. cecil's
+		/// DefaultAssemblyResolver matches name+version+token exactly and only probes the
+		/// search directories, so a .NET Framework assembly's 'System.Management, 4.0.0.0'
+		/// (which lives in the legacy GAC) threw and degraded the entire type. Three tiers:
+		/// exact match, the dnlib module's own resolver (dnSpy's global resolver in the GUI -
+		/// GAC, loaded documents, version tolerance), then a nearest simple-name match in the
+		/// search directories and the legacy GAC. Total failure returns null, which the engine
+		/// renders as unresolved types instead of a failed decompilation.
+		/// </summary>
+		sealed class FailSoftAssemblyResolver : Mono.Cecil.IAssemblyResolver {
+			readonly ModuleDef module;
+			readonly DefaultAssemblyResolver exact;
+			readonly string[] searchDirectories;
+			readonly string[] gacRoots = {
+				Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "Microsoft.NET", "assembly", "GAC_MSIL"),
+				Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "Microsoft.NET", "assembly", "GAC_64"),
+				Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "Microsoft.NET", "assembly", "GAC_32"),
+				Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "assembly", "GAC_MSIL"),
+			};
+			readonly Dictionary<string, AssemblyDefinition?> cache = new Dictionary<string, AssemblyDefinition?>(StringComparer.Ordinal);
+			readonly List<Mono.Cecil.ModuleDefinition> owned = new List<Mono.Cecil.ModuleDefinition>();
+			readonly object lockObject = new object();
+
+			public FailSoftAssemblyResolver(ModuleDef module, string[] searchDirectories) {
+				this.module = module;
+				this.searchDirectories = searchDirectories;
+				exact = new DefaultAssemblyResolver();
+				foreach (var dir in searchDirectories) {
+					try {
+						exact.AddSearchDirectory(dir);
+					}
+					catch {
+						// ignore invalid directories
+					}
 				}
 			}
-			return resolver;
+
+			public AssemblyDefinition? Resolve(AssemblyNameReference reference) =>
+				Resolve(reference, new ReaderParameters { AssemblyResolver = this, ReadSymbols = false });
+
+			public AssemblyDefinition? Resolve(AssemblyNameReference reference, ReaderParameters parameters) {
+				if (reference is null)
+					return null;
+				lock (lockObject) {
+					if (cache.TryGetValue(reference.FullName, out var cached))
+						return cached;
+					var result = ResolveCore(reference, parameters);
+					cache[reference.FullName] = result;
+					return result;
+				}
+			}
+
+			AssemblyDefinition? ResolveCore(AssemblyNameReference reference, ReaderParameters parameters) {
+				// 1) Exact name+version+token in the search directories.
+				try {
+					return exact.Resolve(reference, parameters);
+				}
+				catch {
+					// fall through
+				}
+				// 2) The dnlib module's own resolver: inside dnSpy this is the global resolver
+				// (GAC, loaded documents, version tolerance); standalone tools get dnlib's.
+				try {
+					var resolver = module.Context?.AssemblyResolver;
+					if (resolver != null) {
+						var info = new AssemblyNameInfo(reference.FullName);
+						var assemblyDef = resolver.Resolve(info, module);
+						var location = assemblyDef?.ManifestModule?.Location;
+						if (!string.IsNullOrEmpty(location))
+							return ReadOwned(location!, parameters);
+					}
+				}
+				catch {
+					// fall through
+				}
+				// 3) Nearest simple-name match: the search directories and the legacy GAC.
+				foreach (var path in ProbeSimpleNames(reference.Name)) {
+					try {
+						return ReadOwned(path, parameters);
+					}
+					catch {
+						// try the next candidate
+					}
+				}
+				return null;
+			}
+
+			IEnumerable<string> ProbeSimpleNames(string simpleName) {
+				var fileName = simpleName + ".dll";
+				foreach (var dir in searchDirectories) {
+					var path = Path.Combine(dir, fileName);
+					if (File.Exists(path))
+						yield return path;
+				}
+				foreach (var root in gacRoots) {
+					var dir = Path.Combine(root, simpleName);
+					if (!Directory.Exists(dir))
+						continue;
+					foreach (var path in Directory.EnumerateFiles(dir, fileName, SearchOption.AllDirectories))
+						yield return path;
+				}
+			}
+
+			AssemblyDefinition ReadOwned(string path, ReaderParameters parameters) {
+				var ownParameters = new ReaderParameters {
+					AssemblyResolver = this,
+					ReadSymbols = false,
+				};
+				var module = ModuleDefinition.ReadModule(path, ownParameters);
+				owned.Add(module);
+				return module.Assembly;
+			}
+
+			public void Dispose() {
+				foreach (var module in owned)
+					module.Dispose();
+				owned.Clear();
+				exact.Dispose();
+			}
 		}
 
 		static IEnumerable<string> GetSearchDirectories(string? mainModuleLocation) {

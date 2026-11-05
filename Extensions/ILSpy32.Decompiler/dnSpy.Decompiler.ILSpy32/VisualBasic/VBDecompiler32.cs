@@ -71,7 +71,9 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				WriteNote(output, "' ILSpy 3.2: cannot bridge this module (no in-memory snapshot available).");
 				return;
 			}
-			DecompileCore(type.Module, output, ctx, d => d.DecompileType(new ICSharpCode.Decompiler.TypeSystem.FullTypeName(Common.TypeNameHelper.ToReflectionName(cecilType.FullName))));
+			DecompileCore(type.Module, output, ctx,
+				d => d.DecompileType(new ICSharpCode.Decompiler.TypeSystem.FullTypeName(Common.TypeNameHelper.ToReflectionName(cecilType.FullName))),
+				d => d.Decompile(cecilType));
 		}
 
 		void DecompileMember(IMDTokenProvider? member, IDecompilerOutput output, DecompilationContext ctx) {
@@ -116,7 +118,9 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			}
 		}
 
-		void DecompileCore(ModuleDef module, IDecompilerOutput output, DecompilationContext ctx, Func<ICSharpCode.Decompiler.CSharp.CSharpDecompiler, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree> decompile) {
+		void DecompileCore(ModuleDef module, IDecompilerOutput output, DecompilationContext ctx,
+				Func<ICSharpCode.Decompiler.CSharp.CSharpDecompiler, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree> decompile,
+				Func<ICSharpCode.Decompiler.CSharp.CSharpDecompiler, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree>? fallbackDecompile = null) {
 			ctx.CancellationToken.ThrowIfCancellationRequested();
 			var cecilModule = DnlibCecilBridge.TryGetModule(module);
 			if (cecilModule is null) {
@@ -129,6 +133,12 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				lock (CSharpDecompiler32.engineLock) {
 					var engine = CSharpDecompiler32.GetOrCreateEngine(cecilModule, settings);
 					csharpUnit = decompile(engine);
+					// The engine hides compiler-generated implementation-detail types entirely
+					// (<PrivateImplementationDetails> renders empty via MemberIsHidden); the 2.3
+					// engine showed their members. Re-decompile through the member list, which
+					// has no such filter.
+					if (fallbackDecompile != null && csharpUnit.Members.Count == 0)
+						csharpUnit = fallbackDecompile(engine);
 					engineTypeSystem = DnlibCecilBridge.TryGetTypeSystem(engine);
 				}
 			}

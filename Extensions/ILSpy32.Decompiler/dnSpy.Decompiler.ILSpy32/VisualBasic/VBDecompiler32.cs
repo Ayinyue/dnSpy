@@ -82,6 +82,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				WriteNote(output, "' ILSpy 3.2: member has no module.");
 				return;
 			}
+			// Like the 2.3 engine: single-member decompiles start with the declaring type as a
+			// comment line; the reference lets dnSpy jump to that type.
+			if (member is IMemberDef memberDef)
+				WriteCommentLineDeclaringType(output, memberDef);
 			var cecilMember = TryGetCecil(module, member.MDToken.Raw) as IMemberDefinition;
 			if (cecilMember is null) {
 				WriteNote(output, "' ILSpy 3.2: cannot bridge this module (no in-memory snapshot available).");

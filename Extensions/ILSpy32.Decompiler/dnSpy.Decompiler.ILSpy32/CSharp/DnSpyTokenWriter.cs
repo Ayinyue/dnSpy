@@ -270,15 +270,15 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				return null;
 			var rr = node.Annotation<MemberResolveResult>();
 			if (rr?.Member != null)
-				return ToDnlib(typeSystem.GetCecil(rr.Member));
+				return ToDnlib(TryGetCecil(rr.Member));
 			var trr = node.Annotation<TypeResolveResult>();
 			if (trr?.Type?.GetDefinition() != null)
-				return ToDnlib(typeSystem.GetCecil(trr.Type.GetDefinition()));
+				return ToDnlib(TryGetCecil(trr.Type.GetDefinition()));
 			var type = node.Annotation<ICSharpCode.Decompiler.TypeSystem.IType>();
 			if (type != null) {
 				var definition = type.GetDefinition();
 				if (definition != null)
-					return ToDnlib(typeSystem.GetCecil(definition));
+					return ToDnlib(TryGetCecil(definition));
 			}
 			var symbol = node.GetSymbol();
 			return SymbolToDnlib(symbol);
@@ -289,12 +289,38 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				return null;
 			switch (symbol) {
 			case IMember member:
-				return ToDnlib(typeSystem.GetCecil(member));
+				return ToDnlib(TryGetCecil(member));
 			case ICSharpCode.Decompiler.TypeSystem.IType type:
 				var definition = type.GetDefinition();
-				return definition != null ? ToDnlib(typeSystem.GetCecil(definition)) : null;
+				return definition != null ? ToDnlib(TryGetCecil(definition)) : null;
 			}
 			return null;
+		}
+
+		/// <summary>
+		/// GetCecil can throw for members outside the decompiled module (e.g. references into
+		/// assemblies that failed to resolve); a token writer must never kill a decompilation.
+		/// </summary>
+		Mono.Cecil.MemberReference? TryGetCecil(ICSharpCode.Decompiler.TypeSystem.IMember? member) {
+			if (member is null || typeSystem is null)
+				return null;
+			try {
+				return typeSystem.GetCecil(member);
+			}
+			catch {
+				return null;
+			}
+		}
+
+		Mono.Cecil.MemberReference? TryGetCecil(ICSharpCode.Decompiler.TypeSystem.ITypeDefinition? definition) {
+			if (definition is null || typeSystem is null)
+				return null;
+			try {
+				return typeSystem.GetCecil(definition);
+			}
+			catch {
+				return null;
+			}
 		}
 
 		object? ToDnlib(Mono.Cecil.MemberReference? cecilMember) {

@@ -143,8 +143,14 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					var engine = GetOrCreateEngine(cecilModule, settings);
 					var tree = decompile(engine);
 					// Definitions on the tree (the resolver reads them for colors/references),
-					// then the uncompilable compiler-generated attributes, then render.
-					AstAnnotationBinder.Attach(module, tree);
+					// then the uncompilable compiler-generated attributes, then render. A binder
+					// failure must not kill the decompilation: degrade to unannotated output.
+					try {
+						AstAnnotationBinder.Attach(module, tree);
+					}
+					catch {
+						// annotations stay absent; rendering continues
+					}
 					RemoveUncompilableCompilerAttributes(tree);
 					tree.AcceptVisitor(new ICSharpCode.Decompiler.CSharp.OutputVisitor.CSharpOutputVisitor(
 						new DnSpyTokenWriter(output, engine, module as ModuleDefMD, VisualBasicMetadataTextColorProvider.Instance),

@@ -4623,25 +4623,47 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				return null;
 			var rr = node.Annotation<ICSharpCode.Decompiler.Semantics.MemberResolveResult>();
 			if (rr?.Member != null)
-				return ToDnlibRef(engineTypeSystem.GetCecil(rr.Member));
+				return ToDnlibRef(TryGetCecilRef(rr.Member));
 			var trr = node.Annotation<ICSharpCode.Decompiler.Semantics.TypeResolveResult>();
 			if (trr?.Type?.GetDefinition() != null)
-				return ToDnlibRef(engineTypeSystem.GetCecil(trr.Type.GetDefinition()));
+				return ToDnlibRef(TryGetCecilRef(trr.Type.GetDefinition()));
 			var type = node.Annotation<ICSharpCode.Decompiler.TypeSystem.IType>();
 			if (type != null) {
 				var definition = type.GetDefinition();
 				if (definition != null)
-					return ToDnlibRef(engineTypeSystem.GetCecil(definition));
+					return ToDnlibRef(TryGetCecilRef(definition));
 			}
 			var symbol = ICSharpCode.Decompiler.CSharp.AnnotationExtensions.GetSymbol(node);
 			switch (symbol) {
 			case ICSharpCode.Decompiler.TypeSystem.IMember member:
-				return ToDnlibRef(engineTypeSystem.GetCecil(member));
+				return ToDnlibRef(TryGetCecilRef(member));
 			case ICSharpCode.Decompiler.TypeSystem.IType typeSymbol:
 				var typeDefinition = typeSymbol.GetDefinition();
-				return typeDefinition != null ? ToDnlibRef(engineTypeSystem.GetCecil(typeDefinition)) : null;
+				return typeDefinition != null ? ToDnlibRef(TryGetCecilRef(typeDefinition)) : null;
 			}
 			return null;
+		}
+
+		Mono.Cecil.MemberReference? TryGetCecilRef(ICSharpCode.Decompiler.TypeSystem.IMember? member) {
+			if (member is null || engineTypeSystem is null)
+				return null;
+			try {
+				return engineTypeSystem.GetCecil(member);
+			}
+			catch {
+				return null;
+			}
+		}
+
+		Mono.Cecil.MemberReference? TryGetCecilRef(ICSharpCode.Decompiler.TypeSystem.ITypeDefinition? definition) {
+			if (definition is null || engineTypeSystem is null)
+				return null;
+			try {
+				return engineTypeSystem.GetCecil(definition);
+			}
+			catch {
+				return null;
+			}
 		}
 
 		object? ToDnlibRef(Mono.Cecil.MemberReference? cecilMember) {

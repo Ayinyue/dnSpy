@@ -3041,6 +3041,12 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 			members.Push(new MemberInfo());
 
+			// The engine annotates compiler-generated data fields with an inline
+			// "Not supported: data(...)" comment; emitted mid-declaration it splits the
+			// field in half (BC30203). Drop the comments from the field subtree.
+			foreach (var comment in fieldDeclaration.Descendants.OfType<CS.Comment>().ToList())
+				comment.Remove();
+
 			ConvertNodes(fieldDeclaration.Attributes, decl.Attributes);
 			if (IsOwnerAModule(fieldDeclaration))
 				fieldDeclaration.Modifiers &= ~CS.Modifiers.Static;

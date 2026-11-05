@@ -152,6 +152,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					// has no such filter.
 					if (fallbackDecompile != null && tree.Members.Count == 0)
 						tree = fallbackDecompile(engine);
+					StripCommentsInsideFieldDeclarations(tree);
 					// Definitions on the tree (the resolver reads them for colors/references),
 					// then the uncompilable compiler-generated attributes, then render. A binder
 					// failure must not kill the decompilation: degrade to unannotated output.
@@ -200,6 +201,18 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				}
 				if (removed && !section.Attributes.Any())
 					section.Remove();
+			}
+		}
+
+		/// <summary>
+		/// Removes comment nodes that the engine placed INSIDE field declarations (its
+		/// "not supported: data(...)" notes on compiler-generated data fields). Rendered
+		/// inline they split the declaration in half in both C# and VB.
+		/// </summary>
+		static void StripCommentsInsideFieldDeclarations(ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree) {
+			foreach (var field in tree.Descendants.OfType<ICSharpCode.Decompiler.CSharp.Syntax.FieldDeclaration>().ToList()) {
+				foreach (var comment in field.Descendants.OfType<ICSharpCode.Decompiler.CSharp.Syntax.Comment>().ToList())
+					comment.Remove();
 			}
 		}
 

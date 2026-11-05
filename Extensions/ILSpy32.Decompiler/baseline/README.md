@@ -665,6 +665,23 @@ GAC 层命中 `v4.0_4.0.0.0__b03f5f7f11d50a3a`、tier-1 精确匹配不破坏；
 完整 C#（原失败形态：整类型降级）。_dnlib 对外部接口的 Resolve 带 sourceModule 参数、
 ReaderParameters 无 Clone、cecil 读程序集用 ModuleDefinition.ReadModule 再取 .Assembly。_
 
+## GUI 走查修复：VB 引用与着色（2026-11-05，条目 51 续）
+
+C# 侧修好后 VB 依旧全灭——根因是转换器从 3.2 树复制 `IMemberRef` 注解，而引擎根本不往
+树上挂 dnlib 注解（2.3 管线原生携带，3.2 的等价物是 resolve results/symbols）。VB 树上
+所有成员/类型引用注解为空 → 格式化器退化为纯文本色、跳转全灭。
+
+修法：转换器走与 C# 侧同源的解析链——`MemberResolveResult`/`TypeResolveResult`/`IType`
+注解与 `GetSymbol` → 引擎类型系统 `GetCecil` → dnlib token 反查（PreserveRids 两侧一致）。
+覆盖：成员引用（`VisitMemberReferenceExpression`）、类型名链（`VisitMemberType`/
+`VisitSimpleType`，注解经 IdentifierToken 注解集合注入）、标识符（`VisitIdentifier`）；
+定义继续由 binder 提供；格式化器同时接受 `IMemberDef` 注解。引擎的类型系统经
+`DnlibCecilBridge.TryGetTypeSystem`（私有字段反射，集中一处）传入转换器。
+
+实测（dnSpy.Contracts.Logic 前 8 个真实类型）：VB 引用 **288** 个（修复前 ≈0），
+C# 同类型 371——VB 达到 C# 约 78% 覆盖（差额：局部变量与少数无 resolve result 的
+表达式上下文，v1 范围）。双门禁文本/数字零漂移。
+
 ## GUI 走查修复：C# 着色/注释/跳转（2026-11-04，条目 51）
 
 走查发现 3.2 的 C# 视图两个缺陷，同根因不同层：

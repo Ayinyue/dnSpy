@@ -35,6 +35,7 @@ using ICSharpCode.NRefactory.VB;
 using ICSharpCode.NRefactory.VB.Visitors;
 
 namespace dnSpy.Decompiler.ILSpy.Core.VisualBasic {
+	[System.ComponentModel.Composition.PartNotDiscoverable]
 	sealed class DecompilerProvider : IDecompilerProvider {
 		readonly DecompilerSettingsService decompilerSettingsService;
 

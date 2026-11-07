@@ -707,6 +707,24 @@ C# 同类型 371——VB 达到 C# 约 78% 覆盖（差额：局部变量与少�
 门禁：C# 635/300/8 语法 + 1427/701/81 realBad 与修复前**完全持平**（文本零漂移），
 VB 942/525/10 持平；新增能力 = C# 全量着色 + 引用跳转 + XML 文档注释（两语言）。
 
+## 功能覆盖审计：2.3 功能面 vs 3.2（2026-11-07，条目 53）
+
+对照 dnSpy 消费反编译器的全部功能面逐项核查（`SaveCommands.cs` 导出管线、
+`DecompileDocumentTabContent` 调试视图、MEF 契约面）：
+
+| 2.3 功能 | 3.2 状态 |
+|---|---|
+| C#/VB 类型/成员/程序集反编译 | ✅ 质量更优（双门禁对拍）|
+| 单成员声明类型注释行（跳转） | ✅ 已修 |
+| 着色 + 引用导航（两语言） | ✅ 已修 |
+| XML 文档注释（含 cref 跳转） | ✅ 已修 |
+| 外部/GAC 程序集解析 | ✅ fail-soft（超出 2.3）|
+| 隐藏类型（<PrivateImplementationDetails>） | ✅ 已修（2.3 也显示）|
+| 反编译选项页 | ✅ DecompilerSettings32 |
+| **导出工程** | ✅ 本轮补齐——缺口：CSharpDecompiler32.ProjectFileExtension=null，导出对话框选不到 C#(3.2)，M4 后导出将无 C# 引擎。现 = .csproj；`Decompile(PartialType)`（XAML/设计器部分类）、`Decompile(AssemblyInfo)`、`Decompile(TypeMethods)`、`CanDecompile` 全部实现并端到端验证（C#/VB 各产出真实内容）。VB 本就有 .vbproj ✓ |
+| BAML | ➖ 不受迁移影响：独立 `IBamlDecompiler` MEF 契约，与反编译器切换无关 |
+| **调试 IL spans（反编译视图调试步进）** | ❌ **唯一缺口**——3.2 扩展从第一天就丢弃（VBTextOutputFormatter32 头注释）；vendored 引擎无 DebugInfo 基建。补齐需引擎级专项（同 yield 重建）。缓解：调试场景可切回 2.3（M4 前仍注册）；M4 决策时需权衡此项 |
+
 ## GUI 走查修复：隐藏类型空渲染（2026-11-05/06，条目 52）
 
 用户报「类无法反编译」且输出**完全空白**（无异常、无失败注释）。复现：反编译

@@ -79,7 +79,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		public override Guid GenericGuid => DecompilerConstants.LANGUAGE_CSHARP;
 		public override Guid UniqueGuid => THE_GUID;
 		public override string FileExtension => ".cs";
-		public override string? ProjectFileExtension => null;
+		public override string? ProjectFileExtension => ".csproj";
 
 		public override void Decompile(MethodDef method, IDecompilerOutput output, DecompilationContext ctx) =>
 			DecompileMember(method, output, ctx);
@@ -92,6 +92,59 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 
 		public override void Decompile(EventDef ev, IDecompilerOutput output, DecompilationContext ctx) =>
 			DecompileMember(ev, output, ctx);
+
+		public override bool CanDecompile(DecompilationType decompilationType) {
+			switch (decompilationType) {
+			case DecompilationType.PartialType:
+			case DecompilationType.AssemblyInfo:
+			case DecompilationType.TypeMethods:
+				return true;
+			}
+			return base.CanDecompile(decompilationType);
+		}
+
+		public override void Decompile(DecompilationType decompilationType, object data) {
+			switch (decompilationType) {
+			case DecompilationType.PartialType:
+				DecompilePartial((DecompilePartialType)data);
+				return;
+			case DecompilationType.AssemblyInfo:
+				DecompileAssemblyInfo((DecompileAssemblyInfo)data);
+				return;
+			case DecompilationType.TypeMethods:
+				DecompileTypeMethods((DecompileTypeMethods)data);
+				return;
+			}
+			base.Decompile(decompilationType, data);
+		}
+
+		/// <summary>
+		/// Export-to-project partial type. The 2.3 engine filtered designer-file members out
+		/// of the partial class; the 3.2 engine renders the whole type, so the code-behind
+		/// file contains the full class (the designer part stays in its own excluded file).
+		/// </summary>
+		void DecompilePartial(DecompilePartialType info) {
+			var cecilType = TryGetCecil(info.Type.Module, info.Type.MDToken.Raw) as TypeDefinition;
+			if (cecilType is null) {
+				WriteNote(info.Output, "// ILSpy 3.2: cannot bridge this module (no in-memory snapshot available).");
+				return;
+			}
+			DecompileCore(info.Type.Module, info.Output, info.Context,
+				d => d.DecompileType(new ICSharpCode.Decompiler.TypeSystem.FullTypeName(Common.TypeNameHelper.ToReflectionName(cecilType.FullName))),
+				d => d.Decompile(cecilType));
+		}
+
+		void DecompileAssemblyInfo(DecompileAssemblyInfo info) {
+			// The engine decompiles the assembly/module attributes; attributes that MSBuild
+			// would re-add are kept (KeepAllAttributes=false is not filtered - documented).
+			DecompileCore(info.Module, info.Output, info.Context,
+				d => d.DecompileModuleAndAssemblyAttributes());
+		}
+
+		void DecompileTypeMethods(DecompileTypeMethods info) {
+			// No dnSpy consumer passes TypeMethods today; decompile the whole type.
+			DecompilePartial(new DecompilePartialType(info.Output, info.Context, info.Type));
+		}
 
 		public override void Decompile(TypeDef type, IDecompilerOutput output, DecompilationContext ctx) {
 			if (type is null || output is null || ctx is null)

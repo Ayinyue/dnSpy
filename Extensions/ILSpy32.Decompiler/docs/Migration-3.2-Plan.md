@@ -84,7 +84,8 @@ DecompilerService(ctor)
   - [ ] 书签格式化、工具提示、`DummyDecompiler` 兜底路径（无程序集时启动）
 - [ ] 如走查发现 3.2 输出阻塞切换的缺陷 → 回到对应 Batch 修复后重走
 
-### M4 下线 2.3（破坏性，需用户单独确认后执行）
+### M4 下线 2.3（用户确认分两步：归档 done 2026-11-07 + 移除 done 2026-11-08）
+> IL spans 语句级精度延后已获用户接受，双引擎并存至专项落地
 > 用户决策（2026-11-07）：**M4 分两步**——归档先行（已执行），注册与项目的移除延后到
 > IL spans（调试步进）引擎级专项落地后；IL spans 延后已获用户接受，期间双引擎并存
 > （调试场景可切回 2.3）。
@@ -95,7 +96,7 @@ DecompilerService(ctor)
 - [ ] 移除 2.3 的 `IDecompilerCreator` 导出与 IL/ILAst/Mixed 视图，同步删除设置页
   —— **延后至 IL spans 专项落地**；注意：`dnSpy/dnSpy.Decompiler/MSBuild` 导出管线
   与 `DecompilerBase` 被 3.2 扩展继承使用，移除范围仅限 2.3 反编译器本体，需保留导出基建
-- [ ] 移除解决方案引用，全量构建 0 错误
+- [x] 移除解决方案引用，全量构建 0 错误（2026-11-08：dnSpy.sln 移除 14 条 ILSpy.Core 引用，dnSpy 主项目 + 3.2 扩展均构建 0 错误）
 - [ ] 更新 README / Action-Plan / Dev-Plan / 本文件状态
 
 ## 5. 兼容与回滚

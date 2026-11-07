@@ -39,7 +39,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 	/// TextTokenWriter. Text behavior mirrors the engine's TextWriterTokenWriter so the
 	/// rendered code stays identical to the previous text-only rendering.
 	/// </summary>
-	sealed class DnSpyTokenWriter : TokenWriter {
+	sealed class DnSpyTokenWriter : TokenWriter, ILocatable {
 		readonly IDecompilerOutput output;
 		readonly ModuleDefMD module;
 		readonly DecompilerTypeSystem? typeSystem;
@@ -47,8 +47,18 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		readonly Stack<AstNode> nodeStack = new Stack<AstNode>();
 		readonly Stack<(MethodDebugInfoBuilder builder, MethodDef method)> methodBuilders = new Stack<(MethodDebugInfoBuilder, MethodDef)>();
 		readonly List<MethodDebugInfo> debugInfos = new List<MethodDebugInfo>();
+		public readonly List<(MethodDef method, int start, int end)> MethodSpans = new List<(MethodDef, int, int)>();
+		readonly List<(int line, int column, int offset)> positionMap = new List<(int, int, int)>();
 		readonly int settingsVersion;
 		bool isAtStartOfLine = true;
+		int line = 1;
+		int column = 1;
+
+		/// <summary>
+		/// The engine's CreateSequencePoints needs line/column information on the tree nodes;
+		/// the wrapping decorator copies our position into the nodes as tokens are written.
+		/// </summary>
+		public TextLocation Location => new TextLocation(line, column);
 
 		/// <summary>
 		/// Debug info produced during rendering (one whole-body span per method with a body -
@@ -73,6 +83,51 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			}
 		}
 
+		/// <summary>Writes text and records its dnSpy output position for the line/column map.</summary>
+		void EmitText(string text, object color) {
+			positionMap.Add((line, column, output.NextPosition));
+			output.Write(text, color);
+			foreach (var ch in text) {
+				if (ch == '\n') {
+					line++;
+					column = 1;
+				} else {
+					column++;
+				}
+			}
+		}
+
+		void EmitText(string text, object reference, DecompilerReferenceFlags flags, object color) {
+			positionMap.Add((line, column, output.NextPosition));
+			output.Write(text, reference, flags, color);
+			foreach (var ch in text) {
+				if (ch == '\n') {
+					line++;
+					column = 1;
+				} else {
+					column++;
+				}
+			}
+		}
+
+		/// <summary>
+		/// Resolves a line/column position to the dnSpy output offset recorded when that exact
+		/// position was written; falls back to the closest position on the same line.
+		/// </summary>
+		public int OffsetOf(int line, int column) {
+			int best = -1;
+			foreach (var (l, c, o) in positionMap) {
+				if (l != line)
+					continue;
+				if (c == column)
+					return o;
+				if (c < column)
+					best = o;
+			}
+			return best;
+		}
+
+
 		public override void StartNode(AstNode node) {
 			nodeStack.Push(node);
 			// Method-level debug spans (v1): one SourceStatement covers the whole rendered
@@ -81,10 +136,9 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			if (node is MethodDeclaration method) {
 				var methodDef = node.Annotation<MethodDef>();
 				if (methodDef?.Body is not null) {
-					var builder = new MethodDebugInfoBuilder(settingsVersion, StateMachineKind.None,
-						methodDef, null, Array.Empty<SourceLocal>(), null, null);
-					builder.StartPosition = output.NextPosition;
-					methodBuilders.Push((builder, methodDef));
+					methodBuilders.Push((new MethodDebugInfoBuilder(settingsVersion, StateMachineKind.None,
+						methodDef, null, Array.Empty<SourceLocal>(), null, null), methodDef));
+					MethodSpans.Add((methodDef, output.NextPosition, -1));
 				}
 			}
 		}
@@ -95,9 +149,12 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				if (method == node.Annotation<MethodDef>()) {
 					methodBuilders.Pop();
 					builder.EndPosition = output.NextPosition;
-					var textSpan = TextSpan.FromBounds(builder.StartPosition!.Value, builder.EndPosition.Value);
-					builder.Add(new SourceStatement(new ILSpan(0, (uint)method.Body!.GetCodeSize()), textSpan));
-					debugInfos.Add(builder.Create());
+					for (var i = MethodSpans.Count - 1; i >= 0; i--) {
+						if (MethodSpans[i].method == method && MethodSpans[i].end == -1) {
+							MethodSpans[i] = (method, MethodSpans[i].start, output.NextPosition);
+							break;
+						}
+					}
 				}
 			}
 			if (nodeStack.Count > 0)
@@ -113,7 +170,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			if (identifier.Parent is EntityDeclaration entity && entity.Name == identifier.Name) {
 				var definition = ResolveEntity(entity);
 				if (definition != null) {
-					output.Write(text, definition, DecompilerReferenceFlags.Definition, metadataTextColorProvider.GetColor(definition));
+					EmitText(text, definition, DecompilerReferenceFlags.Definition, metadataTextColorProvider.GetColor(definition));
 					return;
 				}
 			}
@@ -121,20 +178,20 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			// A member or type reference: 'foo.Bar', a base type, an attribute type...
 			var reference = ResolveReference(identifier.Parent ?? (AstNode)identifier) ?? ResolveReference(identifier);
 			if (reference != null) {
-				output.Write(text, reference, DecompilerReferenceFlags.None, metadataTextColorProvider.GetColor(reference));
+				EmitText(text, reference, DecompilerReferenceFlags.None, metadataTextColorProvider.GetColor(reference));
 				return;
 			}
 
-			output.Write(text, BoxedTextColor.Text);
+			EmitText(text, BoxedTextColor.Text);
 		}
 
 		public override void WriteKeyword(Role role, string keyword) {
-			output.Write(keyword, BoxedTextColor.Keyword);
+			EmitText(keyword, BoxedTextColor.Keyword);
 			isAtStartOfLine = false;
 		}
 
 		public override void WriteToken(Role role, string token) {
-			output.Write(token, IsPunctuation(token) ? BoxedTextColor.Punctuation : BoxedTextColor.Operator);
+			EmitText(token, IsPunctuation(token) ? BoxedTextColor.Punctuation : BoxedTextColor.Operator);
 			isAtStartOfLine = false;
 		}
 
@@ -146,7 +203,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			return token.Length > 0;
 		}
 
-		public override void Space() => output.Write(" ", BoxedTextColor.Text);
+		public override void Space() => EmitText(" ", BoxedTextColor.Text);
 
 		public override void Indent() => output.IncreaseIndent();
 
@@ -154,14 +211,16 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 
 		public override void NewLine() {
 			output.WriteLine();
+			line++;
+			column = 1;
 			isAtStartOfLine = true;
 		}
 
 		public override void WriteComment(CommentType commentType, string content) {
 			switch (commentType) {
 			case CommentType.SingleLine:
-				output.Write("//", BoxedTextColor.Comment);
-				output.Write(content, BoxedTextColor.Comment);
+				EmitText("//", BoxedTextColor.Comment);
+				EmitText(content, BoxedTextColor.Comment);
 				NewLine();
 				break;
 			case CommentType.Documentation:
@@ -170,9 +229,9 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				NewLine();
 				break;
 			case CommentType.MultiLine:
-				output.Write("/*", BoxedTextColor.Comment);
-				output.Write(content, BoxedTextColor.Comment);
-				output.Write("*/", BoxedTextColor.Comment);
+				EmitText("/*", BoxedTextColor.Comment);
+				EmitText(content, BoxedTextColor.Comment);
+				EmitText("*/", BoxedTextColor.Comment);
 				isAtStartOfLine = false;
 				break;
 			case CommentType.MultiLineDocumentation:
@@ -182,7 +241,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				isAtStartOfLine = false;
 				break;
 			default:
-				output.Write(content, BoxedTextColor.Comment);
+				EmitText(content, BoxedTextColor.Comment);
 				isAtStartOfLine = false;
 				break;
 			}
@@ -192,25 +251,25 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			if (!isAtStartOfLine)
 				NewLine();
 			var directive = type.ToString().ToLowerInvariant();
-			output.Write("#" + directive, BoxedTextColor.Keyword);
+			EmitText("#" + directive, BoxedTextColor.Keyword);
 			if (!string.IsNullOrEmpty(argument))
-				output.Write(" " + argument, BoxedTextColor.Text);
+				EmitText(" " + argument, BoxedTextColor.Text);
 			NewLine();
 		}
 
 		public override void WritePrimitiveValue(object value, string literalValue = null) {
 			if (literalValue != null) {
-				output.Write(literalValue, BoxedTextColor.Number);
+				EmitText(literalValue, BoxedTextColor.Number);
 				return;
 			}
 
 			if (value is null) {
-				output.Write("null", BoxedTextColor.Keyword);
+				EmitText("null", BoxedTextColor.Keyword);
 				return;
 			}
 
 			if (value is bool b) {
-				output.Write(b ? "true" : "false", BoxedTextColor.Keyword);
+				EmitText(b ? "true" : "false", BoxedTextColor.Keyword);
 				return;
 			}
 
@@ -231,30 +290,30 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 
 			if (value is float f) {
 				if (float.IsInfinity(f) || float.IsNaN(f)) {
-					output.Write("float", BoxedTextColor.Keyword);
-					output.Write(".", BoxedTextColor.Punctuation);
+					EmitText("float", BoxedTextColor.Keyword);
+					EmitText(".", BoxedTextColor.Punctuation);
 					output.Write(float.IsPositiveInfinity(f) ? "PositiveInfinity" : float.IsNegativeInfinity(f) ? "NegativeInfinity" : "NaN", BoxedTextColor.Keyword);
 					return;
 				}
 				if (f == 0 && 1 / f == float.NegativeInfinity)
-					output.Write("-", BoxedTextColor.Operator);
+					EmitText("-", BoxedTextColor.Operator);
 				output.Write(f.ToString("R", NumberFormatInfo.InvariantInfo) + "f", BoxedTextColor.Number);
 				return;
 			}
 
 			if (value is double dbl) {
 				if (double.IsInfinity(dbl) || double.IsNaN(dbl)) {
-					output.Write("double", BoxedTextColor.Keyword);
-					output.Write(".", BoxedTextColor.Punctuation);
+					EmitText("double", BoxedTextColor.Keyword);
+					EmitText(".", BoxedTextColor.Punctuation);
 					output.Write(double.IsPositiveInfinity(dbl) ? "PositiveInfinity" : double.IsNegativeInfinity(dbl) ? "NegativeInfinity" : "NaN", BoxedTextColor.Keyword);
 					return;
 				}
 				if (dbl == 0 && 1 / dbl == double.NegativeInfinity)
-					output.Write("-", BoxedTextColor.Operator);
+					EmitText("-", BoxedTextColor.Operator);
 				var number = dbl.ToString("R", NumberFormatInfo.InvariantInfo);
 				if (number.IndexOf('.') < 0 && number.IndexOf('E') < 0)
 					number += ".0";
-				output.Write(number, BoxedTextColor.Number);
+				EmitText(number, BoxedTextColor.Number);
 				return;
 			}
 
@@ -265,17 +324,17 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					sb.Append('u');
 				if (value is long || value is ulong)
 					sb.Append('L');
-				output.Write(sb.ToString(), BoxedTextColor.Number);
+				EmitText(sb.ToString(), BoxedTextColor.Number);
 				return;
 			}
 
-			output.Write(value.ToString(), BoxedTextColor.Number);
+			EmitText(value.ToString(), BoxedTextColor.Number);
 		}
 
 		public override void WritePrimitiveType(string type) {
-			output.Write(type, BoxedTextColor.Keyword);
+			EmitText(type, BoxedTextColor.Keyword);
 			if (type == "new")
-				output.Write("()", BoxedTextColor.Punctuation);
+				EmitText("()", BoxedTextColor.Punctuation);
 			isAtStartOfLine = false;
 		}
 

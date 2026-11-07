@@ -218,11 +218,21 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					RemoveUncompilableCompilerAttributes(tree);
 					var tokenWriter = new DnSpyTokenWriter(output, engine, module as ModuleDefMD, VisualBasicMetadataTextColorProvider.Instance, 1);
 					tree.AcceptVisitor(new ICSharpCode.Decompiler.CSharp.OutputVisitor.CSharpOutputVisitor(
-						tokenWriter,
+						ICSharpCode.Decompiler.CSharp.OutputVisitor.TokenWriter.WrapInWriterThatSetsLocationsInAST(tokenWriter),
 						settings.EngineSettings.CSharpFormattingOptions));
-					// Hand dnSpy the method-level debug spans collected during rendering.
-					foreach (var debugInfo in tokenWriter.DebugInfos)
-						output.AddDebugInfo(debugInfo);
+					// Method-level debug spans: each method with a body gets one SourceStatement
+					// covering the whole rendered method and the whole IL range (the 2.3 engine's
+					// degraded shape for bodies it could not track statement-level).
+					foreach (var (method, start, end) in tokenWriter.MethodSpans) {
+						var builder = new MethodDebugInfoBuilder(1, StateMachineKind.None,
+							method, null, Array.Empty<SourceLocal>(), null, null);
+						builder.StartPosition = start;
+						builder.EndPosition = end;
+						builder.Scope.Span = ILSpan.FromBounds(0, (uint)method.Body.GetCodeSize());
+						builder.Add(new SourceStatement(new ILSpan(0, (uint)method.Body.GetCodeSize()),
+							TextSpan.FromBounds(start, end)));
+						output.AddDebugInfo(builder.Create());
+					}
 				}
 			}
 			catch (OperationCanceledException) {

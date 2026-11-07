@@ -19,14 +19,49 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 	sealed class VBTextOutputFormatter32 : IOutputFormatter {
 		readonly IDecompilerOutput output;
 		readonly Stack<AstNode> nodeStack = new Stack<AstNode>();
+		readonly Stack<(MethodDebugInfoBuilder builder, MethodDef method)> methodBuilders = new Stack<(MethodDebugInfoBuilder, MethodDef)>();
+		readonly List<MethodDebugInfo> debugInfos = new List<MethodDebugInfo>();
+		readonly int settingsVersion;
 
-		public VBTextOutputFormatter32(IDecompilerOutput output) {
+		/// <summary>
+		/// Debug info produced during rendering (one whole-body span per method with a body -
+		/// the same v1 shape the C# path uses). Callers drain these and pass them to
+		/// output.AddDebugInfo after rendering.
+		/// </summary>
+		public IEnumerable<MethodDebugInfo> DebugInfos => debugInfos;
+
+		public VBTextOutputFormatter32(IDecompilerOutput output, int settingsVersion = 1) {
 			this.output = output ?? throw new ArgumentNullException(nameof(output));
+			this.settingsVersion = settingsVersion;
 		}
 
-		public void StartNode(AstNode node) => nodeStack.Push(node);
+		public void StartNode(AstNode node) {
+			nodeStack.Push(node);
+			// Method-level debug spans (v1): one SourceStatement covers the whole rendered
+			// method and maps to the method's whole IL range (the 2.3 engine's degraded shape
+			// for bodies it could not track statement-level).
+			if (node is MethodDeclaration method) {
+				var methodDef = node.Annotation<MethodDef>();
+				if (methodDef?.Body is not null) {
+					var builder = new MethodDebugInfoBuilder(settingsVersion, StateMachineKind.None,
+						methodDef, null, Array.Empty<SourceLocal>(), null, null);
+					builder.StartPosition = output.NextPosition;
+					methodBuilders.Push((builder, methodDef));
+				}
+			}
+		}
 
 		public void EndNode(AstNode node) {
+			if (node is MethodDeclaration && methodBuilders.Count > 0) {
+				var (builder, method) = methodBuilders.Peek();
+				if (method == node.Annotation<MethodDef>()) {
+					methodBuilders.Pop();
+					builder.EndPosition = output.NextPosition;
+					var textSpan = TextSpan.FromBounds(builder.StartPosition!.Value, builder.EndPosition.Value);
+					builder.Add(new SourceStatement(new ILSpan(0, (uint)method.Body!.GetCodeSize()), textSpan));
+					debugInfos.Add(builder.Create());
+				}
+			}
 			if (nodeStack.Pop() != node)
 				throw new InvalidOperationException();
 		}

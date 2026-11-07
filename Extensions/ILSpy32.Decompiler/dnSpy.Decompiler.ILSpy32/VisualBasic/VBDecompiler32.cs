@@ -211,6 +211,9 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					NumberFormatter = ICSharpCode.NRefactory.NumberFormatter.GetVBInstance(hex: false, upper: true),
 				};
 				unit.AcceptVisitor(new OutputVisitor(outputFormatter, formattingPolicy), null);
+				// Hand dnSpy the method-level debug spans collected during rendering.
+				foreach (var debugInfo in outputFormatter.DebugInfos)
+					output.AddDebugInfo(debugInfo);
 			}
 			catch (Exception ex) {
 				WriteNote(output, "' ILSpy 3.2 VB conversion failed: " + CSharpDecompiler32.DescribeException(ex));

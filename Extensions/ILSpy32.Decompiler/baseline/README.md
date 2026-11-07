@@ -665,6 +665,27 @@ GAC 层命中 `v4.0_4.0.0.0__b03f5f7f11d50a3a`、tier-1 精确匹配不破坏；
 完整 C#（原失败形态：整类型降级）。_dnlib 对外部接口的 Resolve 带 sourceModule 参数、
 ReaderParameters 无 Clone、cecil 读程序集用 ModuleDefinition.ReadModule 再取 .Assembly。_
 
+## IL spans 专项：勘察结论 + v1 方法级 span（2026-11-07，条目 53 续）
+
+**勘察结论**（对照 2.3 契约/2.3 产出/3.2 现状/上游）：
+
+1. **消费契约**：反编译器调 `output.AddDebugInfo(MethodDebugInfo)`（custom data）→
+   dnSpy `MethodDebugService` → 调试步进按 `SourceStatement(ILSpan, TextSpan)` 查映射。
+2. **2.3 产出**：ILAst→C# 语句构造时按 `CalculateILSpans` 把 IL 范围聚合为 AST 标注
+   （`block.ILSpans`），格式化器喂 `MethodDebugInfoBuilder`；**降级先例**：无法跟踪
+   语句级的 body 用整方法单 span（`CreateBadMethod`）。
+3. **3.2 现状**：vendored 3.2.0 引擎**无**语句↔IL 标注（ILInstruction 有 range 但
+   变换管线不传递）；上游 ILSpy 4.0 的 DebugInfo 生成器是大范围管线改造。
+
+**v1 已落地（C# 侧，4c7e6137b）**：`DnSpyTokenWriter` 在渲染期捕获带方法体的
+`MethodDeclaration`（binder 的 MethodDef 注解 + Body 判定），整方法单 span——
+与 2.3 的降级形态一致。经 `output.AddDebugInfo` 交付，端到端验证通过
+（合成方法 → 1 个 MethodDebugInfo 经 custom data 输出）。
+
+**剩余（专项后续）**：①VB 侧同型接入（格式化器 nodeStack 捕获）；②语句级精度
+（引擎级：需在 3.2 变换管线中传递语句↔IL 映射，或移植上游 4.0 DebugInfo 生成器）。
+效果边界：调试视图从「完全无 span 数据」提升为「方法级参与」，语句级高亮精度待②。
+
 ## GUI 走查修复：VB 引用与着色（2026-11-05，条目 51 续）
 
 C# 侧修好后 VB 依旧全灭——根因是转换器从 3.2 树复制 `IMemberRef` 注解，而引擎根本不往

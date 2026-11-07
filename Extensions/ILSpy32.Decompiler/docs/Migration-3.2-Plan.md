@@ -85,9 +85,16 @@ DecompilerService(ctor)
 - [ ] 如走查发现 3.2 输出阻塞切换的缺陷 → 回到对应 Batch 修复后重走
 
 ### M4 下线 2.3（破坏性，需用户单独确认后执行）
-- [ ] M3 稳定运行（走查无回退）后才开始
-- [ ] 打 tag / 归档 `Extensions/ILSpy.Decompiler`
+> 用户决策（2026-11-07）：**M4 分两步**——归档先行（已执行），注册与项目的移除延后到
+> IL spans（调试步进）引擎级专项落地后；IL spans 延后已获用户接受，期间双引擎并存
+> （调试场景可切回 2.3）。
+- [x] M3 稳定运行（5 轮走查修复 + 迁移矩阵 + 双语言对拍，无回退）
+- [x] 打 tag / 归档 `Extensions/ILSpy.Decompiler`（2026-11-07）：
+  tag `archive/ilspy-2.3-engine`（887e46cac）+ 源码备份
+  `D:/Codebase/dnSpyEx/_local_backup_20261107_ilspy23.tar.gz`（含 2.3 扩展与核心引擎，3374 文件）
 - [ ] 移除 2.3 的 `IDecompilerCreator` 导出与 IL/ILAst/Mixed 视图，同步删除设置页
+  —— **延后至 IL spans 专项落地**；注意：`dnSpy/dnSpy.Decompiler/MSBuild` 导出管线
+  与 `DecompilerBase` 被 3.2 扩展继承使用，移除范围仅限 2.3 反编译器本体，需保留导出基建
 - [ ] 移除解决方案引用，全量构建 0 错误
 - [ ] 更新 README / Action-Plan / Dev-Plan / 本文件状态
 

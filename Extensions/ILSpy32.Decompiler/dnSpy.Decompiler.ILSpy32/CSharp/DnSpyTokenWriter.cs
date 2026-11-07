@@ -45,13 +45,24 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		readonly DecompilerTypeSystem? typeSystem;
 		readonly MetadataTextColorProvider metadataTextColorProvider;
 		readonly Stack<AstNode> nodeStack = new Stack<AstNode>();
+		readonly Stack<(MethodDebugInfoBuilder builder, MethodDef method)> methodBuilders = new Stack<(MethodDebugInfoBuilder, MethodDef)>();
+		readonly List<MethodDebugInfo> debugInfos = new List<MethodDebugInfo>();
+		readonly int settingsVersion;
 		bool isAtStartOfLine = true;
 
+		/// <summary>
+		/// Debug info produced during rendering (one whole-body span per method with a body -
+		/// the 2.3 engine's own degraded shape for bodies it could not track statement-level).
+		/// Callers drain these and pass them to output.AddDebugInfo after rendering.
+		/// </summary>
+		public IEnumerable<MethodDebugInfo> DebugInfos => debugInfos;
+
 		public DnSpyTokenWriter(IDecompilerOutput output, ICSharpCode.Decompiler.CSharp.CSharpDecompiler engine,
-				ModuleDefMD module, MetadataTextColorProvider metadataTextColorProvider) {
+				ModuleDefMD module, MetadataTextColorProvider metadataTextColorProvider, int settingsVersion) {
 			this.output = output;
 			this.module = module;
 			this.metadataTextColorProvider = metadataTextColorProvider;
+			this.settingsVersion = settingsVersion;
 			try {
 				typeSystem = (DecompilerTypeSystem?)typeof(ICSharpCode.Decompiler.CSharp.CSharpDecompiler)
 					.GetField("typeSystem", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?
@@ -62,9 +73,33 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			}
 		}
 
-		public override void StartNode(AstNode node) => nodeStack.Push(node);
+		public override void StartNode(AstNode node) {
+			nodeStack.Push(node);
+			// Method-level debug spans (v1): one SourceStatement covers the whole rendered
+			// method and maps to the method's whole IL range - the same shape the 2.3 engine
+			// used for bodies it could not track statement-level (CreateBadMethod).
+			if (node is MethodDeclaration method) {
+				var methodDef = node.Annotation<MethodDef>();
+				if (methodDef?.Body is not null) {
+					var builder = new MethodDebugInfoBuilder(settingsVersion, StateMachineKind.None,
+						methodDef, null, Array.Empty<SourceLocal>(), null, null);
+					builder.StartPosition = output.NextPosition;
+					methodBuilders.Push((builder, methodDef));
+				}
+			}
+		}
 
 		public override void EndNode(AstNode node) {
+			if (node is MethodDeclaration && methodBuilders.Count > 0) {
+				var (builder, method) = methodBuilders.Peek();
+				if (method == node.Annotation<MethodDef>()) {
+					methodBuilders.Pop();
+					builder.EndPosition = output.NextPosition;
+					var textSpan = TextSpan.FromBounds(builder.StartPosition!.Value, builder.EndPosition.Value);
+					builder.Add(new SourceStatement(new ILSpan(0, (uint)method.Body!.GetCodeSize()), textSpan));
+					debugInfos.Add(builder.Create());
+				}
+			}
 			if (nodeStack.Count > 0)
 				nodeStack.Pop();
 		}

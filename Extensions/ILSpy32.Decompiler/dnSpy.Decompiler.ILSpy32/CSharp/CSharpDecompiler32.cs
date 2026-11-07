@@ -216,9 +216,13 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 						// annotations stay absent; rendering continues
 					}
 					RemoveUncompilableCompilerAttributes(tree);
+					var tokenWriter = new DnSpyTokenWriter(output, engine, module as ModuleDefMD, VisualBasicMetadataTextColorProvider.Instance, 1);
 					tree.AcceptVisitor(new ICSharpCode.Decompiler.CSharp.OutputVisitor.CSharpOutputVisitor(
-						new DnSpyTokenWriter(output, engine, module as ModuleDefMD, VisualBasicMetadataTextColorProvider.Instance),
+						tokenWriter,
 						settings.EngineSettings.CSharpFormattingOptions));
+					// Hand dnSpy the method-level debug spans collected during rendering.
+					foreach (var debugInfo in tokenWriter.DebugInfos)
+						output.AddDebugInfo(debugInfo);
 				}
 			}
 			catch (OperationCanceledException) {

@@ -31,7 +31,6 @@ using ICSharpCode.Decompiler.Disassembler;
 using ICSharpCode.Decompiler.ILAst;
 
 namespace dnSpy.Decompiler.ILSpy.Core.ILAst {
-	[System.ComponentModel.Composition.PartNotDiscoverable]
 	sealed class DecompilerProvider : IDecompilerProvider {
 		readonly DecompilerSettingsService decompilerSettingsService;
 

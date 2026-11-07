@@ -18,7 +18,6 @@ using dnSpy.Decompiler.Utils;
 using ICSharpCode.Decompiler.Disassembler;
 
 namespace dnSpy.Decompiler.ILSpy.Core.Mixed {
-	[System.ComponentModel.Composition.PartNotDiscoverable]
 	sealed class DecompilerProvider : IDecompilerProvider {
 		readonly DecompilerSettingsService decompilerSettingsService;
 

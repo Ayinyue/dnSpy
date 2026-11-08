@@ -31,8 +31,11 @@ namespace dnSpy.Decompiler.ILSpy32.Settings {
 	/// Options the 3.2 engine has no equivalent for (IL-viewer options, member sorting,
 	/// numeric formatting) stay unexposed so the page doesn't offer dead switches.
 	/// </summary>
-	sealed class DecompilerSettings32 : DecompilerSettingsBase {
+	class DecompilerSettings32 : DecompilerSettingsBase {
 		int version;
+		/// <summary>Set by the persistence impls so the one-time 2.3 option migration can
+		/// read the legacy section; null in unit-style constructed instances.</summary>
+		protected internal dnSpy.Contracts.Settings.ISettingsService settingsService_Migrate;
 		bool showTokenAndRvaComments = true;
 		IDecompilerOption[]? options;
 
@@ -171,10 +174,76 @@ namespace dnSpy.Decompiler.ILSpy32.Settings {
 		static DecompilerOption<bool> BooleanOption(Guid guid, string description, Func<bool> getter, Action<bool> setter) =>
 			new DecompilerOption<bool>(guid, getter, setter) { Description = description };
 
-		void RaiseVersionChanged() {
+		protected void RaiseVersionChanged() {
 			version++;
 			VersionChanged?.Invoke(this, EventArgs.Empty);
 		}
+
+		/// <summary>
+		/// Persisted boolean entries: 2.3 settings-section key, current value, setter. The
+		/// 2.3 keys are reused so the one-time option migration reads the user's customized
+		/// values directly from the 2.3 settings section.
+		/// </summary>
+		internal virtual IEnumerable<(string key, bool? value, Action<bool> set)> PersistedBooleanEntries { get; } = System.Array.Empty<(string, bool?, Action<bool>)>();
+
+		/// <summary>
+		/// 2.3 settings-section key -> this settings' key. Same names except the catch-variable
+		/// option, whose 2.3 property name carries a longer suffix.
+		/// </summary>
+		protected static readonly Dictionary<string, string> Legacy23Mappings = new Dictionary<string, string>(StringComparer.Ordinal) {
+			["AnonymousMethods"] = "AnonymousMethods",
+			["ExpressionTrees"] = "ExpressionTrees",
+			["YieldReturn"] = "YieldReturn",
+			["AsyncAwait"] = "AsyncAwait",
+			["QueryExpressions"] = "QueryExpressions",
+			["FullyQualifyAmbiguousTypeNames"] = "FullyQualifyAmbiguousTypeNames",
+			["UseDebugSymbols"] = "UseDebugSymbols",
+			["ShowXmlDocumentation"] = "ShowXmlDocumentation",
+			["ShowTokenAndRvaComments"] = "ShowTokenAndRvaComments",
+			["AlwaysGenerateExceptionVariableForCatchBlocksUnlessTypeIsObject"] = "AlwaysGenerateExceptionVariableForCatchBlocks",
+		};
+
+		/// <summary>
+		/// One-time carry-over of option values the user customized under the 2.3 decompilers
+		/// (same GUIDs / same meaning where this engine honors them). Runs in the impls'
+		/// constructors before saving is enabled; only keys present in the 2.3 section and
+		/// mapped here are applied.
+		/// </summary>
+		/// <summary>
+		/// One-time carry-over, guarded by the target section being empty: once the user
+		/// edits anything under 3.2 (which writes the section), the 2.3 values must stop
+		/// overriding their newer choices on subsequent starts.
+		/// </summary>
+		protected void MigrateFrom23(Guid targetSectionGuid) {
+			var settings = settingsService_Migrate;
+			if (settings is null)
+				return;
+			var target = settings.GetOrCreateSection(targetSectionGuid);
+			if (target.Attributes.Length != 0)
+				return; // the user already has 3.2-era values; migration is done
+			var legacy = settings.GetOrCreateSection(DecompilerSettings32Impl.Legacy23SettingsGuid);
+			var legacyAttrs = legacy.Attributes;
+			if (legacyAttrs.Length == 0)
+				return; // nothing customized under 2.3 (or the 2.3 decompilers never ran)
+			// Reverse lookup: 3.2 key -> the 2.3 section key (the long catch-variable name).
+			var reverse = new Dictionary<string, string>(StringComparer.Ordinal);
+			foreach (var kv in Legacy23Mappings) {
+				if (!reverse.ContainsKey(kv.Value))
+					reverse[kv.Value] = kv.Key;
+			}
+			foreach (var entry in PersistedBooleanEntries) {
+				foreach (var (key, value) in legacyAttrs) {
+					if (!string.Equals(key, entry.key, StringComparison.Ordinal) &&
+						(!reverse.TryGetValue(entry.key, out var legacyKey) || !string.Equals(key, legacyKey, StringComparison.Ordinal)))
+						continue;
+					if (bool.TryParse(value, out var b))
+						entry.set(b);
+					break;
+				}
+			}
+		}
+
+		internal static readonly Guid Legacy23SettingsGuid = new Guid("6745457F-254B-4B7B-90F1-F948F0721C3B");
 
 		public override bool Equals(object? obj) => obj is DecompilerSettings32 other && ReferenceEquals(EngineSettings, other.EngineSettings);
 

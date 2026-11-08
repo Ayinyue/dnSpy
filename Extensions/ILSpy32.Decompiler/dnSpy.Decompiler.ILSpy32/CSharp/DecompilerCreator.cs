@@ -26,9 +26,23 @@ using dnSpy.Decompiler.ILSpy32.VisualBasic;
 namespace dnSpy.Decompiler.ILSpy32.CSharp {
 	[Export(typeof(IDecompilerCreator))]
 	sealed class DecompilerCreator : IDecompilerCreator {
+		readonly DecompilerSettings32? csharpSettings;
+		readonly VbDecompilerSettings32Impl? vbSettings;
+
+		/// <summary>Reflection-based loaders (dnSpy.Console, baseline) have no MEF
+		/// composition; they get default settings with no persistence.</summary>
+		public DecompilerCreator() {
+		}
+
+		[ImportingConstructor]
+		public DecompilerCreator(DecompilerSettings32Impl csharpSettings, VbDecompilerSettings32Impl vbSettings) {
+			this.csharpSettings = csharpSettings;
+			this.vbSettings = vbSettings;
+		}
+
 		public IEnumerable<IDecompiler> Create() {
-			yield return new CSharpDecompiler32(new DecompilerSettings32(), "C# (ILSpy 3.2)");
-			yield return new VBDecompiler32(new DecompilerSettings32(vbCompatibility: true), "Visual Basic (ILSpy 3.2)");
+			yield return new CSharpDecompiler32(csharpSettings ?? new DecompilerSettings32(), "C# (ILSpy 3.2)");
+			yield return new VBDecompiler32(vbSettings ?? new DecompilerSettings32(vbCompatibility: true), "Visual Basic (ILSpy 3.2)");
 		}
 	}
 }

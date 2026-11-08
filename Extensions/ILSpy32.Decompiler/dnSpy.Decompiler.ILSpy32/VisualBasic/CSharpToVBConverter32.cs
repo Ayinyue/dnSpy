@@ -1431,7 +1431,16 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitQueryContinuationClause(CS.QueryContinuationClause queryContinuationClause, object data)
 		{
-			throw new NotImplementedException();
+			// VB has no C#-style 'into'; express "... into g <rest>" as
+			// "From g In (<preceding query>) <rest>" - the engine nests the preceding
+			// clauses in QueryContinuationClause.PrecedingQuery.
+			var fromOp = new FromQueryOperator();
+			var declaration = new CollectionRangeVariableDeclaration {
+				Identifier = new VariableIdentifier { Name = Identifier.Create(queryContinuationClause.IdentifierToken.Annotations, queryContinuationClause.Identifier) },
+			};
+			declaration.Expression = (Expression)queryContinuationClause.PrecedingQuery.AcceptVisitor(this, data);
+			fromOp.Variables.Add(declaration);
+			return EndNode(queryContinuationClause, fromOp);
 		}
 
 		public AstNode VisitQueryFromClause(CS.QueryFromClause queryFromClause, object data)
@@ -1450,12 +1459,20 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitQueryLetClause(CS.QueryLetClause queryLetClause, object data)
 		{
-			throw new NotImplementedException();
+			var op = new LetQueryOperator();
+			op.Variables.Add(new VariableInitializer {
+				Identifier = new VariableIdentifier { Name = Identifier.Create(queryLetClause.IdentifierToken.Annotations, queryLetClause.Identifier) },
+				Expression = (Expression)queryLetClause.Expression.AcceptVisitor(this, data)
+			});
+			return EndNode(queryLetClause, op);
 		}
 
 		public AstNode VisitQueryWhereClause(CS.QueryWhereClause queryWhereClause, object data)
 		{
-			throw new NotImplementedException();
+			var op = new WhereQueryOperator {
+				Condition = (Expression)queryWhereClause.Condition.AcceptVisitor(this, data)
+			};
+			return EndNode(queryWhereClause, op);
 		}
 
 		public AstNode VisitQueryJoinClause(CS.QueryJoinClause queryJoinClause, object data)
@@ -1497,13 +1514,25 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			return EndNode(querySelectClause, op);
 		}
 
+		int groupVarCount = 0;
+
 		public AstNode VisitQueryGroupClause(CS.QueryGroupClause queryGroupClause, object data)
 		{
 			var op = new GroupByQueryOperator();
-
-			throw new NotImplementedException();
-
-			//return EndNode(queryGroupClause, op);
+			op.GroupExpressions.Add(new VariableInitializer {
+				Identifier = new VariableIdentifier { Name = Identifier.Create(BoxedTextColor.Local, "g") },
+				Expression = (Expression)queryGroupClause.Projection.AcceptVisitor(this, data)
+			});
+			op.ByExpressions.Add(new VariableInitializer {
+				Expression = (Expression)queryGroupClause.Key.AcceptVisitor(this, data)
+			});
+			// VB requires an aggregate after Into; an unnamed 'Group' yields the IGrouping
+			// sequence that the C# 'group ... by ...' (and its 'into g') binds.
+			op.IntoExpressions.Add(new VariableInitializer {
+				Identifier = new VariableIdentifier { Name = Identifier.Create(BoxedTextColor.Local, "Group" + groupVarCount++) },
+				Expression = new IdentifierExpression { Identifier = Identifier.Create(BoxedTextColor.Keyword, "Group") }
+			});
+			return EndNode(queryGroupClause, op);
 		}
 
 		public AstNode VisitAttribute(CS.Attribute attribute, object data)
@@ -2098,9 +2127,12 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		public AstNode VisitExpressionStatement(CS.ExpressionStatement expressionStatement, object data)
 		{
 			// "x.Event += handler" is AddHandler in VB; += on an event is not an operator there.
+			// The C# engine's resolve result on the left side is authoritative (an event
+			// subscription targets IEvent; "fs.Position += 20" targets IProperty and must stay
+			// a compound assignment), so consult it before the syntactic heuristic.
 			if (expressionStatement.Expression is CS.AssignmentExpression subscription &&
 					(subscription.Operator == CS.AssignmentOperatorType.Add || subscription.Operator == CS.AssignmentOperatorType.Subtract) &&
-					IsEventAccess(subscription.Left)) {
+					IsEventSubscription(subscription)) {
 				var handler = new AddRemoveHandlerStatement() {
 					IsAddHandler = subscription.Operator == CS.AssignmentOperatorType.Add
 				};
@@ -2138,6 +2170,23 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		}
 
 		/// <summary>True when the expression names an event (this.Event or obj.Event).</summary>
+		/// <summary>
+		/// True when this compound assignment targets an event. The engine's
+		/// MemberResolveResult on the left side decides when present (IEvent vs IProperty);
+		/// without one the syntactic heuristic answers.
+		/// </summary>
+		bool IsEventSubscription(CS.AssignmentExpression subscription) {
+			var rr = (subscription.Left ?? (CS.AstNode)subscription).Annotation<ICSharpCode.Decompiler.Semantics.MemberResolveResult>()
+				?? subscription.Annotation<ICSharpCode.Decompiler.Semantics.MemberResolveResult>();
+			if (rr?.Member is not null) {
+				if (rr.Member is ICSharpCode.Decompiler.TypeSystem.IEvent)
+					return true;
+				if (rr.Member is ICSharpCode.Decompiler.TypeSystem.IProperty || rr.Member is ICSharpCode.Decompiler.TypeSystem.IField)
+					return false;
+			}
+			return IsEventAccess(subscription.Left);
+		}
+
 		bool IsEventAccess(CS.Expression expression) {
 			switch (expression) {
 			case CS.IdentifierExpression identifier:

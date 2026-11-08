@@ -73,6 +73,11 @@ namespace dnSpy.Decompiler.ILSpy32.Settings {
 					// which the converter cannot express. Disabling it makes the engine emit
 					// "a != null ? a.b : null" instead, which the converter already handles.
 					EngineSettings.NullPropagation = false;
+					// The 2.3 engine emitted method chains for queries with anonymous-type
+					// groupings ("group p by new {...} into g") because it could not express
+					// them as query syntax; the VB converter cannot map query continuation
+					// clauses either. Method chains match the 2.3 output exactly.
+					EngineSettings.QueryExpressions = false;
 				}
 			}
 			catch {

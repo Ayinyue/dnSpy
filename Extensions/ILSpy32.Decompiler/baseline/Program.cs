@@ -693,6 +693,58 @@ namespace EngineBaseline {
 			return names;
 		}
 
+		/// <summary>
+		/// Simple names reported as inaccessible (Friend/internal) anywhere in the file. An
+		/// internal type used as a field or local type makes the whole member's type resolve
+		/// to an error type, and the member-access/extension-method diagnostics that follow
+		/// (BC30456 'X' is not a member of 'Y()') are cascades, not converter defects.
+		/// </summary>
+		static HashSet<string> CollectInaccessibleFriendNames(List<Microsoft.CodeAnalysis.Diagnostic> errors) {
+			var names = new HashSet<string>(StringComparer.Ordinal);
+			foreach (var diagnostic in errors) {
+				if (diagnostic.Id != "BC30389")
+					continue;
+				var quoted = ExtractFirstQuoted(diagnostic.GetMessage());
+				if (quoted is null)
+					continue;
+				var simple = quoted.Substring(quoted.LastIndexOf('.') + 1);
+				if (simple.Length > 0)
+					names.Add(simple);
+			}
+			return names;
+		}
+
+		/// <summary>True when a diagnostic is a cascade of an inaccessible (Friend) type.</summary>
+		static bool IsInaccessibleFriendCascade(Microsoft.CodeAnalysis.Diagnostic d, HashSet<string> inaccessibleFriendNames) {
+			if (inaccessibleFriendNames.Count == 0)
+				return false;
+			if (d.Id != "BC30456" && d.Id != "BC30451" && d.Id != "BC30002" && d.Id != "BC30452")
+				return false;
+			foreach (var quoted in ExtractAllQuoted(d.GetMessage())) {
+				var simple = quoted.Substring(quoted.LastIndexOf('.') + 1);
+				while (simple.EndsWith("()", StringComparison.Ordinal))
+					simple = simple.Substring(0, simple.Length - 2);
+				if (inaccessibleFriendNames.Contains(simple))
+					return true;
+			}
+			return false;
+		}
+
+		static System.Collections.Generic.IEnumerable<string> ExtractAllQuoted(string message) {
+			var search = 0;
+			while (search < message.Length) {
+				var start = message.IndexOf('\'', search);
+				if (start < 0)
+					yield break;
+				var end = message.IndexOf('\'', start + 1);
+				if (end < 0)
+					yield break;
+				if (end > start + 1)
+					yield return message.Substring(start + 1, end - start - 1);
+				search = end + 1;
+			}
+		}
+
 		static bool MentionsInInheritanceClause(string text, string name) {
 			foreach (var raw in text.Split('\n')) {
 				var line = raw.Trim();
@@ -811,8 +863,10 @@ namespace EngineBaseline {
 					}
 				}
 				var inaccessibleBases = CollectInaccessibleBases(errors, text);
+				var inaccessibleFriendNames = CollectInaccessibleFriendNames(errors);
 				bool IsNoise(Microsoft.CodeAnalysis.Diagnostic d) =>
 					IsAccessibilityNoise(d.Id) || IsRenamedStateMachineReference(d) || IsShadowedMemberNoise(d, e, entries) ||
+					IsInaccessibleFriendCascade(d, inaccessibleFriendNames) ||
 					(inaccessibleBases.Count > 0 && cascadeDiagnostics.Contains(d.Id));
 				bool noiseOnly = errors.All(IsNoise);
 				if (noiseOnly)

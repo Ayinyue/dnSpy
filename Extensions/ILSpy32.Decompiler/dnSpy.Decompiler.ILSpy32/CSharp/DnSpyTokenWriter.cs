@@ -29,6 +29,7 @@ using ICSharpCode.Decompiler.CSharp;
 using ICSharpCode.Decompiler.CSharp.OutputVisitor;
 using ICSharpCode.Decompiler.CSharp.Resolver;
 using ICSharpCode.Decompiler.CSharp.Syntax;
+using CS = ICSharpCode.Decompiler.CSharp.Syntax;
 using ICSharpCode.Decompiler.Semantics;
 using ICSharpCode.Decompiler.TypeSystem;
 
@@ -173,6 +174,8 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					EmitText(text, definition, DecompilerReferenceFlags.Definition, metadataTextColorProvider.GetColor(definition));
 					return;
 				}
+				EmitText(text, SyntacticFallbackColor(identifier, BoxedTextColor.Type), DecompilerReferenceFlags.Definition, BoxedTextColor.Type);
+				return;
 			}
 
 			// A member or type reference: 'foo.Bar', a base type, an attribute type...
@@ -182,7 +185,32 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				return;
 			}
 
-			EmitText(text, BoxedTextColor.Text);
+			EmitText(text, SyntacticFallbackColor(identifier, BoxedTextColor.Text));
+		}
+
+		/// <summary>
+		/// Syntactic fallback color when metadata resolution fails: class names, attribute
+		/// types, base types and method names get reasonable colors from their context.
+		/// </summary>
+		object SyntacticFallbackColor(Identifier identifier, object defaultColor) {
+			var parent = identifier.Parent;
+			if (parent is null)
+				return defaultColor;
+			if (parent is TypeDeclaration)
+				return BoxedTextColor.Type;
+			if (parent is CS.Attribute)
+				return BoxedTextColor.Type;
+			if (parent is CS.SimpleType || parent is CS.MemberType)
+				return BoxedTextColor.Type;
+			if (parent is MethodDeclaration || parent is CS.ConstructorDeclaration || parent is CS.OperatorDeclaration)
+				return BoxedTextColor.InstanceMethod;
+			if (parent is PropertyDeclaration)
+				return BoxedTextColor.InstanceProperty;
+			if (parent is EventDeclaration)
+				return BoxedTextColor.InstanceEvent;
+			if (parent is FieldDeclaration)
+				return BoxedTextColor.InstanceField;
+			return defaultColor;
 		}
 
 		public override void WriteKeyword(Role role, string keyword) {

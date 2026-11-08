@@ -1446,13 +1446,13 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		public AstNode VisitQueryFromClause(CS.QueryFromClause queryFromClause, object data)
 		{
 			var op = new FromQueryOperator();
-			op.Variables.Add(
-				new CollectionRangeVariableDeclaration {
-					Identifier = new VariableIdentifier { Name = Identifier.Create(queryFromClause.IdentifierToken.Annotations, queryFromClause.Identifier) },
-					Type = (AstType)queryFromClause.Type.AcceptVisitor(this, data),
-					Expression = (Expression)queryFromClause.Expression.AcceptVisitor(this, data)
-				}
-			);
+			var fromDecl = new CollectionRangeVariableDeclaration {
+				Identifier = new VariableIdentifier { Name = Identifier.Create(queryFromClause.IdentifierToken.Annotations, queryFromClause.Identifier) },
+				Expression = (Expression)queryFromClause.Expression.AcceptVisitor(this, data)
+			};
+			if (!queryFromClause.Type.IsNull)
+				fromDecl.Type = (AstType)queryFromClause.Type.AcceptVisitor(this, data);
+			op.Variables.Add(fromDecl);
 
 			return EndNode(queryFromClause, op);
 		}
@@ -1477,7 +1477,39 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitQueryJoinClause(CS.QueryJoinClause queryJoinClause, object data)
 		{
-			throw new NotImplementedException();
+			// "join y in ys on a equals b" -> "Join y In ys On a Equals b";
+			// "join y in ys on a equals b into j" -> "Group Join ... Into j = Group"
+			// (VB has no bare join-into; the group form binds the grouped sequence).
+			JoinQueryOperator op;
+			if (queryJoinClause.IsGroupJoin) {
+				var groupJoin = new GroupJoinQueryOperator();
+				groupJoin.IntoExpressions.Add(new VariableInitializer {
+					Identifier = new VariableIdentifier { Name = Identifier.Create(queryJoinClause.IntoIdentifierToken.Annotations, queryJoinClause.IntoIdentifier) },
+					Expression = new IdentifierExpression { Identifier = Identifier.Create(BoxedTextColor.Keyword, "Group") }
+				});
+				op = groupJoin;
+			}
+			else {
+				op = new JoinQueryOperator();
+			}
+			var declaration = new CollectionRangeVariableDeclaration {
+				Identifier = new VariableIdentifier { Name = Identifier.Create(queryJoinClause.JoinIdentifierToken.Annotations, queryJoinClause.JoinIdentifier) },
+				Expression = (Expression)queryJoinClause.InExpression.AcceptVisitor(this, data)
+			};
+			if (!queryJoinClause.Type.IsNull)
+				declaration.Type = (AstType)queryJoinClause.Type.AcceptVisitor(this, data);
+			// JoinVariable's setter goes through SetChildByRole, whose Role has no
+			// NullObject (first assignment NREs); AddChild attaches directly.
+			op.AddChild(declaration, ICSharpCode.NRefactory.VB.Ast.CollectionRangeVariableDeclaration.CollectionRangeVariableDeclarationRole);
+			// JoinCondition's Left/Right setters go through roles without a null object
+			// (SetChildByRole NREs on first assignment); AddChild attaches directly.
+			var condition = new JoinCondition();
+			condition.AddChild((Expression)queryJoinClause.OnExpression.AcceptVisitor(this, data),
+				ICSharpCode.NRefactory.VB.Ast.BinaryOperatorExpression.LeftExpressionRole);
+			condition.AddChild((Expression)queryJoinClause.EqualsExpression.AcceptVisitor(this, data),
+				ICSharpCode.NRefactory.VB.Ast.BinaryOperatorExpression.RightExpressionRole);
+			op.JoinConditions.Add(condition);
+			return EndNode(queryJoinClause, op);
 		}
 
 		public AstNode VisitQueryOrderClause(CS.QueryOrderClause queryOrderClause, object data)

@@ -17,7 +17,7 @@
 | XML 文档注释 | ✅ | AddXmlDocumentationTransform + 桥接 FileName 回填 |
 | 导出工程（C#/VB .csproj） | ✅ | PartialType/AssemblyInfo/TypeMethods + ProjectFileExtension（330f7d6c7） |
 | 着色（双引擎逐 token 对拍） | ✅ | 颜色差异收敛至 3.2 更准/既有家族（d11ab7a18、VB 批次、2bf4ffcd4） |
-| 引用/导航（token reference） | 🔧 | 本地定义 ✓；外部类型 TypeRef 映射 ✓；外部**成员**引用与 keyword 引用（string→System.String 等）仍有缺口（颜色不受影响，导航增强待续） |
+| 引用/导航（token reference） | ✅ | 本地定义 ✓；外部类型 TypeRef 映射 ✓；keyword 引用（corlib）✓；同类型成员使用 ✓（107ad96b4）。外部类型成员引用需数据流类型推断（引擎级，随语句级调试映射专项推进） |
 | 语句级调试映射 | ⛔ | 方法级 v1 已交付（8c5f1c83b）；语句级精度需引擎 IL↔语句映射专项 |
 | 迭代器重建（~608 文件 C# 侧退化） | ⛔ | 引擎级 YieldReturnDecompiler 专项（2.3 能重建部分形态；VB 侧经 QueryExpressions 关闭已用方法链覆盖） |
 | 查询续接子句 `into`（VB） | ✅ | 2026-11-09：VB 兼容模式关 QueryExpressions（与 2.3 的方法链形态一致，degraded 197→0）；查询子句 visitor 全实现（Where/Let/Group/Continuation 嵌套 From），Join 仍 throw（无 degraded 站点） |
@@ -83,5 +83,5 @@
 1. 语句级调试映射精度（引擎 IL↔语句映射）
 2. 迭代器重建（YieldReturnDecompiler 引擎专项）
 3. ~~VB 查询续接子句 `into`~~ ✅ 已关闭（ad85ab3d0，degraded 197→0）
-4. 外部成员引用/keyword 引用挂载（导航增强）
+4. 外部类型成员引用挂载（需数据流类型推断；同类型成员/keyword/类型引用已挂）
 5. ~~2.3 选项值 → 3.2 的一次性选项值迁移~~ ✅ 已关闭（DecompilerSettings32Impl/VbDecompilerSettings32Impl 持久化 + 2.3 section 一次性迁移，空目标守卫）

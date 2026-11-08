@@ -66,6 +66,12 @@ namespace dnSpy.Contracts.Decompiler {
 		/// <summary>Visual Basic language (ILSpy)</summary>
 		public static readonly Guid LANGUAGE_VISUALBASIC_ILSPY = new Guid("BBA40092-76B2-4184-8E81-0F1E3ED14E72");
 
+		/// <summary>C# language (ILSpy 3.2 engine)</summary>
+		public static readonly Guid LANGUAGE_CSHARP_ILSPY32 = new Guid("8C1F4A62-9D3B-4E77-8A51-2F6B0C9D4E13");
+
+		/// <summary>Visual Basic language (ILSpy 3.2 engine)</summary>
+		public static readonly Guid LANGUAGE_VISUALBASIC_ILSPY32 = new Guid("9C5E4C7A-1F2B-4E6D-9A30-8B7D2E5F6A41");
+
 		/// <summary>Name of IL language returned by <see cref="IDecompiler.GenericNameUI"/></summary>
 		public static readonly string GENERIC_NAMEUI_IL = "IL";
 

@@ -34,8 +34,8 @@ namespace dnSpy.Decompiler {
 		// the main program has no assembly reference, so the values are spelled out here; they
 		// come from Extensions/ILSpy32.Decompiler/dnSpy.Decompiler.ILSpy32/
 		// {CSharp/CSharpDecompiler32.cs, VisualBasic/VBDecompiler32.cs}.
-		internal static readonly Guid LANGUAGE_CSHARP_ILSPY32 = new Guid("8C1F4A62-9D3B-4E77-8A51-2F6B0C9D4E13");
-		internal static readonly Guid LANGUAGE_VISUALBASIC_ILSPY32 = new Guid("9C5E4C7A-1F2B-4E6D-9A30-8B7D2E5F6A41");
+		internal static readonly Guid LANGUAGE_CSHARP_ILSPY32 = DecompilerConstants.LANGUAGE_CSHARP_ILSPY32;
+		internal static readonly Guid LANGUAGE_VISUALBASIC_ILSPY32 = DecompilerConstants.LANGUAGE_VISUALBASIC_ILSPY32;
 
 		public Guid LanguageGuid {
 			get => languageGuid;
@@ -62,8 +62,8 @@ namespace dnSpy.Decompiler {
 		bool languageGuidMigratedTo32;
 	}
 
-	[Export, Export(typeof(IDecompilerServiceSettings))]
-	sealed class DecompilerServiceSettingsImpl : DecompilerServiceSettings {
+	[Export, Export(typeof(IDecompilerServiceSettings)), Export(typeof(IDecompilerLanguageSettings))]
+	sealed class DecompilerServiceSettingsImpl : DecompilerServiceSettings, IDecompilerLanguageSettings {
 		static readonly Guid SETTINGS_GUID = new Guid("6A7E565D-DC09-4AAE-A7C8-E86A835FCBFC");
 
 		readonly ISettingsService settingsService;

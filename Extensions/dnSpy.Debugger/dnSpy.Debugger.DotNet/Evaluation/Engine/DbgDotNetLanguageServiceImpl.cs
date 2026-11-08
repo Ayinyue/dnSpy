@@ -50,12 +50,14 @@ namespace dnSpy.Debugger.DotNet.Evaluation.Engine {
 		readonly IDecompilerService decompilerService;
 		readonly IPredefinedEvaluationErrorMessagesHelper predefinedEvaluationErrorMessagesHelper;
 		readonly Dictionary<Guid, Lazy<DbgDotNetFormatter, IDbgDotNetFormatterMetadata>> formattersDict;
+		readonly IDecompilerLanguageSettings languageSettings;
 
 		static readonly Guid csharpDecompilerGuid = new Guid(PredefinedDecompilerGuids.CSharp);
 		static readonly Guid visualBasicDecompilerGuid = new Guid(PredefinedDecompilerGuids.VisualBasic);
 
 		[ImportingConstructor]
-		DbgDotNetLanguageServiceImpl(Lazy<DbgMethodDebugInfoProvider> dbgMethodDebugInfoProvider, Lazy<DbgModuleReferenceProvider> dbgModuleReferenceProvider, Lazy<DbgDotNetEngineValueNodeFactoryService> dbgDotNetEngineValueNodeFactoryService, Lazy<DbgDotNetILInterpreter> dnILInterpreter, Lazy<DbgAliasProvider> dbgAliasProvider, [ImportMany] IEnumerable<Lazy<DbgDotNetExpressionCompiler, IDbgDotNetExpressionCompilerMetadata>> dbgDotNetExpressionCompilers, IDecompilerService decompilerService, IPredefinedEvaluationErrorMessagesHelper predefinedEvaluationErrorMessagesHelper, [ImportMany] IEnumerable<Lazy<DbgDotNetFormatter, IDbgDotNetFormatterMetadata>> dbgDotNetFormatters) {
+		DbgDotNetLanguageServiceImpl(Lazy<DbgMethodDebugInfoProvider> dbgMethodDebugInfoProvider, Lazy<DbgModuleReferenceProvider> dbgModuleReferenceProvider, Lazy<DbgDotNetEngineValueNodeFactoryService> dbgDotNetEngineValueNodeFactoryService, Lazy<DbgDotNetILInterpreter> dnILInterpreter, Lazy<DbgAliasProvider> dbgAliasProvider, [ImportMany] IEnumerable<Lazy<DbgDotNetExpressionCompiler, IDbgDotNetExpressionCompilerMetadata>> dbgDotNetExpressionCompilers, IDecompilerService decompilerService, Lazy<IDecompilerLanguageSettings> languageSettings, IPredefinedEvaluationErrorMessagesHelper predefinedEvaluationErrorMessagesHelper, [ImportMany] IEnumerable<Lazy<DbgDotNetFormatter, IDbgDotNetFormatterMetadata>> dbgDotNetFormatters) {
+			this.languageSettings = languageSettings.Value;
 			this.dbgMethodDebugInfoProvider = dbgMethodDebugInfoProvider;
 			this.dbgModuleReferenceProvider = dbgModuleReferenceProvider;
 			this.dbgDotNetEngineValueNodeFactoryService = dbgDotNetEngineValueNodeFactoryService;
@@ -104,7 +106,14 @@ namespace dnSpy.Debugger.DotNet.Evaluation.Engine {
 					decompilerGuid = DecompilerConstants.LANGUAGE_CSHARP;
 				else if (decompilerGuid == visualBasicDecompilerGuid)
 					decompilerGuid = DecompilerConstants.LANGUAGE_VISUALBASIC;
-				var decompiler = decompilerService.Find(decompilerGuid);
+				// Several engines can share one generic language (2.3 and 3.2 decompilers both
+				// register the C# family GUID). Pick the one the user made the default instead
+				// of whatever happens to sort first.
+				var decompiler = decompilerService.AllDecompilers
+					.Where(a => a.GenericGuid == decompilerGuid || a.UniqueGuid == decompilerGuid)
+					.OrderByDescending(a => a.UniqueGuid == languageSettings?.LanguageGuid)
+					.ThenByDescending(a => a.OrderUI)
+					.FirstOrDefault();
 				Debug2.Assert(decompiler is not null);
 				if (decompiler is null)
 					continue;

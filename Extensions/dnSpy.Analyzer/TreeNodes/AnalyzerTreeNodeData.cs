@@ -113,8 +113,9 @@ namespace dnSpy.Analyzer.TreeNodes {
 		}
 
 		protected IMemberRef GetOriginalCodeLocation(IMemberRef member) {
-			// Emulate the original code. Only the C# override returned something other than the input
-			if (Context.Decompiler.UniqueGuid != DecompilerConstants.LANGUAGE_CSHARP_ILSPY)
+			// Emulate the original code. Only the C# overrides returned something other than the input
+			if (Context.Decompiler.UniqueGuid != DecompilerConstants.LANGUAGE_CSHARP_ILSPY &&
+				Context.Decompiler.UniqueGuid != DecompilerConstants.LANGUAGE_CSHARP_ILSPY32)
 				return member;
 			if (!Context.Decompiler.Settings.GetBoolean(DecompilerOptionConstants.AnonymousMethods_GUID))
 				return member;

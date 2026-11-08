@@ -621,42 +621,12 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			return -1;
 		}
 
-		Dictionary<string, List<(TypeRef typeRef, int arity)>>? typeRefsByName;
-
 		/// <summary>
 		/// Finds a TypeRef in this module's reference tables by simple name; the scope of those
 		/// refs is authoritative, so the resulting reference navigates to the right assembly.
-		/// The generic arity comes from the metadata name suffix (List`1).
 		/// </summary>
-		TypeRef? ResolveTypeRefByName(string name, int arity) {
-			if (typeRefsByName is null) {
-				typeRefsByName = new Dictionary<string, List<(TypeRef, int)>>(StringComparer.Ordinal);
-				foreach (var tr in module.GetTypeRefs()) {
-					var (bare, refArity) = SplitGenericArity(tr.Name);
-					if (!typeRefsByName.TryGetValue(bare, out var list))
-						typeRefsByName[bare] = list = new List<(TypeRef, int)>();
-					list.Add((tr, refArity));
-				}
-			}
-			if (!typeRefsByName.TryGetValue(name, out var candidates))
-				return null;
-			foreach (var (tr, refArity) in candidates) {
-				if (tr.DeclaringType is null && (arity < 0 || arity == refArity))
-					return tr;
-			}
-			foreach (var (tr, refArity) in candidates) {
-				if (arity < 0 || arity == refArity)
-					return tr;
-			}
-			return null;
-		}
-
-		static (string bare, int arity) SplitGenericArity(string metadataName) {
-			var tick = metadataName.IndexOf('`');
-			if (tick < 0)
-				return (metadataName, 0);
-			return (metadataName.Substring(0, tick), int.TryParse(metadataName.Substring(tick + 1), out var n) ? n : 0);
-		}
+		TypeRef? ResolveTypeRefByName(string name, int arity) =>
+			Common.DnlibReferenceMapper.ResolveTypeRefByName(module, name, arity);
 
 		/// <summary>
 		/// dnlib metadata reference for a declaration node (the entity the binder annotated or
@@ -748,89 +718,10 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		}
 
 		object? ToDnlib(Mono.Cecil.MemberReference? cecilMember) {
-			if (cecilMember is null)
-				return null;
-			try {
-				var resolved = module.ResolveToken(new MDToken(cecilMember.MetadataToken.ToInt32())) as IMemberRef;
-				if (resolved is not null && SameIdentity(resolved, cecilMember))
-					return resolved;
-			}
-			catch {
-			}
-			// The cecil reference belongs to another module (a metadata reference into a
-			// referenced assembly): its token is meaningless inside this module and the raw
-			// resolve above hits an unrelated local definition. Map it by name instead so the
-			// reference - and with it the color and navigation - stays correct.
-			var mapped = MapExternal(cecilMember);
+			var mapped = Common.DnlibReferenceMapper.ToDnlib(module, cecilMember);
 			if (mapped is null)
 				lastColorPath = "ref-external-unmapped";
 			return mapped;
-		}
-
-		/// <summary>
-		/// Loose identity check that catches cross-module rid collisions: a token resolved in
-		/// this module must match the cecil reference's kind, name and declaring type - methods
-		/// like ToString or get_X share names across assemblies, so the declaring type decides.
-		/// </summary>
-		static bool SameIdentity(IMemberRef resolved, Mono.Cecil.MemberReference cecilMember) {
-			switch (cecilMember) {
-			case Mono.Cecil.TypeDefinition cecilType:
-				return resolved is TypeDef td && td.Name == cecilType.Name && td.Namespace == cecilType.Namespace;
-			case Mono.Cecil.MethodDefinition cecilMethod:
-				return resolved is MethodDef md && md.Name == cecilMethod.Name &&
-					SameDeclaringType(md.DeclaringType, cecilMethod.DeclaringType);
-			case Mono.Cecil.FieldDefinition cecilField:
-				return resolved is FieldDef fd && fd.Name == cecilField.Name &&
-					SameDeclaringType(fd.DeclaringType, cecilField.DeclaringType);
-			case Mono.Cecil.PropertyDefinition cecilProperty:
-				return resolved is PropertyDef pd && pd.Name == cecilProperty.Name &&
-					SameDeclaringType(pd.DeclaringType, cecilProperty.DeclaringType);
-			case Mono.Cecil.EventDefinition cecilEvent:
-				return resolved is EventDef ed && ed.Name == cecilEvent.Name &&
-					SameDeclaringType(ed.DeclaringType, cecilEvent.DeclaringType);
-			default:
-				return false;
-			}
-		}
-
-		static bool SameDeclaringType(TypeDef? declaring, Mono.Cecil.TypeDefinition? cecilDeclaring) {
-			if (declaring is null || cecilDeclaring is null)
-				return declaring is null && cecilDeclaring is null;
-			return declaring.Name == cecilDeclaring.Name && declaring.Namespace == cecilDeclaring.Namespace;
-		}
-
-		/// <summary>Maps a cecil reference into another assembly to a dnlib reference by name.</summary>
-		object? MapExternal(Mono.Cecil.MemberReference cecilMember) {
-			Mono.Cecil.TypeReference? typeReference = cecilMember switch {
-				Mono.Cecil.TypeSpecification spec => spec.ElementType,
-				Mono.Cecil.TypeReference tr => tr,
-				_ => null,
-			};
-			if (typeReference is null)
-				return null;
-			if (typeReference.Scope is null || typeReference.Scope is Mono.Cecil.ModuleDefinition)
-				return null;
-			var scope = FindAssemblyRef(typeReference.Scope.Name);
-			if (scope is null)
-				return null;
-			// Nested types chain through declaring TypeRefs so dnSpy can resolve the whole path.
-			if (typeReference.DeclaringType is not null) {
-				if (MapExternal(typeReference.DeclaringType) is not TypeRefUser declaring)
-					return null;
-				return new TypeRefUser(module, string.Empty, typeReference.Name, (IResolutionScope)declaring);
-			}
-			return new TypeRefUser(module, typeReference.Namespace, typeReference.Name, scope);
-		}
-
-		IResolutionScope? FindAssemblyRef(string? scopeName) {
-			if (string.IsNullOrEmpty(scopeName))
-				return null;
-			foreach (var ar in module.GetAssemblyRefs()) {
-				if (ar.Name == scopeName)
-					return ar;
-			}
-			// Not among the module's refs yet (for example the corlib alias): create one by name.
-			return new AssemblyRefUser(new UTF8String(scopeName));
 		}
 	}
 }

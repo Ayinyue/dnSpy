@@ -69,30 +69,46 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		public void WriteIdentifier(string identifier, object data, object extraData) {
 			var definition = GetCurrentDefinition();
 			if (definition is not null) {
+				ColorPathSink?.Invoke("def");
 				output.Write(IdentifierEscaper.Escape(identifier), definition, DecompilerReferenceFlags.Definition, data);
 				return;
 			}
 
 			var memberRef = GetCurrentMemberReference() ?? (object?)(extraData as NamespaceReference);
 			if (memberRef is not null) {
+				// External type names: the 2.3 engine colors them plain Type (only types defined
+				// in the decompiled module get their kind color). Namespace segments carry their
+				// own color from the converter and keep it.
+				if (memberRef is TypeRef { DeclaringType: null, ResolutionScope: not null } && BoxedTextColor.Text.Equals(data))
+					data = BoxedTextColor.Type;
+				ColorPathSink?.Invoke("ref:" + memberRef.GetType().Name);
 				output.Write(IdentifierEscaper.Escape(identifier), memberRef, DecompilerReferenceFlags.None, data);
 				return;
 			}
 
 			var localDef = GetCurrentLocalDefinition();
 			if (localDef is not null) {
+				ColorPathSink?.Invoke("local-def");
 				output.Write(IdentifierEscaper.Escape(identifier), localDef, DecompilerReferenceFlags.Local | DecompilerReferenceFlags.Definition, data);
 				return;
 			}
 
 			var localRef = GetCurrentLocalReference();
 			if (localRef is not null) {
+				ColorPathSink?.Invoke("local-ref");
 				output.Write(IdentifierEscaper.Escape(identifier), localRef, DecompilerReferenceFlags.Local, data);
 				return;
 			}
 
+			ColorPathSink?.Invoke("plain:" + (data?.GetType().Name ?? "null"));
 			output.Write(IdentifierEscaper.Escape(identifier), data);
 		}
+
+		/// <summary>
+		/// Diagnostic: reports which formatter path wrote each identifier. The color audit tool
+		/// sets this to capture a path tag per token; production runs leave it null.
+		/// </summary>
+		internal static Action<string>? ColorPathSink;
 
 		object? GetCurrentMemberReference() {
 			var node = nodeStack.Peek();

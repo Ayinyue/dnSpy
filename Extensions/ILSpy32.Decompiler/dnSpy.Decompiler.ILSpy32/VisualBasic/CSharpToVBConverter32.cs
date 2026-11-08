@@ -884,7 +884,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		public AstNode VisitIdentifierExpression(CS.IdentifierExpression identifierExpression, object data)
 		{
 			var expr = new IdentifierExpression();
-			expr.Identifier = Identifier.Create(identifierExpression.IdentifierToken.Annotations,
+			expr.Identifier = Identifier.Create(ResolveIdentifierAnnotations(identifierExpression),
 				ResolveLocalName(identifierExpression.Identifier));
 			ConvertNodes(identifierExpression.TypeArguments, expr.TypeArguments);
 			if (provider.IsMethodGroup(identifierExpression)) {
@@ -892,6 +892,105 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			}
 
 			return EndNode(identifierExpression, expr);
+		}
+		/// <summary>
+		/// Annotations for a converted identifier usage. The VB output stage colors an
+		/// identifier by its FIRST object annotation (MetadataTextColorProvider.GetColor), so
+		/// the decisive annotation must come first: a dnlib reference from the engine's resolve
+		/// results, then the IL variable's dnlib parameter/local, then a syntactic fallback
+		/// color. Engine resolve-result objects are dropped - they color as Text and hide the
+		/// useful annotations behind them.
+		/// </summary>
+		System.Collections.Generic.IEnumerable<object> ResolveIdentifierAnnotations(CS.IdentifierExpression identifierExpression) {
+			object? decisive = ResolveDnlibReference(identifierExpression);
+			if (decisive is null) {
+				var ilv = ICSharpCode.Decompiler.CSharp.AnnotationExtensions.GetILVariable(identifierExpression);
+				if (ilv is not null) {
+					decisive = ResolveILVariableReference(ilv, FindEnclosingMethod(identifierExpression))
+						?? ILVariableFallbackColor(ilv);
+				}
+			}
+			if (decisive is null)
+				decisive = SyntacticUsageColor(identifierExpression);
+			if (decisive is null) {
+				foreach (var annotation in identifierExpression.IdentifierToken.Annotations)
+					yield return annotation;
+				yield break;
+			}
+			yield return decisive;
+			foreach (var annotation in identifierExpression.IdentifierToken.Annotations) {
+				if (IsEngineResolveResult(annotation))
+					continue;
+				yield return annotation;
+			}
+		}
+
+		static bool IsEngineResolveResult(object annotation) =>
+			annotation is ICSharpCode.Decompiler.Semantics.ResolveResult ||
+			annotation is ICSharpCode.Decompiler.TypeSystem.IType;
+
+		/// <summary>
+		/// Maps the engine's IL variable to its dnlib parameter (by name) or local (by body
+		/// index), giving parameter and local usages the same color and navigation reference
+		/// the 2.3 engine emits.
+		/// </summary>
+		object? ResolveILVariableReference(ICSharpCode.Decompiler.IL.ILVariable ilv, MethodDef? method) {
+			if (ilv.Kind == ICSharpCode.Decompiler.IL.VariableKind.Parameter && method is not null) {
+				foreach (var parameter in method.Parameters) {
+					if (parameter.Name == ilv.Name)
+						return parameter;
+				}
+				return null;
+			}
+			if ((ilv.Kind == ICSharpCode.Decompiler.IL.VariableKind.Local ||
+					ilv.Kind == ICSharpCode.Decompiler.IL.VariableKind.PinnedLocal) &&
+					method?.Body is not null) {
+				var variables = method.Body.Variables;
+				if (ilv.Index >= 0 && ilv.Index < variables.Count)
+					return variables[ilv.Index];
+			}
+			return null;
+		}
+
+		/// <summary>Parameter/local color for variables whose dnlib object could not be mapped.</summary>
+		static object ILVariableFallbackColor(ICSharpCode.Decompiler.IL.ILVariable ilv) =>
+			ilv.Kind == ICSharpCode.Decompiler.IL.VariableKind.Parameter
+				? BoxedTextColor.Parameter
+				: BoxedTextColor.Local;
+
+		/// <summary>Nearest enclosing member with a body, through the accessor chain.</summary>
+		MethodDef? FindEnclosingMethod(CS.AstNode node) {
+			for (var n = node; n is not null; n = n.Parent) {
+				if (n.Annotation<MethodDef>() is { } methodDef)
+					return methodDef;
+			}
+			return null;
+		}
+
+		/// <summary>
+		/// Syntactic fallback color for an identifier usage the resolver could not annotate:
+		/// bare calls are methods, generic parameters in scope, then parameter names, then locals.
+		/// </summary>
+		object? SyntacticUsageColor(CS.IdentifierExpression usage) {
+			var name = usage.IdentifierToken.Name;
+			if (usage.Parent is CS.NamespaceDeclaration)
+				return BoxedTextColor.Namespace;
+			if (usage.Parent is CS.InvocationExpression invocation && invocation.Target == usage)
+				return BoxedTextColor.InstanceMethod;
+			// Method group passed as an argument: 'New Thread(Method)', 'UI(handler)'. A
+			// variable argument is indistinguishable syntactically, so parameter names win.
+			if (usage.Role == CS.Roles.Argument &&
+					(usage.Parent is CS.ObjectCreateExpression ||
+					 (usage.Parent is CS.InvocationExpression invocationArgument && invocationArgument.Target != usage)) &&
+					!IsParameterName(name, usage) &&
+					GenericParameterColorByName(name, usage) is null)
+				return BoxedTextColor.InstanceMethod;
+			var genericColor = GenericParameterColorByName(name, usage);
+			if (genericColor != null)
+				return genericColor;
+			if (IsParameterName(name, usage))
+				return BoxedTextColor.Parameter;
+			return BoxedTextColor.Local;
 		}
 
 		public AstNode VisitIndexerExpression(CS.IndexerExpression indexerExpression, object data)
@@ -950,7 +1049,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			memberAccessExpression.Target = (Expression)memberReferenceExpression.Target.AcceptVisitor(this, data);
 			memberAccessExpression.MemberName = Identifier.Create(memberReferenceExpression.MemberNameToken.Annotations, memberReferenceExpression.MemberName);
 			var memberRef = ResolveDnlibReference(memberReferenceExpression) ?? (object?)memberReferenceExpression.Annotation<IMemberRef>();
-			memberAccessExpression.MemberName.AddAnnotation(memberRef);
+			if (memberRef is not null)
+				memberAccessExpression.MemberName.AddAnnotation(memberRef);
+			else if (MemberUsageFallbackColor(memberReferenceExpression) is { } fallbackColor)
+				memberAccessExpression.MemberName.AddAnnotation(fallbackColor);
 			bool isExtensionMethod = false;
 			if (memberReferenceExpression.Parent is CS.InvocationExpression invocExpr) {
 				var method = invocExpr.Annotation<dnlib.DotNet.IMethod>().ResolveMethodDef();
@@ -963,6 +1065,40 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			}
 
 			return EndNode(memberReferenceExpression, memberAccessExpression);
+		}
+
+		/// <summary>
+		/// Annotation for a parameter declaration name: the enclosing method's dnlib parameter
+		/// (matched by name) when it belongs to the method itself, else the Parameter color for
+		/// lambda/catch parameters.
+		/// </summary>
+		object? ResolveParameterAnnotation(CS.ParameterDeclaration parameterDeclaration) {
+			if (FindEnclosingMethod(parameterDeclaration)?.Parameters.FirstOrDefault(p => p.Name == parameterDeclaration.Name) is { } parameter)
+				return parameter;
+			return BoxedTextColor.Parameter;
+		}
+
+		/// <summary>
+		/// Metadata definition the binder attached to an entity declaration; the output stage
+		/// colors the name by the FIRST identifier annotation, so the definition must come
+		/// first (its kind color and navigation reference match the 2.3 engine).
+		/// </summary>
+		object? ResolveDefinitionNameAnnotation(CS.EntityDeclaration entity) =>
+			(object?)entity.Annotation<MethodDef>() ?? (object?)entity.Annotation<PropertyDef>() ??
+			(object?)entity.Annotation<EventDef>() ?? (object?)entity.Annotation<FieldDef>() ??
+			(object?)entity.Annotation<TypeDef>();
+
+		/// <summary>
+		/// Syntactic fallback color for a member usage the resolver could not annotate:
+		/// invoked members are methods, others are fields or properties; a type-name target
+		/// ('Console.WriteLine') implies a static member.
+		/// </summary>
+		object MemberUsageFallbackColor(CS.MemberReferenceExpression memberRef) {
+			bool invoked = memberRef.Parent is CS.InvocationExpression inv && inv.Target == memberRef;
+			bool targetIsTypeName = memberRef.Target is CS.TypeReferenceExpression;
+			if (invoked)
+				return targetIsTypeName ? BoxedTextColor.StaticMethod : BoxedTextColor.InstanceMethod;
+			return targetIsTypeName ? BoxedTextColor.InstanceField : BoxedTextColor.InstanceProperty;
 		}
 
 		public AstNode VisitNamedArgumentExpression(CS.NamedArgumentExpression namedArgumentExpression, object data)
@@ -1418,7 +1554,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 			ConvertNodes(delegateDeclaration.Attributes.Where(section => section.AttributeTarget != "return"), result.Attributes);
 			ConvertNodes(delegateDeclaration.ModifierTokens, result.ModifierTokens);
-			result.Name = Identifier.Create(delegateDeclaration.NameToken.Annotations, delegateDeclaration.Name);
+			result.Name = Identifier.Create(ComposeAnnotations(ResolveDefinitionNameAnnotation(delegateDeclaration), delegateDeclaration.NameToken.Annotations), delegateDeclaration.Name);
 			result.IsSub = IsSub(delegateDeclaration.ReturnType);
 			ConvertNodes(delegateDeclaration.Parameters, result.Parameters);
 			ConvertNodes(delegateDeclaration.TypeParameters, result.TypeParameters);
@@ -1477,7 +1613,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					type.UnderlyingType = (AstType)first.AcceptVisitor(this, data);
 				}
 
-				type.Name = Identifier.Create(typeDeclaration.NameToken.Annotations, typeDeclaration.Name);
+				type.Name = Identifier.Create(ComposeAnnotations(ResolveDefinitionNameAnnotation(typeDeclaration), typeDeclaration.NameToken.Annotations), typeDeclaration.Name);
 
 				ConvertMembers(typeDeclaration, type, CS.Roles.TypeMemberRole, EnumDeclaration.MemberRole);
 
@@ -1537,7 +1673,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 						ConvertNodes(typeDeclaration.BaseTypes, type.ImplementsTypes);
 				}
 
-				type.Name = Identifier.Create(typeDeclaration.NameToken.Annotations, typeDeclaration.Name);
+				type.Name = Identifier.Create(ComposeAnnotations(ResolveDefinitionNameAnnotation(typeDeclaration), typeDeclaration.NameToken.Annotations), typeDeclaration.Name);
 
 				CollectMemberRenames(typeDeclaration);
 				types.Push(type);
@@ -1804,13 +1940,30 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		{
 			var imports = new ImportsStatement();
 
+			var member = RebuildWithNamespaceColors((AstType)usingDeclaration.Import.AcceptVisitor(this, data));
+
 			var clause = new MemberImportsClause() {
-				Member = (AstType)usingDeclaration.Import.AcceptVisitor(this, data)
+				Member = member
 			};
 
 			imports.AddChild(clause, ImportsStatement.ImportsClauseRole);
 
 			return EndNode(usingDeclaration, imports);
+		}
+
+		/// <summary>
+		/// Every segment of a namespace Imports is a namespace segment; make the Namespace
+		/// color the FIRST annotation so the output stage picks it up (engine resolve results
+		/// on the import names would otherwise color them Text).
+		/// </summary>
+		/// <summary>Rebuilds the import name so every segment carries the Namespace color.</summary>
+		AstType RebuildWithNamespaceColors(AstType type) {
+			if (type is QualifiedType qualified)
+				return new QualifiedType(RebuildWithNamespaceColors(qualified.Target),
+					Identifier.Create(BoxedTextColor.Namespace, qualified.Name));
+			if (type is SimpleType simple)
+				return new SimpleType(new[] { (object)BoxedTextColor.Namespace }, simple.Identifier);
+			return type;
 		}
 
 		public AstNode VisitExternAliasDeclaration(CS.ExternAliasDeclaration externAliasDeclaration, object data)
@@ -2690,7 +2843,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			var result = new EnumMemberDeclaration();
 
 			ConvertNodes(enumMemberDeclaration.Attributes, result.Attributes);
-			result.Name = Identifier.Create(enumMemberDeclaration.NameToken.Annotations, enumMemberDeclaration.Name);
+			result.Name = Identifier.Create(ComposeAnnotations(ResolveDefinitionNameAnnotation(enumMemberDeclaration), enumMemberDeclaration.NameToken.Annotations), enumMemberDeclaration.Name);
 			result.Value = (Expression)enumMemberDeclaration.Initializer.AcceptVisitor(this, data);
 
 			return EndNode(enumMemberDeclaration, result);
@@ -2726,7 +2879,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				// field-like, so derived classes can still raise it.
 				eventDeclaration.Modifiers &= ~CS.Modifiers.Abstract;
 				result.Modifiers = ConvertModifiers(eventDeclaration.Modifiers, eventDeclaration);
-				result.Name = Identifier.Create(evt.NameToken.Annotations, evt.Name);
+				result.Name = Identifier.Create(ComposeAnnotations(ResolveDefinitionNameAnnotation(eventDeclaration), evt.NameToken.Annotations), evt.Name);
 				result.ReturnType = (AstType)eventDeclaration.ReturnType.AcceptVisitor(this, data);
 
 				CreateImplementsClausesForEvent(eventDeclaration, result);
@@ -3004,7 +3157,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			// the thread-safe bookkeeping a VB field event does itself, so such an event is
 			// emitted field-like instead of dropping or inventing a RaiseEvent body.
 			result.IsCustom = !IsCompilerGeneratedFieldEvent(customEventDeclaration);
-			result.Name = Identifier.Create(customEventDeclaration.NameToken.Annotations, customEventDeclaration.Name);
+			result.Name = Identifier.Create(ComposeAnnotations(ResolveDefinitionNameAnnotation(customEventDeclaration), customEventDeclaration.NameToken.Annotations), customEventDeclaration.Name);
 			result.ReturnType = (AstType)customEventDeclaration.ReturnType.AcceptVisitor(this, data);
 			CreateImplementsClausesForEvent(customEventDeclaration, result);
 			if (result.IsCustom) {
@@ -3197,7 +3350,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 				ConvertNodes(methodDeclaration.Attributes.Where(section => section.AttributeTarget != "return"), result.Attributes);
 				ConvertNodes(methodDeclaration.ModifierTokens, result.ModifierTokens);
-				result.Name = Identifier.Create(methodDeclaration.NameToken.Annotations, methodDeclaration.Name);
+				result.Name = Identifier.Create(ComposeAnnotations(ResolveDefinitionNameAnnotation(methodDeclaration), methodDeclaration.NameToken.Annotations), methodDeclaration.Name);
 				result.IsSub = IsSub(methodDeclaration.ReturnType);
 				ConvertNodes(methodDeclaration.Parameters, result.Parameters);
 				ConvertNodes(methodDeclaration.Attributes.Where(section => section.AttributeTarget == "return"), result.ReturnTypeAttributes);
@@ -3227,7 +3380,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 				ConvertNodes(methodDeclaration.Attributes.Where(section => section.AttributeTarget != "return"), result.Attributes);
 				ConvertNodes(methodDeclaration.ModifierTokens, result.ModifierTokens);
-				result.Name = Identifier.Create(methodDeclaration.NameToken.Annotations, GetRenamedMemberName(methodDeclaration, methodDeclaration.Name));
+				result.Name = Identifier.Create(ComposeAnnotations(ResolveDefinitionNameAnnotation(methodDeclaration), methodDeclaration.NameToken.Annotations), GetRenamedMemberName(methodDeclaration, methodDeclaration.Name));
 				result.IsSub = IsSub(methodDeclaration.ReturnType);
 				ConvertNodes(methodDeclaration.Parameters, result.Parameters);
 				ConvertNodes(methodDeclaration.TypeParameters, result.TypeParameters);
@@ -3768,7 +3921,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		// whenever a using directive is in scope. A member-level Implements clause, however, is
 		// written with no imports in scope, so a bare 'IBackgroundImageOptionDefinition.Id' does
 		// not resolve (BC30002). Rebuild the name from the metadata as Global.<ns>.<name>.
-		static AstType QualifyMemberType(AstType vbType, Mono.Cecil.TypeReference cecilType) {
+		AstType QualifyMemberType(AstType vbType, Mono.Cecil.TypeReference cecilType) {
 			var element = cecilType is Mono.Cecil.GenericInstanceType git ? git.ElementType : cecilType;
 			// Arrays, byrefs and type parameters cannot be reached through a namespace.
 			if (element is Mono.Cecil.GenericParameter || element is Mono.Cecil.TypeSpecification)
@@ -3799,8 +3952,25 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				names.InsertRange(0, element.Namespace.Split('.'));
 
 			AstType result = new PrimitiveType("Global");
-			foreach (var name in names)
-				result = new QualifiedType(result, Identifier.Create((object)null, name));
+			for (int i = 0; i < names.Count; i++) {
+				// Namespace segments get the Namespace color; the last segment is the type name
+				// and keeps its kind color (local type) or plain Type (external, via the module's
+				// own TypeRef tables) - matching the 2.3 engine.
+				object nameAnnotation;
+				if (i == names.Count - 1) {
+					var typeName = names[i];
+					var localType = LookupLocalType(typeName);
+					nameAnnotation = localType is not null
+						? (object)localType
+						: (object)(module is ModuleDefMD moduleMd
+							? Common.DnlibReferenceMapper.ResolveTypeRefByName(moduleMd, typeName, -1) ?? (object)BoxedTextColor.Type
+							: BoxedTextColor.Type);
+				}
+				else {
+					nameAnnotation = BoxedTextColor.Namespace;
+				}
+				result = new QualifiedType(result, Identifier.Create(nameAnnotation, names[i]));
+			}
 			// Re-attach the converted type arguments; clone so the old tree keeps its children.
 			if (result is QualifiedType leaf && arguments.Count > 0) {
 				foreach (var argument in arguments)
@@ -4189,7 +4359,9 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				param.Attributes.Add(block);
 			}
 			var emittedParamName = RegisterParameterName(parameterDeclaration.Name);
-			param.Name = Identifier.Create(parameterDeclaration.NameToken.Annotations, emittedParamName);
+			var paramAnnotations = ComposeAnnotations(
+				ResolveParameterAnnotation(parameterDeclaration), parameterDeclaration.NameToken.Annotations);
+			param.Name = Identifier.Create(paramAnnotations, emittedParamName);
 			var parameterTypeName = parameterDeclaration.Type.ToString();
 			variableTypes[emittedParamName] = parameterTypeName;
 			// The body's identifiers keep the C# spelling, so the original name must still
@@ -4238,7 +4410,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			ConvertNodes(propertyDeclaration.Attributes.Where(section => section.AttributeTarget != "return"), decl.Attributes);
 			decl.Getter = (Accessor)propertyDeclaration.Getter.AcceptVisitor(this, data);
 			decl.Modifiers = ConvertModifiers(propertyDeclaration.Modifiers, propertyDeclaration);
-			decl.Name = Identifier.Create(propertyDeclaration.NameToken.Annotations, GetRenamedMemberName(propertyDeclaration, propertyDeclaration.Name));
+			decl.Name = Identifier.Create(ComposeAnnotations(ResolveDefinitionNameAnnotation(propertyDeclaration), propertyDeclaration.NameToken.Annotations), GetRenamedMemberName(propertyDeclaration, propertyDeclaration.Name));
 			ConvertNodes(propertyDeclaration.Attributes.Where(section => section.AttributeTarget == "return"), decl.ReturnTypeAttributes);
 			CreateImplementsClausesForProperty(propertyDeclaration, decl);
 			decl.ReturnType = (AstType)propertyDeclaration.ReturnType.AcceptVisitor(this, data);
@@ -4328,14 +4500,30 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitSimpleType(CS.SimpleType simpleType, object data)
 		{
-			var resolvedSimpleRef = ResolveDnlibReference(simpleType);
-			var simpleAnnotations = resolvedSimpleRef is null
-				? simpleType.IdentifierToken.Annotations
-				: simpleType.IdentifierToken.Annotations.Concat(new[] { resolvedSimpleRef });
-			var type = new SimpleType(simpleAnnotations, simpleType.Identifier);
+			var resolvedSimpleRef = ResolveDnlibReference(simpleType) ?? ResolveTypeNameFallback(simpleType);
+			var type = new SimpleType(
+				ComposeAnnotations(resolvedSimpleRef, simpleType.IdentifierToken.Annotations), simpleType.Identifier);
 			ConvertNodes(simpleType.TypeArguments, type.TypeArguments);
 
 			return EndNode(simpleType, type);
+		}
+
+		/// <summary>
+		/// Annotations for a converted identifier/type name: the decisive annotation (a dnlib
+		/// reference or a fallback color) must come first because the output stage colors by
+		/// the FIRST annotation; engine resolve results are dropped - they color as Text and
+		/// would hide everything behind them. The decisive reference is additionally returned
+		/// so callers can attach it to the enclosing AST node (the formatter looks up member
+		/// references on the node, not the identifier token).
+		/// </summary>
+		static System.Collections.Generic.IEnumerable<object> ComposeAnnotations(object? decisive, System.Collections.Generic.IEnumerable<object> original) {
+			if (decisive is not null)
+				yield return decisive;
+			foreach (var annotation in original) {
+				if (IsEngineResolveResult(annotation))
+					continue;
+				yield return annotation;
+			}
 		}
 
 		public AstNode VisitMemberType(CS.MemberType memberType, object data)
@@ -4349,17 +4537,17 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				// the type dnSpy.Contracts.DnSpy and fails (BC30456). Qualifying with Global makes
 				// VB start the lookup at the root namespace.
 				target = new QualifiedType(new PrimitiveType("Global"),
-					Identifier.Create(root.IdentifierToken.Annotations, root.Identifier));
+					Identifier.Create(ComposeAnnotations(BoxedTextColor.Namespace, root.IdentifierToken.Annotations), root.Identifier));
 			else
 				target = (AstType)memberType.Target.AcceptVisitor(this, data);
 
 			// The CS type node carries the IType annotation; resolve it so the name keeps its
 			// color and navigation reference.
-			var resolvedTypeRef = ResolveDnlibReference(memberType);
-			var nameAnnotations = resolvedTypeRef is null
-				? memberType.MemberNameToken.Annotations
-				: memberType.MemberNameToken.Annotations.Concat(new[] { resolvedTypeRef });
+			var resolvedTypeRef = ResolveDnlibReference(memberType) ?? ResolveTypeNameFallback(memberType);
+			var nameAnnotations = ComposeAnnotations(resolvedTypeRef, memberType.MemberNameToken.Annotations);
 			var type = new QualifiedType(target, Identifier.Create(nameAnnotations, memberType.MemberName));
+			if (resolvedTypeRef is not null)
+				type.AddAnnotation(resolvedTypeRef);
 			ConvertNodes(memberType.TypeArguments, type.TypeArguments);
 
 			return EndNode(memberType, type);
@@ -4492,7 +4680,13 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		{
 			var param = new TypeParameterDeclaration() {
 				Variance = (VarianceModifier)typeParameterDeclaration.Variance,
-				NameToken = Identifier.Create(typeParameterDeclaration.NameToken.Annotations, typeParameterDeclaration.Name)
+				NameToken = Identifier.Create(
+					ComposeAnnotations(
+						typeParameterDeclaration.Parent is CS.MethodDeclaration
+							? BoxedTextColor.MethodGenericParameter
+							: BoxedTextColor.TypeGenericParameter,
+						typeParameterDeclaration.NameToken.Annotations),
+					typeParameterDeclaration.Name)
 			};
 			param.NameToken.AddAnnotation(typeParameterDeclaration.Annotation<object>());
 
@@ -4617,7 +4811,125 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			var reference = ResolveDnlibReference(identifier.Parent ?? identifier) ?? ResolveDnlibReference(identifier);
 			if (reference != null)
 				ident.AddAnnotation(reference);
+			else
+				AddSyntacticFallbackAnnotation(ident, identifier);
 			return EndNode(identifier, ident);
+		}
+
+		/// <summary>
+		/// Colors identifiers whose metadata resolution failed, mirroring the 2.3 engine:
+		/// namespace segments, generic parameters, parameters, locals and type names. The
+		/// output stage reads the first identifier annotation through
+		/// MetadataTextColorProvider.GetColor, which passes TextColor/BoxedTextColor values
+		/// through unchanged, so a color annotation is a valid fallback marker.
+		/// </summary>
+		void AddSyntacticFallbackAnnotation(Identifier ident, CS.Identifier identifier) {
+			var color = SyntacticFallbackColor(identifier);
+			if (color is not null)
+				ident.AddAnnotation(color);
+		}
+
+		object? SyntacticFallbackColor(CS.Identifier identifier) {
+			var parent = identifier.Parent;
+			if (parent is null)
+				return null;
+
+			// Generic parameter declarations and in-scope usages.
+			if (parent is CS.TypeParameterDeclaration) {
+				var genericColor = GenericParameterColorByName(identifier.Name, identifier);
+				return genericColor ?? BoxedTextColor.TypeGenericParameter;
+			}
+
+			// Qualified type name segments: only the last segment is a type name; the
+			// intermediate namespace segments match the 2.3 engine's Namespace color.
+			if (parent is CS.SimpleType simple) {
+				if (simple.Role == CS.MemberType.TargetRole ||
+						simple.Parent is CS.NamespaceDeclaration || simple.Parent is CS.UsingDeclaration)
+					return BoxedTextColor.Namespace;
+				return TypeUsageColor(identifier.Name, identifier);
+			}
+			if (parent is CS.MemberType memberType && memberType.MemberNameToken == identifier) {
+				if (memberType.Parent is CS.MemberType || memberType.Parent is CS.NamespaceDeclaration || memberType.Parent is CS.UsingDeclaration)
+					return BoxedTextColor.Namespace;
+				return TypeUsageColor(identifier.Name, identifier);
+			}
+
+			// Attribute named argument: '[AttributeUsage(AllowMultiple = true)]' renders as an
+			// assignment inside the attribute; the left side is a property of the attribute type.
+			if (parent is CS.IdentifierExpression attributeArg && attributeArg.Parent is CS.AssignmentExpression assignment &&
+					assignment.Left == attributeArg && assignment.Parent is CS.Attribute)
+				return BoxedTextColor.InstanceProperty;
+
+			// Usage sites.
+			if (parent is CS.IdentifierExpression usage) {
+				if (usage.Parent is CS.NamespaceDeclaration)
+					return BoxedTextColor.Namespace;
+				if (usage.Parent is CS.InvocationExpression invocation && invocation.Target == usage)
+					return BoxedTextColor.InstanceMethod;
+				var genericColor = GenericParameterColorByName(identifier.Name, identifier);
+				if (genericColor != null)
+					return genericColor;
+				if (IsParameterName(identifier.Name, identifier))
+					return BoxedTextColor.Parameter;
+				return BoxedTextColor.Local;
+			}
+
+			// Member usage: 'expr.Name', 'Console.WriteLine', 'MyEnum.Value'.
+			if (parent is CS.MemberReferenceExpression memberRef && memberRef.MemberNameToken == identifier) {
+				bool invoked = memberRef.Parent is CS.InvocationExpression inv && inv.Target == memberRef;
+				// A type-name target is wrapped in a TypeReferenceExpression ('Console.WriteLine').
+				bool targetIsTypeName = memberRef.Target is CS.TypeReferenceExpression;
+				if (invoked)
+					return targetIsTypeName ? BoxedTextColor.StaticMethod : BoxedTextColor.InstanceMethod;
+				return targetIsTypeName ? BoxedTextColor.InstanceField : BoxedTextColor.InstanceProperty;
+			}
+
+			// Declaration sites that carry no metadata annotation.
+			if (parent is CS.ParameterDeclaration)
+				return BoxedTextColor.Parameter;
+			if (parent is CS.VariableInitializer || parent is CS.ForeachStatement || parent is CS.CatchClause)
+				return BoxedTextColor.Local;
+
+			return null;
+		}
+
+		object TypeUsageColor(string name, CS.AstNode scopeRoot) {
+			var genericColor = GenericParameterColorByName(name, scopeRoot);
+			return genericColor ?? BoxedTextColor.Type;
+		}
+
+		/// <summary>
+		/// Colors a generic parameter name by scanning the enclosing declarations; innermost
+		/// (method) parameters win over type parameters.
+		/// </summary>
+		object? GenericParameterColorByName(string name, CS.AstNode scopeRoot) {
+			if (string.IsNullOrEmpty(name))
+				return null;
+			for (var node = scopeRoot; node is not null; node = node.Parent) {
+				if (node is CS.MethodDeclaration md && md.TypeParameters.Any(tp => tp.Name == name))
+					return BoxedTextColor.MethodGenericParameter;
+				if (node is CS.TypeDeclaration td && td.TypeParameters.Any(tp => tp.Name == name))
+					return BoxedTextColor.TypeGenericParameter;
+			}
+			return null;
+		}
+
+		/// <summary>True when 'name' is a parameter of an enclosing method or lambda.</summary>
+		bool IsParameterName(string name, CS.AstNode scopeRoot) {
+			if (string.IsNullOrEmpty(name))
+				return false;
+			for (var node = scopeRoot; node is not null; node = node.Parent) {
+				System.Collections.Generic.IEnumerable<CS.ParameterDeclaration>? parameters = node switch {
+					CS.MethodDeclaration md => md.Parameters,
+					CS.ConstructorDeclaration cd => cd.Parameters,
+					CS.OperatorDeclaration od => od.Parameters,
+					CS.LambdaExpression lambda => lambda.Parameters,
+					_ => null,
+				};
+				if (parameters != null && parameters.Any(p => p.Name == name))
+					return true;
+			}
+			return false;
 		}
 
 		/// <summary>
@@ -4675,12 +4987,73 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		object? ToDnlibRef(Mono.Cecil.MemberReference? cecilMember) {
 			if (cecilMember is null || module is not ModuleDefMD moduleMd)
 				return null;
-			try {
-				return moduleMd.ResolveToken(new MDToken(cecilMember.MetadataToken.ToInt32())) as IMemberRef;
-			}
-			catch {
+			return Common.DnlibReferenceMapper.ToDnlib(moduleMd, cecilMember);
+		}
+
+		/// <summary>
+		/// Reference or color for a type name the engine left unannotated, mirroring the 2.3
+		/// engine: a type defined in this module keeps its kind color, an external type maps
+		/// by name to a TypeRef from the module's own reference tables (the formatter colors
+		/// those plain Type), a generic parameter in scope gets its generic-parameter color,
+		/// and namespace segments get the Namespace color. Attribute type names drop the
+		/// 'Attribute' suffix in C# and VB output, hence the suffix fallback.
+		/// </summary>
+		object? ResolveTypeNameFallback(CS.AstType typeNode) {
+			if (module is not ModuleDefMD moduleMd)
+				return null;
+			string name;
+			int arity;
+			bool isSegment;
+			switch (typeNode) {
+			case CS.SimpleType simple:
+				name = simple.Identifier;
+				arity = simple.TypeArguments.Count;
+				isSegment = simple.Role == CS.MemberType.TargetRole;
+				break;
+			case CS.MemberType memberType:
+				name = memberType.MemberName;
+				arity = memberType.TypeArguments.Count;
+				isSegment = memberType.Parent is CS.MemberType || memberType.Parent is CS.NamespaceDeclaration || memberType.Parent is CS.UsingDeclaration;
+				break;
+			default:
 				return null;
 			}
+			if (string.IsNullOrEmpty(name))
+				return null;
+			if (isSegment)
+				return BoxedTextColor.Namespace;
+			var genericColor = GenericParameterColorByName(name, typeNode);
+			if (genericColor != null)
+				return genericColor;
+			// A type defined in this module keeps its kind color (2.3 behavior); Find needs the
+			// full name, so look up by simple name through a lazily built table.
+			if (localTypesByName is null) {
+				localTypesByName = new System.Collections.Generic.Dictionary<string, TypeDef>(StringComparer.Ordinal);
+				foreach (var typeDef in moduleMd.Types) {
+					if (!localTypesByName.ContainsKey(typeDef.Name))
+						localTypesByName[typeDef.Name] = typeDef;
+				}
+			}
+			if (LookupLocalType(name) is { } localType)
+				return localType;
+			return (object?)Common.DnlibReferenceMapper.ResolveTypeRefByName(moduleMd, name, arity)
+				?? Common.DnlibReferenceMapper.ResolveTypeRefByName(moduleMd, name + "Attribute", -1);
+		}
+
+		System.Collections.Generic.Dictionary<string, TypeDef>? localTypesByName;
+
+		TypeDef? LookupLocalType(string simpleName) {
+			if (module is not ModuleDefMD moduleMd)
+				return null;
+			if (localTypesByName is null) {
+				localTypesByName = new System.Collections.Generic.Dictionary<string, TypeDef>(StringComparer.Ordinal);
+				foreach (var typeDef in moduleMd.Types) {
+					if (!localTypesByName.ContainsKey(typeDef.Name))
+						localTypesByName[typeDef.Name] = typeDef;
+				}
+			}
+			localTypesByName.TryGetValue(simpleName, out var found);
+			return found;
 		}
 
 		public AstNode VisitPatternPlaceholder(CS.AstNode placeholder, CS.PatternMatching.Pattern pattern, object data)

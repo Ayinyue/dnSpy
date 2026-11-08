@@ -832,3 +832,33 @@ TPA 确定性包含桌面框架，refs 稳定在 320。**发现 realBadFiles 异
 
 - 只验证「是否产出真实反编译文本」，**未做语法/编译验证**（编译需要完整引用集，属后续增量）。
 - `compare` 的逐行差异只用于观察，不代表质量优劣；`identical=0` 是常态（两代引擎排版不同）。
+
+## 着色对拍（2026-11-08，双引擎逐 token 审计）
+
+人工过 GUI 发现不了系统性着色缺口，建立了机器对拍：同一批类型分别用 2.3 / 3.2 引擎
+反编译，逐 token 捕获 `(text, color, hasReference)`，用 difflib 对齐 token 流后分组报告
+颜色差异（工具在 %TEMP%\m3probe，`colordump` 模式，双引擎同进程反射加载——两引擎程序集
+名不同，无标识冲突；probe 的引用全部 `Private=false`，运行时统一从 dnSpy bin 解析，
+否则 app base 的陈旧副本会静默顶替新构建）。
+
+对拍暴露并修复的系统性缺口（C# 577→34、VB 352→37 个颜色差异，其中 3.2 更准的
+「真属性 vs 2.3 误判方法」占一半）：
+
+- **跨模块 token 错位**（两边都有，最隐蔽）：cecil 引用指向**另一个程序集**时其
+  metadata token 在本模块无意义，裸 `ResolveToken` 命中本模块同 rid 的随机定义——
+  颜色错（`UIElement`→Enum）且导航目标错。修法 = token 解析后按「种类+名字+声明类型」
+  校验（`Common/DnlibReferenceMapper`），外部引用按名映射到本模块 TypeRef 表
+  （作用域权威）。
+- **标点/运算符约定相反**：引擎把 `.` 归 Punctuation、`<>/`:` 归 Operator；2.3 相反。
+  泛型尖括号与比较运算符靠 role 区分（LChevron/RChevron vs LessThan/GreaterThanRole）。
+- **命名空间段着成 Type**、泛型参数/参数/局部变量着成 Text：纯句法 fallback 可修，
+  无需解析（限定名中段、声明位置、外围方法参数名匹配）。
+- **VB 管线的首注解规则**：输出阶段按 identifier 的**第一个** object 注解取色，
+  引擎透传的 ResolveResult 排在前面会把有用注解「盖」成 Text——所有构造点统一
+  `ComposeAnnotations`（决定性注解置首 + 滤掉 ResolveResult）。
+- **定义名/Implements/Imports 的旁路构造**：`QualifyMemberType`、VisitUsingDeclaration、
+  VisitParameterDeclaration、VisitTypeParameterDeclaration、各实体定义名都是直建
+  Identifier，不经过通用 fallback——逐处补挂注解。
+
+两个引擎的 `ColorPathSink` 静态钩子（production 为 null）供对拍工具报告每个 token
+的着色路径，定位回归时先看 path 列。

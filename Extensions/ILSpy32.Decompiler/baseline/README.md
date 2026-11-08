@@ -894,3 +894,28 @@ sibling Comment 按序转进 VB 树，CopyComments 则跳过实体级（避免�
 重建对照，坏文件集合与当前完全一致（11 个，形态全为既有家族：comparer BC30456、
 迭代器桩 BC30002、Friend noise、BC30668），上午的 10 无法复现（门禁非确定性）。
 C# 门禁 AsmEditor realBad 709→719 同理（对 2.3 仍全面占优）。基线数字已同步。
+
+## 反编译选项接线（2026-11-09）
+
+用户指出 Token 注释是否显示由 dnSpy 设置控制，3.2 必须完整接上选项体系。dnSpy 的
+反编译选项 = GUID 契约（DecompilerOptionConstants）+ `decompiler.Settings.Options`
+（DecompilerOption<T>(GUID, getter, setter)）；设置页遍历 Options 生成 UI，改值经
+setter 写回。3.2 的 DecompilerSettings32 此前 `Options => Array.Empty`——设置页对
+3.2 语言零选项、NodeDecompiler 读 ShowTokenAndRvaComments 恒 false。
+
+接线（对齐 2.3 C#/VB 的选项集，仅暴露 3.2 引擎/扩展真实支持的）：
+- 19 个 bool 直通 EngineSettings 同名属性：ShowXmlDocumentation、UsingDeclarations、
+  FullyQualifyAmbiguousTypeNames、YieldReturn、AsyncAwait、AnonymousMethods、
+  ExpressionTrees、AutomaticProperties、AutomaticEvents、ForEachStatement、
+  LockStatement、QueryExpressions、SwitchStatementOnString、
+  IntroduceIncrementAndDecrement、MakeAssignmentExpressions、
+  ObjectOrCollectionInitializers、UseDebugSymbols、AlwaysGenerateExceptionVariable…
+- ShowTokenAndRvaComments 为扩展自有属性（3.2 引擎无此开关），C#/VB 的
+  InsertTokenComments 读取；默认 true 与 2.3 一致。
+- Clone 修复：此前 EngineSettings 按引用共享（clone 写穿到原设置），改
+  EngineSettings.Clone() 深拷贝。
+- 不暴露 3.2 无对应的选项（IL 视图三个、成员排序、十六进制数字、字符串长度上限等），
+  避免设置页出现死开关。
+
+端到端验证：经 Options 契约关掉 ShowTokenAndRvaComments → Token 注释消失；关掉
+UsingDeclarations → using 消失、名字回全限定（与 2.3 关闭时形态一致）。

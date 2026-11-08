@@ -217,8 +217,8 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					}
 					RemoveUncompilableCompilerAttributes(tree);
 					// The 2.3 engine shows a 'Token: 0x... RID: ...' comment before every member
-					// declaration (its ShowTokenAndRvaComments setting, on by default); match that.
-					InsertTokenComments(tree, module as ModuleDefMD);
+					// declaration when ShowTokenAndRvaComments is on (the dnSpy default).
+					InsertTokenComments(tree, module as ModuleDefMD, settings.ShowTokenAndRvaComments);
 					var tokenWriter = new DnSpyTokenWriter(output, engine, module as ModuleDefMD, VisualBasicMetadataTextColorProvider.Instance, 1);
 					tree.AcceptVisitor(new ICSharpCode.Decompiler.CSharp.OutputVisitor.CSharpOutputVisitor(
 						ICSharpCode.Decompiler.CSharp.OutputVisitor.TokenWriter.WrapInWriterThatSetsLocationsInAST(tokenWriter),
@@ -296,8 +296,8 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 	/// declaration, so documentation comments (inserted earlier by the engine transform)
 	/// stay above it like in 2.3.
 	/// </summary>
-	internal static void InsertTokenComments(ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree, ModuleDefMD module) {
-		if (module is null)
+	internal static void InsertTokenComments(ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree, ModuleDefMD module, bool showTokens) {
+		if (module is null || !showTokens)
 			return;
 		foreach (var decl in tree.DescendantsAndSelf.OfType<ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration>().ToList()) {
 			var definition = (IMDTokenProvider?)decl.Annotation<MethodDef>() ?? (IMDTokenProvider?)decl.Annotation<PropertyDef>() ??

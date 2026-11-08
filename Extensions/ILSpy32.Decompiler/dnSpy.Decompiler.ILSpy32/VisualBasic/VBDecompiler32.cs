@@ -204,8 +204,9 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				// The 3.2 tree has no dnlib annotations; the ported converter needs them.
 				AstAnnotationBinder.Attach(module, csharpUnit);
 				// The 2.3 engine shows a 'Token: 0x... RID: ...' comment before every member
-				// declaration; the converter turns those comments into VB quotes.
-				CSharpDecompiler32.InsertTokenComments(csharpUnit, module as ModuleDefMD);
+				// declaration when ShowTokenAndRvaComments is on; the converter turns those
+				// comments into VB quotes.
+				CSharpDecompiler32.InsertTokenComments(csharpUnit, module as ModuleDefMD, settings.ShowTokenAndRvaComments);
 				var converter = new CSharpToVBConverter32(module, new ILSpyEnvironmentProvider32(), engineTypeSystem);
 				var unit = (CompilationUnit)csharpUnit.AcceptVisitor(converter, null);
 				ApplyIdentifierRenames(csharpUnit, unit);

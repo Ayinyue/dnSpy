@@ -1459,6 +1459,11 @@ namespace ICSharpCode.NRefactory.VB {
 		
 		void WriteMembers(IEnumerable<AstNode> members)
 		{
+			// Materialize first: rendering mutates formatter state while the source
+			// enumeration is still lazily walking the tree, and the interleaving rendered
+			// comments twice.
+			var materialized = members.ToList();
+			members = materialized;
 			Indent();
 			bool isFirst = true;
 			AstNode lastMember = null;
@@ -1468,7 +1473,7 @@ namespace ICSharpCode.NRefactory.VB {
 				} else {
 					NewLine();
 				}
-				if (!IsSameGroup(lastMember, member))
+				if (!IsSameGroup(lastMember, member) && !(member is Comment))
 					formatter.AddLineSeparator(Math.Max(lastEndBlockOffset, lastDeclarationOffset));
 				member.AcceptVisitor(this, null);
 				lastMember = member;
@@ -2225,8 +2230,10 @@ namespace ICSharpCode.NRefactory.VB {
 		
 		public object VisitComment(Comment comment, object data)
 		{
-			if (comment.IsDocumentationComment)
-				WriteComment(comment);
+			// Plain comments (the token comments between members) arrive through the
+			// WriteSpecials cursor; documentation comments through their own paths.
+			// WriteComment breaks the line itself.
+			WriteComment(comment);
 			return null;
 		}
 

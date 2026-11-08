@@ -2213,6 +2213,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			while (current != null) {
 				if (current is CS.ObjectCreateExpression || current is CS.ConditionalExpression)
 					return true;
+				// '(From ...).ToArray()' starts a statement with '(' - VB reads it as a
+				// continuation of the previous line unless a Call keyword opens the statement.
+				if (current is CS.QueryExpression)
+					return true;
 				if (current is CS.MemberReferenceExpression member) { current = member.Target; continue; }
 				if (current is CS.ParenthesizedExpression parenthesized) { current = parenthesized.Expression; continue; }
 				if (current is CS.InvocationExpression invocation) { current = invocation.Target; continue; }
@@ -4686,9 +4690,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitComment (CS.Comment comment, object data)
 		{
-			if (!comment.IsDocumentation)
-				return null;
-
+			// Non-documentation comments are emitted too: the token comments (' Token: 0x... RID: ...')
+			// reach the converter as plain single-line comments, and the 2.3 engine shows them.
 			var c = new Comment (comment.Content, comment.CommentType == CS.CommentType.Documentation);
 
 			if (comment.CommentType == CS.CommentType.MultiLine)
@@ -5263,6 +5266,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		void CopyComments(CS.AstNode node, AstNode result)
 		{
+			// Plain comments (the token comments) are converted by ConvertMembers in source
+			// order; copying them here as well would render every one of them twice.
+			if (node is CS.EntityDeclaration || node is CS.NamespaceDeclaration || node is CS.SyntaxTree)
+				return;
 			foreach (CS.Comment c in node.GetChildrenByRole(CS.Roles.Comment).Reverse()) {
 				if (c.IsDocumentation)
 					continue;

@@ -216,6 +216,9 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 						// annotations stay absent; rendering continues
 					}
 					RemoveUncompilableCompilerAttributes(tree);
+					// The 2.3 engine shows a 'Token: 0x... RID: ...' comment before every member
+					// declaration (its ShowTokenAndRvaComments setting, on by default); match that.
+					InsertTokenComments(tree, module as ModuleDefMD);
 					var tokenWriter = new DnSpyTokenWriter(output, engine, module as ModuleDefMD, VisualBasicMetadataTextColorProvider.Instance, 1);
 					tree.AcceptVisitor(new ICSharpCode.Decompiler.CSharp.OutputVisitor.CSharpOutputVisitor(
 						ICSharpCode.Decompiler.CSharp.OutputVisitor.TokenWriter.WrapInWriterThatSetsLocationsInAST(tokenWriter),
@@ -283,7 +286,63 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			}
 		}
 
-		static void WriteNote(IDecompilerOutput output, string text) =>
-			output.Write(text, null, DecompilerReferenceFlags.None, BoxedTextColor.Text);
+	static void WriteNote(IDecompilerOutput output, string text) =>
+		output.Write(text, null, DecompilerReferenceFlags.None, BoxedTextColor.Text);
+
+	/// <summary>
+	/// Inserts a 'Token: 0x... RID: ...' comment before every member declaration that has a
+	/// metadata definition, mirroring the 2.3 engine's ShowTokenAndRvaComments output. Method
+	/// bodies add the RVA and file offset segments. The comment goes right before the
+	/// declaration, so documentation comments (inserted earlier by the engine transform)
+	/// stay above it like in 2.3.
+	/// </summary>
+	internal static void InsertTokenComments(ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree, ModuleDefMD module) {
+		if (module is null)
+			return;
+		foreach (var decl in tree.DescendantsAndSelf.OfType<ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration>().ToList()) {
+			var definition = (IMDTokenProvider?)decl.Annotation<MethodDef>() ?? (IMDTokenProvider?)decl.Annotation<PropertyDef>() ??
+				(IMDTokenProvider?)decl.Annotation<EventDef>() ?? (IMDTokenProvider?)decl.Annotation<TypeDef>();
+			if (definition is null) {
+				// The binder does not annotate field declarations: match the variables against
+				// the declaring type's fields (enum members are fields too).
+				if (decl is ICSharpCode.Decompiler.CSharp.Syntax.FieldDeclaration fieldDecl) {
+					var ownerType = decl.Ancestors.OfType<ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration>().FirstOrDefault();
+					var typeDef = ownerType?.Annotation<TypeDef>();
+					var variableName = fieldDecl.Variables.FirstOrDefault()?.Name;
+					if (typeDef is not null && variableName is not null)
+						definition = typeDef.Fields.FirstOrDefault(f => f.Name == variableName);
+				}
+				else if (decl is ICSharpCode.Decompiler.CSharp.Syntax.EnumMemberDeclaration enumMember) {
+					var ownerType = decl.Ancestors.OfType<ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration>().FirstOrDefault();
+					var typeDef = ownerType?.Annotation<TypeDef>();
+					if (typeDef is not null)
+						definition = typeDef.Fields.FirstOrDefault(f => f.Name == enumMember.Name);
+				}
+			}
+			if (definition is null)
+				continue;
+			try {
+				var comment = new ICSharpCode.Decompiler.CSharp.Syntax.Comment(BuildTokenCommentText(definition, module), ICSharpCode.Decompiler.CSharp.Syntax.CommentType.SingleLine);
+				decl.Parent?.InsertChildBefore(decl, comment, ICSharpCode.Decompiler.CSharp.Syntax.Roles.Comment);
+			}
+			catch {
+				// a comment must never break the decompilation
+			}
+		}
+	}
+
+	static string BuildTokenCommentText(IMDTokenProvider definition, ModuleDefMD module) {
+		var text = $" Token: 0x{definition.MDToken.Raw:X8} RID: {definition.MDToken.Rid}";
+		if (definition is MethodDef method && method.RVA != 0) {
+			try {
+				var fileOffset = module.ToFileOffset((uint)method.RVA);
+				text += $" RVA: 0x{method.RVA:X8} File Offset: 0x{fileOffset:X8}";
+			}
+			catch {
+				// offsets unavailable in-memory; the token part stays
+			}
+		}
+		return text;
+	}
 	}
 }

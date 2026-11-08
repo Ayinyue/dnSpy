@@ -37,7 +37,7 @@ call :Check dnSpy.dll          syntax-vb-dnspy.md     compile-vb-dnspy.md     0 
 if errorlevel 1 set REG=1
 call :Check AsmEditor.x        syntax-vb-asm.md       compile-vb-asm.md       0    526
 if errorlevel 1 set REG=1
-call :Check Contracts.Logic    syntax-vb-contracts.md compile-vb-contracts.md 0    10
+call :Check Contracts.Logic    syntax-vb-contracts.md compile-vb-contracts.md 0    11
 if errorlevel 1 set REG=1
 echo.
 echo degraded/failed must be 0 in every out\v32-vb-*\_meta.txt (checked by dump exit code).

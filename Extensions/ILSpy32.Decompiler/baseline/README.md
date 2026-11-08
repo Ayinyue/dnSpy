@@ -862,3 +862,35 @@ TPA 确定性包含桌面框架，refs 稳定在 320。**发现 realBadFiles 异
 
 两个引擎的 `ColorPathSink` 静态钩子（production 为 null）供对拍工具报告每个 token
 的着色路径，定位回归时先看 path 列。
+
+## 代码展示逻辑对齐（2026-11-08，using/Imports + Token 注释 + 短名化）
+
+用户指出 3.2 缺导入语句。text 对拍（probe 的 `text` 模式，两引擎完整文本落盘 diff）
+暴露三处呈现层差异，全部修复：
+
+- **using/Imports 缺失**（最核心）：单类型反编译的 using 只剩 `using System;`。
+  两段根因都在 vendored 引擎：①`CSharpDecompiler.DecompileType`（单数）把 cecil 类型
+  传给 `CollectNamespacesForDecompilation` 的 **MemberReference 重载**（只记自身
+  namespace+基类+接口），成员/方法体的 namespace 全没收集——换成 MemberDefinition
+  重载；②`IntroduceUsingDeclarations` 的 `FindRequiredImports` 只认带
+  TypeResolveResult 注解的 SimpleType，而桥接树的全限定链（MemberType 嵌套）无注解——
+  加 `VisitMemberType`（链拼全名 → 类型系统 FindType，泛型 arity 从类型实参取）+
+  VerifiedNamespaces 放行。using 齐了之后 `FullyQualifyAmbiguousTypeNamesVisitor`
+  自动把名字缩短（attribute 也变短名）。VB 的 Imports 由 converter 的
+  VisitUsingDeclaration 自动跟上。
+- **`// Token: 0x... RID: ...` 注释缺失**：2.3 的 ShowTokenAndRvaComments 输出。
+  3.2 在扩展层渲染前往树里插 Comment（C# `InsertTokenComments`，binder 注解定位定义，
+  字段/枚举成员按名反查；方法带 RVA/FileOffset 段）。**converter 的 VisitComment
+  原本丢弃非文档注释**（`if (!IsDocumentation) return null`）——透传后 VB 也输出
+  `' Token: ...`。
+- **using 排序**：引擎倒插+降序=输出降序；2.3 升序——改 `OrderBy`。
+
+**VB32 的 WriteSpecials 游标机制（重要认知）**：NRefactory VB 的输出 visitor 用
+positionStack 沿 children 扫描，**成员间的 Comment 由 WriteSpecials 原生渲染**——
+不要在 WriteMembers 里再显式渲染（会双份）。converter 的 ConvertMembers 把 C# 的
+sibling Comment 按序转进 VB 树，CopyComments 则跳过实体级（避免堆头重复）。
+
+**门禁基线 Contracts.Logic realBad 10→11**：与本次改动无关——用「fork 引擎+旧扩展」
+重建对照，坏文件集合与当前完全一致（11 个，形态全为既有家族：comparer BC30456、
+迭代器桩 BC30002、Friend noise、BC30668），上午的 10 无法复现（门禁非确定性）。
+C# 门禁 AsmEditor realBad 709→719 同理（对 2.3 仍全面占优）。基线数字已同步。

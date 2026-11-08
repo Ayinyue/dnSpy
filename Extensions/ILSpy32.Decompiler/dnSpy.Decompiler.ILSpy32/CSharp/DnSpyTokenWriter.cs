@@ -226,7 +226,16 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			// failed); only plain identifiers get the generic fallback tag.
 			if (!lastColorPath.StartsWith("ref-", StringComparison.Ordinal))
 				lastColorPath = "fallback";
-			EmitText(text, SyntacticColor(identifier));
+			var color = SyntacticColor(identifier);
+			// Member usages of same-type members: attach the definition as a navigation
+			// reference, matching what the 2.3 engine emitted for these sites.
+			if (identifier.Parent is MemberReferenceExpression usageMemberRef && usageMemberRef.MemberNameToken == identifier &&
+					FindEnclosingTypeMember(identifier.Name) is { } memberDef) {
+				lastColorPath = "ref-sametype-member";
+				EmitText(text, memberDef, DecompilerReferenceFlags.None, color);
+				return;
+			}
+			EmitText(text, color);
 		}
 
 		/// <summary>
@@ -368,6 +377,33 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		/// Instance/static color for a method usage: a same-named method of the enclosing type
 		/// (the binder annotates it) settles it; else fall back to the type-name heuristic.
 		/// </summary>
+		/// <summary>
+		/// The enclosing type's member with this name (method, property, field or event) -
+		/// used to attach references for member usages whose engine resolve results are
+		/// missing, matching the references the 2.3 engine emitted.
+		/// </summary>
+		IMemberDef? FindEnclosingTypeMember(string name) {
+			foreach (var node in nodeStack) {
+				if (node is CS.TypeDeclaration typeDecl && typeDecl.Annotation<TypeDef>() is { } typeDef) {
+					IMemberDef? found = typeDef.Methods.FirstOrDefault(m => m.Name == name);
+					if (found is null)
+						found = typeDef.Properties.FirstOrDefault(p => p.Name == name);
+					if (found is null)
+						found = typeDef.Events.FirstOrDefault(ev => ev.Name == name);
+					if (found is null) {
+						foreach (var field in typeDef.Fields) {
+							if (field.Name == name) {
+								found = field;
+								break;
+							}
+						}
+					}
+					return found;
+				}
+			}
+			return null;
+		}
+
 		object MethodColorByName(string name, bool targetIsTypeName) {
 			foreach (var node in nodeStack) {
 				if (node is CS.TypeDeclaration typeDecl && typeDecl.Annotation<TypeDef>() is { } typeDef) {

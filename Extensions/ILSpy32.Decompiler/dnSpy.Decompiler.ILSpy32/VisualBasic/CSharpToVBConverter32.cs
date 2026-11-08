@@ -1051,6 +1051,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			var memberRef = ResolveDnlibReference(memberReferenceExpression) ?? (object?)memberReferenceExpression.Annotation<IMemberRef>();
 			if (memberRef is not null)
 				memberAccessExpression.MemberName.AddAnnotation(memberRef);
+			else if (FindCurrentTypeMember(memberReferenceExpression.MemberName) is { } sameTypeMember)
+				memberAccessExpression.MemberName.AddAnnotation(sameTypeMember);
 			else if (MemberUsageFallbackColor(memberReferenceExpression) is { } fallbackColor)
 				memberAccessExpression.MemberName.AddAnnotation(fallbackColor);
 			bool isExtensionMethod = false;
@@ -1087,6 +1089,31 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			(object?)entity.Annotation<MethodDef>() ?? (object?)entity.Annotation<PropertyDef>() ??
 			(object?)entity.Annotation<EventDef>() ?? (object?)entity.Annotation<FieldDef>() ??
 			(object?)entity.Annotation<TypeDef>();
+
+		/// <summary>
+		/// The enclosing type's member with this name, for member usages whose engine
+		/// resolve results are missing - attaches the same navigation reference the
+		/// 2.3 engine emitted.
+		/// </summary>
+		IMemberDef? FindCurrentTypeMember(string name) {
+			var type = typeResolver.CurrentType;
+			if (type is null || string.IsNullOrEmpty(name))
+				return null;
+			IMemberDef? found = type.Methods.FirstOrDefault(m => m.Name == name);
+			if (found is null)
+				found = type.Properties.FirstOrDefault(p => p.Name == name);
+			if (found is null)
+				found = type.Events.FirstOrDefault(ev => ev.Name == name);
+			if (found is null) {
+				foreach (var field in type.Fields) {
+					if (field.Name == name) {
+						found = field;
+						break;
+					}
+				}
+			}
+			return found;
+		}
 
 		/// <summary>
 		/// Syntactic fallback color for a member usage the resolver could not annotate:

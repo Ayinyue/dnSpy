@@ -19,8 +19,8 @@
 | 着色（双引擎逐 token 对拍） | ✅ | 颜色差异收敛至 3.2 更准/既有家族（d11ab7a18、VB 批次、2bf4ffcd4） |
 | 引用/导航（token reference） | 🔧 | 本地定义 ✓；外部类型 TypeRef 映射 ✓；外部**成员**引用与 keyword 引用（string→System.String 等）仍有缺口（颜色不受影响，导航增强待续） |
 | 语句级调试映射 | ⛔ | 方法级 v1 已交付（8c5f1c83b）；语句级精度需引擎 IL↔语句映射专项 |
-| 迭代器重建（~608 文件退化） | ⛔ | 引擎级 YieldReturnDecompiler 专项（2.3 能重建部分形态） |
-| 查询续接子句 `into`（VB） | ⛔ | VisitQueryContinuationClause throw（DotNetPathProvider degraded），转换器缺口 |
+| 迭代器重建（~608 文件 C# 侧退化） | ⛔ | 引擎级 YieldReturnDecompiler 专项（2.3 能重建部分形态；VB 侧经 QueryExpressions 关闭已用方法链覆盖） |
+| 查询续接子句 `into`（VB） | ✅ | 2026-11-09：VB 兼容模式关 QueryExpressions（与 2.3 的方法链形态一致，degraded 197→0）；查询子句 visitor 全实现（Where/Let/Group/Continuation 嵌套 From），Join 仍 throw（无 degraded 站点） |
 | BC30345 / BC30521 余量 | 🟡 | C# out/值重载对、Show(Nothing) 歧义——VB 语言无法表达，按既定策略不修 |
 
 ## 2. IDecompiler 契约面
@@ -82,6 +82,6 @@
 
 1. 语句级调试映射精度（引擎 IL↔语句映射）
 2. 迭代器重建（YieldReturnDecompiler 引擎专项）
-3. VB 查询续接子句 `into`（转换器 visitor）
+3. ~~VB 查询续接子句 `into`~~ ✅ 已关闭（ad85ab3d0，degraded 197→0）
 4. 外部成员引用/keyword 引用挂载（导航增强）
 5. 2.3 选项值 → 3.2 的一次性选项值迁移（当前 3.2 从默认值起步）

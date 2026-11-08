@@ -56,6 +56,19 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		int column = 1;
 
 		/// <summary>
+		/// The module's corlib reference, used for primitive keyword references ('string' ->
+		/// System.String, matching the 2.3 engine); null when the module has no corlib ref.
+		/// </summary>
+		readonly IResolutionScope? corlibAssemblyRef;
+
+		/// <summary>
+		/// Diagnostic: reports which code path colored the token being written. The color audit
+		/// tool sets this to capture a path tag per token; production runs leave it null.
+		/// </summary>
+		internal static Action<string>? ColorPathSink;
+		string lastColorPath = "";
+
+		/// <summary>
 		/// The engine's CreateSequencePoints needs line/column information on the tree nodes;
 		/// the wrapping decorator copies our position into the nodes as tokens are written.
 		/// </summary>
@@ -74,6 +87,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			this.module = module;
 			this.metadataTextColorProvider = metadataTextColorProvider;
 			this.settingsVersion = settingsVersion;
+			corlibAssemblyRef = module.CorLibTypes?.AssemblyRef;
 			try {
 				typeSystem = (DecompilerTypeSystem?)typeof(ICSharpCode.Decompiler.CSharp.CSharpDecompiler)
 					.GetField("typeSystem", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?
@@ -86,6 +100,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 
 		/// <summary>Writes text and records its dnSpy output position for the line/column map.</summary>
 		void EmitText(string text, object color) {
+			ColorPathSink?.Invoke(lastColorPath);
 			positionMap.Add((line, column, output.NextPosition));
 			output.Write(text, color);
 			foreach (var ch in text) {
@@ -99,6 +114,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		}
 
 		void EmitText(string text, object reference, DecompilerReferenceFlags flags, object color) {
+			ColorPathSink?.Invoke(lastColorPath);
 			positionMap.Add((line, column, output.NextPosition));
 			output.Write(text, reference, flags, color);
 			foreach (var ch in text) {
@@ -169,23 +185,48 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 
 			// The identifier names the declared member: write it as a definition.
 			if (identifier.Parent is EntityDeclaration entity && entity.Name == identifier.Name) {
+				lastColorPath = "def-binder";
 				var definition = ResolveEntity(entity);
 				if (definition != null) {
 					EmitText(text, definition, DecompilerReferenceFlags.Definition, metadataTextColorProvider.GetColor(definition));
 					return;
 				}
+				lastColorPath = "def-fallback";
 				EmitText(text, SyntacticFallbackColor(identifier, BoxedTextColor.Type), DecompilerReferenceFlags.Definition, BoxedTextColor.Type);
 				return;
 			}
 
 			// A member or type reference: 'foo.Bar', a base type, an attribute type...
+			// NOTE: only the identifier's own parent is probed - outer expressions carry their
+			// own resolve results, which would miscolor plain parameter/local usages.
 			var reference = ResolveReference(identifier.Parent ?? (AstNode)identifier) ?? ResolveReference(identifier);
 			if (reference != null) {
+				// lastColorPath was set inside ResolveReference (which sub-path resolved it)
 				EmitText(text, reference, DecompilerReferenceFlags.None, metadataTextColorProvider.GetColor(reference));
 				return;
 			}
 
-			EmitText(text, SyntacticFallbackColor(identifier, BoxedTextColor.Text));
+			// Type-name usage the engine left unannotated (attribute types, generic arguments,
+			// base types): resolve by name in the module's own TypeRef table. Those references
+			// carry the correct assembly scope, so navigation matches the 2.3 engine, which
+			// colors external type names plain Type.
+			if (IsTypeNameIdentifier(identifier)) {
+				// Attribute type names drop the 'Attribute' suffix in C# output; fall back to the
+				// full metadata name for those.
+				var typeRef = ResolveTypeRefByName(identifier.Name, ArityOfTypeName(identifier))
+					?? (IsAttributeTypeName(identifier) ? ResolveTypeRefByName(identifier.Name + "Attribute", -1) : null);
+				if (typeRef is not null) {
+					lastColorPath = "ref-typeref-byname";
+					EmitText(text, typeRef, DecompilerReferenceFlags.None, BoxedTextColor.Type);
+					return;
+				}
+			}
+
+			// Preserve the ref-* diagnostic tag ResolveReference may have left (which sub-path
+			// failed); only plain identifiers get the generic fallback tag.
+			if (!lastColorPath.StartsWith("ref-", StringComparison.Ordinal))
+				lastColorPath = "fallback";
+			EmitText(text, SyntacticColor(identifier));
 		}
 
 		/// <summary>
@@ -213,19 +254,199 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			return defaultColor;
 		}
 
+		/// <summary>
+		/// Full syntactic fallback for identifiers whose metadata resolution failed. Mirrors the
+		/// 2.3 engine's colors: namespace segments, generic parameters, parameters, locals, and
+		/// member usages colored from their syntactic context.
+		/// </summary>
+		object SyntacticColor(Identifier identifier) {
+			var parent = identifier.Parent;
+			if (parent is null)
+				return BoxedTextColor.Text;
+
+			// Declaration sites that carry no binder annotation.
+			if (parent is TypeParameterDeclaration) {
+				var genericColor = GenericParameterColorByName(identifier.Name);
+				return genericColor ?? BoxedTextColor.TypeGenericParameter;
+			}
+			if (parent is ParameterDeclaration)
+				return BoxedTextColor.Parameter;
+			if (parent is VariableInitializer || parent is ForeachStatement || parent is CatchClause)
+				return BoxedTextColor.Local;
+
+			// Attribute named argument: '[AttributeUsage(AllowMultiple = true)]' - always a
+			// property or field of the attribute type. The name token's parent is the
+			// NamedArgumentExpression itself.
+			if (parent is NamedArgumentExpression)
+				return BoxedTextColor.InstanceProperty;
+
+			// Attribute named argument: '[AttributeUsage(AllowMultiple = true)]' renders as an
+			// assignment inside the attribute; the left side is always a property or field of
+			// the attribute type.
+			if (parent is IdentifierExpression attributeArg && attributeArg.Parent is AssignmentExpression assignment &&
+					assignment.Left == attributeArg && assignment.Parent is CS.Attribute)
+				return BoxedTextColor.InstanceProperty;
+
+			// Usage sites: the engine writes these through an IdentifierExpression token.
+			if (parent is IdentifierExpression usage) {
+				if (usage.Parent is NamespaceDeclaration)
+					return BoxedTextColor.Namespace;
+				if (usage.Parent is InvocationExpression invocation && invocation.Target == usage)
+					return BoxedTextColor.InstanceMethod;
+				// Method group passed as an argument: 'new Thread(Method)', 'UI(handler)'. A
+				// variable used as an argument is indistinguishable syntactically, so parameter
+				// names are checked first and win.
+				if (usage.Role == Roles.Argument &&
+						(usage.Parent is ObjectCreateExpression ||
+						 (usage.Parent is InvocationExpression invocationArgument && invocationArgument.Target != usage)) &&
+						!IsParameterName(identifier.Name) &&
+						GenericParameterColorByName(identifier.Name) is null)
+					return BoxedTextColor.InstanceMethod;
+				var genericColor = GenericParameterColorByName(identifier.Name);
+				if (genericColor != null)
+					return genericColor;
+				if (IsParameterName(identifier.Name))
+					return BoxedTextColor.Parameter;
+				return BoxedTextColor.Local;
+			}
+
+			// Qualified type name segments: only the last segment is a type name; the
+			// intermediate namespace segments match the 2.3 engine's Namespace color. A
+			// SimpleType in the Target role is a middle segment ('dnSpy' in dnSpy.Contracts.X);
+			// one in the type-argument role is a real type ('Action' in List<Action>).
+			if (parent is CS.SimpleType simple) {
+				if (simple.Role == CS.MemberType.TargetRole ||
+						simple.Parent is NamespaceDeclaration || simple.Parent is UsingDeclaration)
+					return BoxedTextColor.Namespace;
+				return TypeUsageColor(identifier.Name, simple);
+			}
+			if (parent is CS.MemberType memberType && memberType.MemberNameToken == identifier) {
+				if (memberType.Parent is MemberType || memberType.Parent is NamespaceDeclaration || memberType.Parent is UsingDeclaration)
+					return BoxedTextColor.Namespace;
+				return TypeUsageColor(identifier.Name, memberType);
+			}
+
+			// Member usage: 'expr.Name', 'Console.WriteLine', 'MyEnum.Value'.
+			if (parent is MemberReferenceExpression memberRef && memberRef.MemberNameToken == identifier) {
+				bool invoked = memberRef.Parent is InvocationExpression inv && inv.Target == memberRef;
+				// A type-name target is wrapped in a TypeReferenceExpression ('Console.WriteLine').
+				bool targetIsTypeName = memberRef.Target is TypeReferenceExpression;
+				if (invoked)
+					return targetIsTypeName ? BoxedTextColor.StaticMethod : BoxedTextColor.InstanceMethod;
+				return targetIsTypeName ? BoxedTextColor.InstanceField : BoxedTextColor.InstanceProperty;
+			}
+
+			return SyntacticFallbackColor(identifier, BoxedTextColor.Text);
+		}
+
+		/// <summary>Type-name usage color: a type parameter in scope, else Type.</summary>
+		object TypeUsageColor(string name, CS.AstNode typeNode) {
+			var genericColor = GenericParameterColorByName(name);
+			return genericColor ?? BoxedTextColor.Type;
+		}
+
+		/// <summary>
+		/// Colors a generic parameter name by scanning the enclosing declarations currently on
+		/// the node stack; innermost (method) parameters win over type parameters.
+		/// </summary>
+		object? GenericParameterColorByName(string name) {
+			if (string.IsNullOrEmpty(name))
+				return null;
+			foreach (var node in nodeStack) {
+				if (node is MethodDeclaration md && md.TypeParameters.Any(tp => tp.Name == name))
+					return BoxedTextColor.MethodGenericParameter;
+				if (node is CS.TypeDeclaration td && td.TypeParameters.Any(tp => tp.Name == name))
+					return BoxedTextColor.TypeGenericParameter;
+			}
+			return null;
+		}
+
+		/// <summary>True when 'name' is a parameter of an enclosing method or lambda.</summary>
+		bool IsParameterName(string name) {
+			foreach (var node in nodeStack) {
+				IEnumerable<ParameterDeclaration>? parameters = node switch {
+					MethodDeclaration md => md.Parameters,
+					CS.ConstructorDeclaration cd => cd.Parameters,
+					CS.OperatorDeclaration od => od.Parameters,
+					LambdaExpression lambda => lambda.Parameters,
+					_ => null,
+				};
+				if (parameters != null && parameters.Any(p => p.Name == name))
+					return true;
+			}
+			return false;
+		}
+
 		public override void WriteKeyword(Role role, string keyword) {
+			// Primitive type keywords carry a corlib reference like the 2.3 engine, so
+			// 'string'/'int'/'void' navigate to their System.* definitions.
+			if (primitiveTypeFullNames.TryGetValue(keyword, out var fullName) && corlibAssemblyRef is not null) {
+				lastColorPath = "keyword-primitive";
+				EmitText(keyword, GetPrimitiveTypeRef(fullName), DecompilerReferenceFlags.None, BoxedTextColor.Keyword);
+				isAtStartOfLine = false;
+				return;
+			}
+			lastColorPath = "keyword";
 			EmitText(keyword, BoxedTextColor.Keyword);
 			isAtStartOfLine = false;
 		}
 
+		static readonly Dictionary<string, string> primitiveTypeFullNames = new Dictionary<string, string> {
+			["string"] = "System.String",
+			["object"] = "System.Object",
+			["bool"] = "System.Boolean",
+			["byte"] = "System.Byte",
+			["sbyte"] = "System.SByte",
+			["short"] = "System.Int16",
+			["ushort"] = "System.UInt16",
+			["int"] = "System.Int32",
+			["uint"] = "System.UInt32",
+			["long"] = "System.Int64",
+			["ulong"] = "System.UInt64",
+			["float"] = "System.Single",
+			["double"] = "System.Double",
+			["decimal"] = "System.Decimal",
+			["char"] = "System.Char",
+			["void"] = "System.Void",
+		};
+		readonly Dictionary<string, TypeRefUser> primitiveTypeRefs = new Dictionary<string, TypeRefUser>();
+
+		TypeRefUser GetPrimitiveTypeRef(string fullName) {
+			if (!primitiveTypeRefs.TryGetValue(fullName, out var typeRef)) {
+				var slash = fullName.LastIndexOf('.');
+				typeRef = new TypeRefUser(module, fullName.Substring(0, slash), fullName.Substring(slash + 1), corlibAssemblyRef!);
+				primitiveTypeRefs[fullName] = typeRef;
+			}
+			return typeRef;
+		}
+
 		public override void WriteToken(Role role, string token) {
-			EmitText(token, IsPunctuation(token) ? BoxedTextColor.Punctuation : BoxedTextColor.Operator);
+			lastColorPath = "token";
+			EmitText(token, ColorOfToken(token, role));
 			isAtStartOfLine = false;
+		}
+
+		/// <summary>
+		/// Token colors matching the 2.3 engine: member-access dots and the other operator
+		/// tokens are Operator, while brackets and the generic angle brackets and colon are
+		/// Punctuation. Comparison operators use their own token roles, so they stay Operator
+		/// like in the 2.3 engine.
+		/// </summary>
+		static object ColorOfToken(string token, Role role) {
+			switch (token) {
+			case ".":
+				return BoxedTextColor.Operator;
+			case "<" when role == Roles.LChevron:
+			case ">" when role == Roles.RChevron:
+			case ":":
+				return BoxedTextColor.Punctuation;
+			}
+			return IsPunctuation(token) ? BoxedTextColor.Punctuation : BoxedTextColor.Operator;
 		}
 
 		static bool IsPunctuation(string token) {
 			foreach (var c in token) {
-				if (c != '(' && c != ')' && c != '[' && c != ']' && c != '{' && c != '}' && c != ',' && c != ';' && c != '.')
+				if (c != '(' && c != ')' && c != '[' && c != ']' && c != '{' && c != '}' && c != ',' && c != ';')
 					return false;
 			}
 			return token.Length > 0;
@@ -238,6 +459,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		public override void Unindent() => output.DecreaseIndent();
 
 		public override void NewLine() {
+			lastColorPath = "";
 			output.WriteLine();
 			line++;
 			column = 1;
@@ -360,10 +582,80 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		}
 
 		public override void WritePrimitiveType(string type) {
-			EmitText(type, BoxedTextColor.Keyword);
+			// Primitive type keywords carry a corlib reference like the 2.3 engine ('void' ->
+			// System.Void) so they navigate to the corlib definitions.
+			lastColorPath = "primitive-type";
+			if (primitiveTypeFullNames.TryGetValue(type, out var fullName) && corlibAssemblyRef is not null)
+				EmitText(type, GetPrimitiveTypeRef(fullName), DecompilerReferenceFlags.None, BoxedTextColor.Keyword);
+			else
+				EmitText(type, BoxedTextColor.Keyword);
 			if (type == "new")
 				EmitText("()", BoxedTextColor.Punctuation);
 			isAtStartOfLine = false;
+		}
+
+		/// <summary>
+		/// True when the identifier is the last segment of a type name (a base type, an
+		/// attribute type, a generic argument) - not a namespace segment.
+		/// </summary>
+		static bool IsTypeNameIdentifier(Identifier identifier) {
+			if (identifier.Parent is CS.Attribute)
+				return true;
+			if (identifier.Parent is CS.SimpleType simple)
+				return simple.Role != CS.MemberType.TargetRole;
+			if (identifier.Parent is CS.MemberType memberType)
+				return memberType.MemberNameToken == identifier;
+			return false;
+		}
+
+		/// <summary>True when the identifier names an attribute's type in an attribute section.</summary>
+		static bool IsAttributeTypeName(Identifier identifier) =>
+			identifier.Parent is CS.Attribute || identifier.Parent?.Parent is CS.Attribute;
+
+		/// <summary>Number of type arguments on the type node, or -1 when unknown.</summary>
+		static int ArityOfTypeName(Identifier identifier) {
+			if (identifier.Parent is CS.SimpleType simple)
+				return simple.TypeArguments.Count;
+			if (identifier.Parent is CS.MemberType memberType)
+				return memberType.TypeArguments.Count;
+			return -1;
+		}
+
+		Dictionary<string, List<(TypeRef typeRef, int arity)>>? typeRefsByName;
+
+		/// <summary>
+		/// Finds a TypeRef in this module's reference tables by simple name; the scope of those
+		/// refs is authoritative, so the resulting reference navigates to the right assembly.
+		/// The generic arity comes from the metadata name suffix (List`1).
+		/// </summary>
+		TypeRef? ResolveTypeRefByName(string name, int arity) {
+			if (typeRefsByName is null) {
+				typeRefsByName = new Dictionary<string, List<(TypeRef, int)>>(StringComparer.Ordinal);
+				foreach (var tr in module.GetTypeRefs()) {
+					var (bare, refArity) = SplitGenericArity(tr.Name);
+					if (!typeRefsByName.TryGetValue(bare, out var list))
+						typeRefsByName[bare] = list = new List<(TypeRef, int)>();
+					list.Add((tr, refArity));
+				}
+			}
+			if (!typeRefsByName.TryGetValue(name, out var candidates))
+				return null;
+			foreach (var (tr, refArity) in candidates) {
+				if (tr.DeclaringType is null && (arity < 0 || arity == refArity))
+					return tr;
+			}
+			foreach (var (tr, refArity) in candidates) {
+				if (arity < 0 || arity == refArity)
+					return tr;
+			}
+			return null;
+		}
+
+		static (string bare, int arity) SplitGenericArity(string metadataName) {
+			var tick = metadataName.IndexOf('`');
+			if (tick < 0)
+				return (metadataName, 0);
+			return (metadataName.Substring(0, tick), int.TryParse(metadataName.Substring(tick + 1), out var n) ? n : 0);
 		}
 
 		/// <summary>
@@ -391,18 +683,28 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			if (node is null || typeSystem is null)
 				return null;
 			var rr = node.Annotation<MemberResolveResult>();
-			if (rr?.Member != null)
+			if (rr?.Member != null) {
+				lastColorPath = "ref-rr";
 				return ToDnlib(TryGetCecil(rr.Member));
+			}
 			var trr = node.Annotation<TypeResolveResult>();
-			if (trr?.Type?.GetDefinition() != null)
+			if (trr?.Type?.GetDefinition() != null) {
+				lastColorPath = "ref-trr";
 				return ToDnlib(TryGetCecil(trr.Type.GetDefinition()));
+			}
 			var type = node.Annotation<ICSharpCode.Decompiler.TypeSystem.IType>();
 			if (type != null) {
 				var definition = type.GetDefinition();
-				if (definition != null)
+				if (definition != null) {
+					lastColorPath = "ref-itype";
 					return ToDnlib(TryGetCecil(definition));
+				}
 			}
 			var symbol = node.GetSymbol();
+			if (symbol is null)
+				lastColorPath = "ref-no-symbol";
+			else
+				lastColorPath = "ref-symbol";
 			return SymbolToDnlib(symbol);
 		}
 
@@ -449,11 +751,86 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			if (cecilMember is null)
 				return null;
 			try {
-				return module.ResolveToken(new MDToken(cecilMember.MetadataToken.ToInt32())) as IMemberRef;
+				var resolved = module.ResolveToken(new MDToken(cecilMember.MetadataToken.ToInt32())) as IMemberRef;
+				if (resolved is not null && SameIdentity(resolved, cecilMember))
+					return resolved;
 			}
 			catch {
-				return null;
 			}
+			// The cecil reference belongs to another module (a metadata reference into a
+			// referenced assembly): its token is meaningless inside this module and the raw
+			// resolve above hits an unrelated local definition. Map it by name instead so the
+			// reference - and with it the color and navigation - stays correct.
+			var mapped = MapExternal(cecilMember);
+			if (mapped is null)
+				lastColorPath = "ref-external-unmapped";
+			return mapped;
+		}
+
+		/// <summary>
+		/// Loose identity check that catches cross-module rid collisions: a token resolved in
+		/// this module must match the cecil reference's kind, name and declaring type - methods
+		/// like ToString or get_X share names across assemblies, so the declaring type decides.
+		/// </summary>
+		static bool SameIdentity(IMemberRef resolved, Mono.Cecil.MemberReference cecilMember) {
+			switch (cecilMember) {
+			case Mono.Cecil.TypeDefinition cecilType:
+				return resolved is TypeDef td && td.Name == cecilType.Name && td.Namespace == cecilType.Namespace;
+			case Mono.Cecil.MethodDefinition cecilMethod:
+				return resolved is MethodDef md && md.Name == cecilMethod.Name &&
+					SameDeclaringType(md.DeclaringType, cecilMethod.DeclaringType);
+			case Mono.Cecil.FieldDefinition cecilField:
+				return resolved is FieldDef fd && fd.Name == cecilField.Name &&
+					SameDeclaringType(fd.DeclaringType, cecilField.DeclaringType);
+			case Mono.Cecil.PropertyDefinition cecilProperty:
+				return resolved is PropertyDef pd && pd.Name == cecilProperty.Name &&
+					SameDeclaringType(pd.DeclaringType, cecilProperty.DeclaringType);
+			case Mono.Cecil.EventDefinition cecilEvent:
+				return resolved is EventDef ed && ed.Name == cecilEvent.Name &&
+					SameDeclaringType(ed.DeclaringType, cecilEvent.DeclaringType);
+			default:
+				return false;
+			}
+		}
+
+		static bool SameDeclaringType(TypeDef? declaring, Mono.Cecil.TypeDefinition? cecilDeclaring) {
+			if (declaring is null || cecilDeclaring is null)
+				return declaring is null && cecilDeclaring is null;
+			return declaring.Name == cecilDeclaring.Name && declaring.Namespace == cecilDeclaring.Namespace;
+		}
+
+		/// <summary>Maps a cecil reference into another assembly to a dnlib reference by name.</summary>
+		object? MapExternal(Mono.Cecil.MemberReference cecilMember) {
+			Mono.Cecil.TypeReference? typeReference = cecilMember switch {
+				Mono.Cecil.TypeSpecification spec => spec.ElementType,
+				Mono.Cecil.TypeReference tr => tr,
+				_ => null,
+			};
+			if (typeReference is null)
+				return null;
+			if (typeReference.Scope is null || typeReference.Scope is Mono.Cecil.ModuleDefinition)
+				return null;
+			var scope = FindAssemblyRef(typeReference.Scope.Name);
+			if (scope is null)
+				return null;
+			// Nested types chain through declaring TypeRefs so dnSpy can resolve the whole path.
+			if (typeReference.DeclaringType is not null) {
+				if (MapExternal(typeReference.DeclaringType) is not TypeRefUser declaring)
+					return null;
+				return new TypeRefUser(module, string.Empty, typeReference.Name, (IResolutionScope)declaring);
+			}
+			return new TypeRefUser(module, typeReference.Namespace, typeReference.Name, scope);
+		}
+
+		IResolutionScope? FindAssemblyRef(string? scopeName) {
+			if (string.IsNullOrEmpty(scopeName))
+				return null;
+			foreach (var ar in module.GetAssemblyRefs()) {
+				if (ar.Name == scopeName)
+					return ar;
+			}
+			// Not among the module's refs yet (for example the corlib alias): create one by name.
+			return new AssemblyRefUser(new UTF8String(scopeName));
 		}
 	}
 }

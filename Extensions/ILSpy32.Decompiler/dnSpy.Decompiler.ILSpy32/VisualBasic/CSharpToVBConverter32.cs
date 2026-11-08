@@ -976,7 +976,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			if (usage.Parent is CS.NamespaceDeclaration)
 				return BoxedTextColor.Namespace;
 			if (usage.Parent is CS.InvocationExpression invocation && invocation.Target == usage)
-				return BoxedTextColor.InstanceMethod;
+				return MethodColorByName(name, false);
 			// Method group passed as an argument: 'New Thread(Method)', 'UI(handler)'. A
 			// variable argument is indistinguishable syntactically, so parameter names win.
 			if (usage.Role == CS.Roles.Argument &&
@@ -1097,8 +1097,23 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			bool invoked = memberRef.Parent is CS.InvocationExpression inv && inv.Target == memberRef;
 			bool targetIsTypeName = memberRef.Target is CS.TypeReferenceExpression;
 			if (invoked)
-				return targetIsTypeName ? BoxedTextColor.StaticMethod : BoxedTextColor.InstanceMethod;
+				return targetIsTypeName ? BoxedTextColor.StaticMethod : MethodColorByName(memberRef.MemberName, false);
 			return targetIsTypeName ? BoxedTextColor.InstanceField : BoxedTextColor.InstanceProperty;
+		}
+
+		/// <summary>
+		/// Instance/static color for a method usage: when a same-named method of the enclosing
+		/// type settles it, use that; else fall back to the type-name heuristic.
+		/// </summary>
+		object MethodColorByName(string name, bool targetIsTypeName) {
+			var methods = typeResolver.CurrentType?.Methods?.Where(m => m.Name == name).ToList();
+			if (methods is not null && methods.Count > 0) {
+				if (methods.All(m => m.IsStatic))
+					return BoxedTextColor.StaticMethod;
+				if (methods.All(m => !m.IsStatic))
+					return BoxedTextColor.InstanceMethod;
+			}
+			return targetIsTypeName ? BoxedTextColor.StaticMethod : BoxedTextColor.InstanceMethod;
 		}
 
 		public AstNode VisitNamedArgumentExpression(CS.NamedArgumentExpression namedArgumentExpression, object data)
@@ -1116,16 +1131,21 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			// Attribute arguments use "Name := value" in VB. The ".Name = value" form
 			// (FieldInitializerExpression) is only valid inside an object initializer, and
 			// emitting it inside "<...>" makes the VB parser fall back to XML literals.
+			// The member name keeps its resolved reference (property/field of the object being
+			// initialized) or at least the InstanceProperty color - matching the 2.3 engine.
+			var memberAnnotations = ComposeAnnotations(
+				ResolveDnlibReference(namedExpression) ?? ResolveDnlibReference(namedExpression.NameToken) ?? (object)BoxedTextColor.InstanceProperty,
+				namedExpression.NameToken.Annotations);
 			if (namedExpression.Parent is CS.Attribute) {
 				return EndNode(namedExpression, new NamedArgumentExpression {
-					Identifier = Identifier.Create(namedExpression.NameToken.Annotations, namedExpression.Name),
+					Identifier = Identifier.Create(memberAnnotations, namedExpression.Name),
 					Expression = (Expression)namedExpression.Expression.AcceptVisitor(this, data)
 				});
 			}
 
 			Expression expr = new FieldInitializerExpression {
 				IsKey = true,
-				Identifier = Identifier.Create(namedExpression.NameToken.Annotations, namedExpression.Name),
+				Identifier = Identifier.Create(memberAnnotations, namedExpression.Name),
 				Expression = (Expression)namedExpression.Expression.AcceptVisitor(this, data)
 			};
 			return EndNode(namedExpression, expr);
@@ -4465,7 +4485,14 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			var emittedName = localDeclarationNames.TryGetValue(variableInitializer, out var mappedName)
 				? mappedName
 				: variableInitializer.Name;
-			decl.Identifiers.Add(new VariableIdentifier() { Name = Identifier.Create(variableInitializer.NameToken.Annotations, emittedName) });
+			object? declaratorAnnotation = null;
+			if (variableInitializer.Parent is CS.FieldDeclaration fieldDecl)
+				declaratorAnnotation = ResolveDefinitionNameAnnotation(fieldDecl);
+			decl.Identifiers.Add(new VariableIdentifier() {
+				Name = Identifier.Create(ComposeAnnotations(
+					declaratorAnnotation ?? (variableInitializer.Parent is CS.FieldDeclaration ? (object)BoxedTextColor.InstanceField : BoxedTextColor.Local),
+					variableInitializer.NameToken.Annotations), emittedName)
+			});
 			var initializer = (Expression)variableInitializer.Initializer.AcceptVisitor(this, data);
 			var declaredTypeName = variableInitializer.Parent.GetChildByRole(CS.Roles.Type).ToString();
 			var valueTypeName = typeResolver.GetTypeName(variableInitializer.Initializer);

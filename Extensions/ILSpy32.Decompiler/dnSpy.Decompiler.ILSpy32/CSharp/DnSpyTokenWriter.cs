@@ -291,8 +291,11 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			if (parent is IdentifierExpression usage) {
 				if (usage.Parent is NamespaceDeclaration)
 					return BoxedTextColor.Namespace;
+				// 'value' inside a property setter accessor: the 2.3 engine shows it as a keyword.
+				if (identifier.Name == "value" && IsInsideSetter(identifier))
+					return BoxedTextColor.Keyword;
 				if (usage.Parent is InvocationExpression invocation && invocation.Target == usage)
-					return BoxedTextColor.InstanceMethod;
+					return MethodColorByName(identifier.Name, false);
 				// Method group passed as an argument: 'new Thread(Method)', 'UI(handler)'. A
 				// variable used as an argument is indistinguishable syntactically, so parameter
 				// names are checked first and win.
@@ -332,7 +335,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				// A type-name target is wrapped in a TypeReferenceExpression ('Console.WriteLine').
 				bool targetIsTypeName = memberRef.Target is TypeReferenceExpression;
 				if (invoked)
-					return targetIsTypeName ? BoxedTextColor.StaticMethod : BoxedTextColor.InstanceMethod;
+					return targetIsTypeName ? BoxedTextColor.StaticMethod : MethodColorByName(identifier.Name, false);
 				return targetIsTypeName ? BoxedTextColor.InstanceField : BoxedTextColor.InstanceProperty;
 			}
 
@@ -359,6 +362,37 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					return BoxedTextColor.TypeGenericParameter;
 			}
 			return null;
+		}
+
+		/// <summary>
+		/// Instance/static color for a method usage: a same-named method of the enclosing type
+		/// (the binder annotates it) settles it; else fall back to the type-name heuristic.
+		/// </summary>
+		object MethodColorByName(string name, bool targetIsTypeName) {
+			foreach (var node in nodeStack) {
+				if (node is CS.TypeDeclaration typeDecl && typeDecl.Annotation<TypeDef>() is { } typeDef) {
+					var methods = typeDef.Methods.Where(m => m.Name == name).ToList();
+					if (methods.Count > 0) {
+						if (methods.All(m => m.IsStatic))
+							return BoxedTextColor.StaticMethod;
+						if (methods.All(m => !m.IsStatic))
+							return BoxedTextColor.InstanceMethod;
+					}
+					break;
+				}
+			}
+			return targetIsTypeName ? BoxedTextColor.StaticMethod : BoxedTextColor.InstanceMethod;
+		}
+
+		/// <summary>True when the node sits inside a property or indexer setter accessor.</summary>
+		static bool IsInsideSetter(AstNode node) {
+			for (var n = node; n is not null; n = n.Parent) {
+				if (n.Parent is CS.PropertyDeclaration property && property.Setter == n)
+					return true;
+				if (n.Parent is CS.IndexerDeclaration indexer && indexer.Setter == n)
+					return true;
+			}
+			return false;
 		}
 
 		/// <summary>True when 'name' is a parameter of an enclosing method or lambda.</summary>

@@ -14,14 +14,19 @@ using dnSpy.Contracts.Text;
 using ICSharpCode.NRefactory.VB;
 using ICSharpCode.NRefactory.VB.Ast;
 using CSharp2 = ICSharpCode.NRefactory.CSharp;
+using EngineIL = ICSharpCode.Decompiler.IL;
 
 namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 	sealed class VBTextOutputFormatter32 : IOutputFormatter {
-		readonly IDecompilerOutput output;
-		readonly Stack<AstNode> nodeStack = new Stack<AstNode>();
-		readonly Stack<(MethodDebugInfoBuilder builder, MethodDef method)> methodBuilders = new Stack<(MethodDebugInfoBuilder, MethodDef)>();
-		readonly List<MethodDebugInfo> debugInfos = new List<MethodDebugInfo>();
-		readonly int settingsVersion;
+	readonly IDecompilerOutput output;
+	readonly Stack<AstNode> nodeStack = new Stack<AstNode>();
+	readonly Stack<(MethodDebugInfoBuilder builder, MethodDef method)> methodBuilders = new Stack<(MethodDebugInfoBuilder, MethodDef)>();
+	readonly HashSet<MethodDebugInfoBuilder> withStatements = new HashSet<MethodDebugInfoBuilder>();
+	readonly List<MethodDebugInfo> debugInfos = new List<MethodDebugInfo>();
+	readonly int settingsVersion;
+	// Live while a method builder is open: instructions already claimed by an inner
+	// statement's sequence point, so outer statements don't duplicate them.
+	HashSet<EngineIL.ILInstruction> mappedInstructions;
 
 		/// <summary>
 		/// Debug info produced during rendering (one whole-body span per method with a body -
@@ -47,6 +52,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 						methodDef, null, Array.Empty<SourceLocal>(), null, null);
 					builder.StartPosition = output.NextPosition;
 					methodBuilders.Push((builder, methodDef));
+					mappedInstructions = new HashSet<EngineIL.ILInstruction>();
 				}
 			}
 		}
@@ -56,9 +62,15 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				var (builder, method) = methodBuilders.Peek();
 				if (method == node.Annotation<MethodDef>()) {
 					methodBuilders.Pop();
+					mappedInstructions = null;
 					builder.EndPosition = output.NextPosition;
-					var textSpan = TextSpan.FromBounds(builder.StartPosition!.Value, builder.EndPosition.Value);
-					builder.Add(new SourceStatement(new ILSpan(0, (uint)method.Body!.GetCodeSize()), textSpan));
+					if (!withStatements.Contains(builder)) {
+						// No statement-level sequence points made it: fall back to the v1
+						// whole-body span, the shape the 2.3 engine used for bodies it could
+						// not track statement-level.
+						var textSpan = TextSpan.FromBounds(builder.StartPosition!.Value, builder.EndPosition.Value);
+						builder.Add(new SourceStatement(new ILSpan(0, (uint)method.Body!.GetCodeSize()), textSpan));
+					}
 					debugInfos.Add(builder.Create());
 				}
 			}
@@ -273,10 +285,69 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			node is EnumMemberDeclaration ||
 			node is TypeParameterDeclaration;
 
-		public void DebugStart(AstNode node) { }
+		/// <summary>One statement's debug mapping state (the 2.3 engine's DebugState shape):
+		/// the nodes rendered for the statement so far, plus the text start.</summary>
+		class DebugState {
+			public List<AstNode> Nodes = new List<AstNode>();
+			public int StartLocation;
+		}
+		readonly Stack<DebugState> debugStack = new Stack<DebugState>();
+
+		/// <summary>
+		/// The VB32 output visitor calls this from WriteKeyword right before the keyword is
+		/// written (and for declaration nodes), so StartLocation is the statement's text start.
+		/// </summary>
+		public void DebugStart(AstNode node) => debugStack.Push(new DebugState { StartLocation = output.NextPosition });
+
 		public void DebugHidden(object hiddenILSpans) { }
-		public void DebugExpression(AstNode node) { }
-		public void DebugEnd(AstNode node) { }
+
+		/// <summary>Registers one rendered expression node of the current statement.</summary>
+		public void DebugExpression(AstNode node) {
+			if (debugStack.Count > 0)
+				debugStack.Peek().Nodes.Add(node);
+		}
+
+		/// <summary>
+		/// Statement-level IL<->text mapping (the 2.3 engine's DebugEnd shape): the rendered
+		/// nodes' annotations - copied over from the C# tree by the converter - carry the
+		/// engine's IL instructions, whose IL ranges map 1:1 onto dnSpy ILSpans. Only the
+		/// nodes the visitor reported through DebugExpression are read, so a statement never
+		/// claims IL from parts of its body that have not rendered yet.
+		/// </summary>
+		public void DebugEnd(AstNode node) {
+			if (debugStack.Count == 0)
+				return;
+			var state = debugStack.Pop();
+			if (mappedInstructions is null || methodBuilders.Count == 0)
+				return;
+			var spans = new List<ILSpan>();
+			foreach (var rendered in state.Nodes) {
+				foreach (var ann in rendered.Annotations)
+					CollectILSpansFrom(ann as EngineIL.ILInstruction, spans);
+			}
+			if (spans.Count == 0)
+				return;
+			var (builder, method) = methodBuilders.Peek();
+			withStatements.Add(builder);
+			var textSpan = new TextSpan(state.StartLocation, output.NextPosition - state.StartLocation);
+			foreach (var ilSpan in ILSpan.OrderAndCompact(spans))
+				builder.Add(new SourceStatement(ilSpan, textSpan));
+		}
+
+		void CollectILSpansFrom(EngineIL.ILInstruction inst, List<ILSpan> spans) {
+			if (inst is null || !mappedInstructions.Add(inst))
+				return;
+			// Container blocks only route control flow; the leaves carry the offsets (the
+			// engine's own SequencePointBuilder skips them the same way).
+			if (inst.ILRange.Start < inst.ILRange.End && !(inst is EngineIL.BlockContainer || inst is EngineIL.Block))
+				spans.Add(ILSpan.FromBounds((uint)inst.ILRange.Start, (uint)inst.ILRange.End));
+			// Do not descend into lambdas/local functions: their IL belongs to their own
+			// (compiler-generated) method, not to this statement's mapping.
+			if (inst is EngineIL.ILFunction)
+				return;
+			foreach (var child in inst.Children)
+				CollectILSpansFrom(child, spans);
+		}
 
 		public int NextPosition => output.NextPosition;
 

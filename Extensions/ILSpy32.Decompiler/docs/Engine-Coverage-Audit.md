@@ -18,6 +18,7 @@
 | 导出工程（C#/VB .csproj） | ✅ | PartialType/AssemblyInfo/TypeMethods + ProjectFileExtension（330f7d6c7） |
 | 着色（双引擎逐 token 对拍） | ✅ | 颜色差异收敛至 3.2 更准/既有家族（d11ab7a18、VB 批次、2bf4ffcd4） |
 | 引用/导航（token reference） | ✅ | 本地定义 ✓；外部类型 TypeRef 映射 ✓；keyword 引用（corlib）✓；同类型成员使用 ✓（107ad96b4）。外部类型成员引用需数据流类型推断（引擎级，随语句级调试映射专项推进） |
+| async/await 重建 | 🔧 | 现代版 Roslyn 布局（builder 无局部拷贝/catch 内局部清理）已支持（dnSpy.dll syntax 641→633、real 1468→1460）；经典 2019 形态保持原兼容。剩余 per-checkpoint 迭代入档 |
 | 语句级调试映射 | ⛔ | 方法级 v1 已交付（8c5f1c83b）；语句级精度需引擎 IL↔语句映射专项 |
 | 迭代器重建（~608 文件 C# 侧退化） | ⛔ | 引擎级 YieldReturnDecompiler 专项（2.3 能重建部分形态；VB 侧经 QueryExpressions 关闭已用方法链覆盖） |
 | 查询续接子句 `into`（VB） | ✅ | 2026-11-09：VB 兼容模式关 QueryExpressions（与 2.3 的方法链形态一致，degraded 197→0）；查询子句 visitor 全实现（Where/Let/Group/Continuation 嵌套 From），Join 仍 throw（无 degraded 站点） |

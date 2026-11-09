@@ -17,9 +17,9 @@
 | XML 文档注释 | ✅ | AddXmlDocumentationTransform + 桥接 FileName 回填 |
 | 导出工程（C#/VB .csproj） | ✅ | PartialType/AssemblyInfo/TypeMethods + ProjectFileExtension（330f7d6c7） |
 | 着色（双引擎逐 token 对拍） | ✅ | 颜色差异收敛至 3.2 更准/既有家族（d11ab7a18、VB 批次、2bf4ffcd4） |
-| 引用/导航（token reference） | ✅ | 本地定义 ✓；外部类型 TypeRef 映射 ✓；keyword 引用（corlib）✓；同类型成员使用 ✓（107ad96b4）。外部类型成员引用需数据流类型推断（引擎级，随语句级调试映射专项推进） |
+| 引用/导航（token reference） | ✅ | 本地定义 ✓；外部类型 TypeRef 映射 ✓；keyword 引用（corlib）✓；同类型成员使用 ✓（107ad96b4）；**外部类型成员引用 ✓（2026-11-10）**：引擎把方法解析结果挂在外层 InvocationExpression 上而非 MemberReferenceExpression（CallBuilder 裸 new），token writer/转换器从 invocation 注解取 IMember，mapper 新增外部方法/字段 → MemberRef 合成（ceci 签名转换 + 模块 MemberRef 表优先匹配，bridge 的 ModuleDefinition scope 归一化到裸程序集名）。probe 实测 C# 5/5、VB 6/7 站点与 2.3 同形挂载（MemberRefMD/MemberRefUser） |
 | async/await 重建 | 🔧 | 现代版 Roslyn 布局（builder 无局部拷贝/catch 内局部清理）已支持——引擎子模块工作区补丁（MatchTaskCreationPattern 双布局 + setResult/catch 位置无关扫描）。C# 门禁 syntax 641→633、real 1468→1460（dnSpy.dll 样本已重建为真 async/await）。剩余拒绝（匹配直方图 m4=1136/m5=245）经方法名核实**全部为普通方法正常跳过**（非状态机 kickoff）——引擎级状态机重写覆盖已收敛至双布局支持的能力边界 |
-| 语句级调试映射 | ⛔ | 方法级 v1 已交付（8c5f1c83b）；语句级精度需引擎 IL↔语句映射专项（与迭代器重建共用诊断基础设施） |
+| 语句级调试映射 | 🔧→✅ | 2026-11-10：C# 侧语句级精度接入引擎 `CreateSequencePoints(SyntaxTree)`（public API；渲染经 WrapInWriterThatSetsLocationsInAST 回填行列，`IL.SequencePoint` 的 Offset/EndOffset 与 dnSpy ILSpan 同为排他端点直接映射；`ILFunction.CecilMethod.MetadataToken` 经 rid 保真桥回 resolve 到 dnlib MethodDef）。方法级 v1（8c5f1c83b）保留为无序列点方法的 fallback；probe spdump 实测 5/5 方法语句级 SP（ControlFlow 19 条、LinqAndLock 9 条，IL↔文本逐条对位）。VB 侧维持方法级 span（转换器重建节点不带引擎注解，语句级需另行透传，入已知局限） |
 | 迭代器重建（~608 文件 C# 侧退化） | ⛔ | 引擎级 YieldReturnDecompiler 专项（2.3 能重建部分形态；VB 侧经 QueryExpressions 关闭已用方法链覆盖） |
 | 查询续接子句 `into`（VB） | ✅ | 2026-11-09：VB 兼容模式关 QueryExpressions（与 2.3 的方法链形态一致，degraded 197→0）；查询子句 visitor 全实现（Where/Let/Group/Continuation 嵌套 From），Join 仍 throw（无 degraded 站点） |
 | BC30345 / BC30521 余量 | 🟡 | C# out/值重载对、Show(Nothing) 歧义——VB 语言无法表达，按既定策略不修 |
@@ -81,8 +81,9 @@
 
 ## 7. 后续专项（不在本批）
 
-1. 语句级调试映射精度（引擎 IL↔语句映射）
+1. ~~语句级调试映射精度（引擎 IL↔语句映射）~~ ✅ 已关闭（2026-11-10，C# 侧接入引擎 CreateSequencePoints，见第 1 节；VB 侧语句级待转换器注解透传，入已知局限）
 2. 迭代器重建（YieldReturnDecompiler 引擎专项）
 3. ~~VB 查询续接子句 `into`~~ ✅ 已关闭（ad85ab3d0，degraded 197→0）
-4. 外部类型成员引用挂载（需数据流类型推断；同类型成员/keyword/类型引用已挂）
+4. ~~外部类型成员引用挂载~~ ✅ 已关闭（2026-11-10，invocation 注解探测 + mapper MemberRef 合成，见第 1 节；剩余：外部属性/事件引用不合成（颜色语义需 property/event 色，且站点已被句法 fallback 正确着色））
 5. ~~2.3 选项值 → 3.2 的一次性选项值迁移~~ ✅ 已关闭（DecompilerSettings32Impl/VbDecompilerSettings32Impl 持久化 + 2.3 section 一次性迁移，空目标守卫）
+6. 嵌套类型反编译（2026-11-10 定位：`DecompileType(FullTypeName)` 内部 `FindType(fullTypeName.TopLevelTypeName)` 把嵌套名截断到顶层类型，嵌套节点渲染出整个父类型——probe 实测 Inner 835 chars vs 2.3 的 484；已改 `DecompileTypes(new[]{cecilType})` 待双门禁验证）

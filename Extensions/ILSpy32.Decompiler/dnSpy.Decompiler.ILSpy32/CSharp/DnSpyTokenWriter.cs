@@ -740,6 +740,30 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					return ToDnlib(TryGetCecil(definition));
 				}
 			}
+			// 'items.Add(...)': the engine attaches the resolved method to the surrounding
+			// InvocationExpression, not to the MemberReferenceExpression that forms its
+			// target (CallBuilder creates the mre bare and annotates only the invocation).
+			// Probe the invocation from here so invoked member names carry references like
+			// the 2.3 engine's output. Only for bare call targets: a node that already
+			// resolved on its own (the 'items' in 'items.Add' carries its field's
+			// MemberResolveResult; a local carries ILVariableResolveResult) must not steal
+			// the invocation's method.
+			// 'items.Add(...)': the engine attaches the resolved method to the surrounding
+			// InvocationExpression, not to the MemberReferenceExpression that forms its
+			// target (CallBuilder creates the mre bare and annotates only the invocation).
+			// Probe the invocation from here so invoked member names carry references like
+			// the 2.3 engine's output. Only for bare call targets: a node that already
+			// resolved on its own (the 'items' in 'items.Add' carries its field's
+			// MemberResolveResult; a local carries ILVariableResolveResult) must not steal
+			// the invocation's method.
+			if (node.Parent is InvocationExpression inv && inv.Target == node &&
+					node.Annotation<ResolveResult>() is null &&
+					inv.Annotation<ResolveResult>() is InvocationResolveResult irr && irr.Member != null) {
+				lastColorPath = "ref-invocation";
+				var invocationRef = ToDnlib(TryGetCecil(irr.Member));
+				if (invocationRef != null)
+					return invocationRef;
+			}
 			var symbol = node.GetSymbol();
 			if (symbol is null)
 				lastColorPath = "ref-no-symbol";

@@ -154,8 +154,12 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				WriteNote(output, "// ILSpy 3.2: cannot bridge this module (no in-memory snapshot available).");
 				return;
 			}
+			// DecompileTypes (not DecompileType): the latter resolves the name to its TOP-LEVEL
+			// type (CSharpDecompiler.DecompileType uses fullTypeName.TopLevelTypeName), so a
+			// nested type node rendered its whole declaring type. DecompileTypes decompiles the
+			// passed type definitions themselves.
 			DecompileCore(type.Module, output, ctx,
-				d => d.DecompileType(new ICSharpCode.Decompiler.TypeSystem.FullTypeName(Common.TypeNameHelper.ToReflectionName(cecilType.FullName))),
+				d => d.DecompileTypes(new[] { cecilType }),
 				d => d.Decompile(cecilType));
 		}
 
@@ -223,19 +227,68 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					tree.AcceptVisitor(new ICSharpCode.Decompiler.CSharp.OutputVisitor.CSharpOutputVisitor(
 						ICSharpCode.Decompiler.CSharp.OutputVisitor.TokenWriter.WrapInWriterThatSetsLocationsInAST(tokenWriter),
 						settings.EngineSettings.CSharpFormattingOptions));
-					// Method-level debug spans: each method with a body gets one SourceStatement
-					// covering the whole rendered method and the whole IL range (the 2.3 engine's
-					// degraded shape for bodies it could not track statement-level).
-					foreach (var (method, start, end) in tokenWriter.MethodSpans) {
-						var builder = new MethodDebugInfoBuilder(1, StateMachineKind.None,
-							method, null, Array.Empty<SourceLocal>(), null, null);
-						builder.StartPosition = start;
-						builder.EndPosition = end;
-						builder.Scope.Span = ILSpan.FromBounds(0, (uint)method.Body.GetCodeSize());
-						builder.Add(new SourceStatement(new ILSpan(0, (uint)method.Body.GetCodeSize()),
-							TextSpan.FromBounds(start, end)));
-						output.AddDebugInfo(builder.Create());
+				// Debug info: statement-level IL<->text mapping. The engine's
+				// CreateSequencePoints walks the annotated AST (our token writer's ILocatable
+				// implementation gave every rendered node its line/column), pairing each
+				// statement's IL offsets with its text span. Methods without sequence points
+				// fall back to one whole-body SourceStatement - the 2.3 engine's degraded shape
+				// for bodies it could not track statement-level.
+				Dictionary<MethodDef, MethodDebugInfoBuilder>? builders = null;
+				var withStatements = new HashSet<MethodDef>();
+				try {
+					var sequencePoints = engine.CreateSequencePoints(tree);
+					if (sequencePoints.Count > 0) {
+						builders = new Dictionary<MethodDef, MethodDebugInfoBuilder>();
+						foreach (var (method, start, end) in tokenWriter.MethodSpans) {
+							var builder = new MethodDebugInfoBuilder(1, StateMachineKind.None,
+								method, null, Array.Empty<SourceLocal>(), null, null);
+							builder.StartPosition = start;
+							builder.EndPosition = end;
+							builder.Scope.Span = ILSpan.FromBounds(0, (uint)method.Body.GetCodeSize());
+							builders.Add(method, builder);
+						}
+						foreach (var (function, sps) in sequencePoints) {
+							// The bridge preserves rids, so the cecil method's token resolves
+							// back to the dnlib method; lambdas map to compiler-generated
+							// methods that are not rendered and get skipped here.
+							if (function.CecilMethod is null || !(module.ResolveToken((uint)function.CecilMethod.MetadataToken.ToInt32()) is MethodDef method))
+								continue;
+							if (builders == null || !builders.TryGetValue(method, out var builder))
+								continue;
+							foreach (var sp in sps) {
+								if (sp.IsHidden || sp.EndOffset <= sp.Offset)
+									continue;
+								var textStart = tokenWriter.OffsetOf(sp.StartLine, sp.StartColumn);
+								var textEnd = tokenWriter.OffsetOf(sp.EndLine, sp.EndColumn);
+								if (textStart < 0 || textEnd < 0 || textEnd < textStart)
+									continue;
+								builder.Add(new SourceStatement(ILSpan.FromBounds((uint)sp.Offset, (uint)sp.EndOffset),
+									TextSpan.FromBounds(textStart, textEnd)));
+								withStatements.Add(method);
+							}
+						}
 					}
+				}
+				catch {
+					// Sequence points are an enhancement; any failure degrades to the
+					// method-level spans below.
+					builders = null;
+					withStatements.Clear();
+				}
+				foreach (var (method, start, end) in tokenWriter.MethodSpans) {
+					if (builders != null && withStatements.Contains(method)) {
+						output.AddDebugInfo(builders[method].Create());
+						continue;
+					}
+					var builder = new MethodDebugInfoBuilder(1, StateMachineKind.None,
+						method, null, Array.Empty<SourceLocal>(), null, null);
+					builder.StartPosition = start;
+					builder.EndPosition = end;
+					builder.Scope.Span = ILSpan.FromBounds(0, (uint)method.Body.GetCodeSize());
+					builder.Add(new SourceStatement(new ILSpan(0, (uint)method.Body.GetCodeSize()),
+						TextSpan.FromBounds(start, end)));
+					output.AddDebugInfo(builder.Create());
+				}
 				}
 			}
 			catch (OperationCanceledException) {

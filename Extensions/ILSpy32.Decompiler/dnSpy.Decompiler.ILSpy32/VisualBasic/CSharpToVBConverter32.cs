@@ -1051,13 +1051,27 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			var memberRef = ResolveDnlibReference(memberReferenceExpression) ?? (object?)memberReferenceExpression.Annotation<IMemberRef>();
 			if (memberRef is not null)
 				memberAccessExpression.MemberName.AddAnnotation(memberRef);
+			else if (memberReferenceExpression.Parent is CS.InvocationExpression invocationOfMember &&
+					invocationOfMember.Annotation<ICSharpCode.Decompiler.Semantics.ResolveResult>() is ICSharpCode.Decompiler.Semantics.InvocationResolveResult invocationRR &&
+					invocationRR.Member != null &&
+					ToDnlibRef(TryGetCecilRef(invocationRR.Member)) is { } invokedRef) {
+				// 'items.Add(...)': the engine annotates the invocation, not the member
+				// reference it targets; resolve the invoked member from there (the same probe
+				// the C# token writer uses). A member usage that resolved on its own (fields,
+				// properties) already returned above. Only the reference is attached - the
+				// renderer's color pipeline handles the kind color, which matched the 2.3
+				// engine on every checked site except property getters (recorded in the audit).
+				memberAccessExpression.MemberName.AddAnnotation(invokedRef);
+			}
 			else if (FindCurrentTypeMember(memberReferenceExpression.MemberName) is { } sameTypeMember)
 				memberAccessExpression.MemberName.AddAnnotation(sameTypeMember);
 			else if (MemberUsageFallbackColor(memberReferenceExpression) is { } fallbackColor)
 				memberAccessExpression.MemberName.AddAnnotation(fallbackColor);
 			bool isExtensionMethod = false;
 			if (memberReferenceExpression.Parent is CS.InvocationExpression invocExpr) {
-				var method = invocExpr.Annotation<dnlib.DotNet.IMethod>().ResolveMethodDef();
+				// The engine leaves no dnlib method annotation here; without it the extension
+				// call keeps its target form, which the VB renderer writes as an instance call.
+				var method = invocExpr.Annotation<dnlib.DotNet.IMethod>()?.ResolveMethodDef();
 				isExtensionMethod = method?.CustomAttributes.IsDefined("System.Runtime.CompilerServices.ExtensionAttribute") == true;
 			}
 			if (!isExtensionMethod)

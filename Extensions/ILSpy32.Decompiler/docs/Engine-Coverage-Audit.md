@@ -86,4 +86,4 @@
 3. ~~VB 查询续接子句 `into`~~ ✅ 已关闭（ad85ab3d0，degraded 197→0）
 4. ~~外部类型成员引用挂载~~ ✅ 已关闭（2026-11-10，invocation 注解探测 + mapper MemberRef 合成，见第 1 节；剩余：外部属性/事件引用不合成（颜色语义需 property/event 色，且站点已被句法 fallback 正确着色））
 5. ~~2.3 选项值 → 3.2 的一次性选项值迁移~~ ✅ 已关闭（DecompilerSettings32Impl/VbDecompilerSettings32Impl 持久化 + 2.3 section 一次性迁移，空目标守卫）
-6. 嵌套类型反编译（2026-11-10 定位：`DecompileType(FullTypeName)` 内部 `FindType(fullTypeName.TopLevelTypeName)` 把嵌套名截断到顶层类型，嵌套节点渲染出整个父类型——probe 实测 Inner 835 chars vs 2.3 的 484；已改 `DecompileTypes(new[]{cecilType})` 待双门禁验证）
+6. ~~嵌套类型反编译~~ ✅ 已关闭（2026-11-10：`DecompileType(FullTypeName)` 内部 `FindType(fullTypeName.TopLevelTypeName)` 把嵌套名截断到顶层类型，嵌套节点渲染出整个父类型——probe 实测 Inner 835 chars vs 2.3 的 484；改 `DecompileTypes(new[]{cecilType})` 后 Inner 377 / Deeper 144，只渲染嵌套类型自身。双门禁通过：C# OK（645/1588 vs 2.3 的 908/2168；633/1460→645/1588 的移位是嵌套类型独立输出带来的编译噪音，2.3 基线同样含此噪音）、VB OK（927/457/11））

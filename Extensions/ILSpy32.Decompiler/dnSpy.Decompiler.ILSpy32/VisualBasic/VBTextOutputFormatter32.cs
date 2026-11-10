@@ -24,6 +24,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 	readonly HashSet<MethodDebugInfoBuilder> withStatements = new HashSet<MethodDebugInfoBuilder>();
 	readonly List<MethodDebugInfo> debugInfos = new List<MethodDebugInfo>();
 	readonly int settingsVersion;
+	readonly bool collectDebugInfo;
 	// Live while a method builder is open: instructions already claimed by an inner
 	// statement's sequence point, so outer statements don't duplicate them.
 	HashSet<EngineIL.ILInstruction> mappedInstructions;
@@ -35,19 +36,21 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		/// </summary>
 		public IEnumerable<MethodDebugInfo> DebugInfos => debugInfos;
 
-		public VBTextOutputFormatter32(IDecompilerOutput output, int settingsVersion = 1) {
+		public VBTextOutputFormatter32(IDecompilerOutput output, int settingsVersion = 1, bool collectDebugInfo = true) {
 			this.output = output ?? throw new ArgumentNullException(nameof(output));
 			this.settingsVersion = settingsVersion;
+			this.collectDebugInfo = collectDebugInfo;
 		}
 
 		public void StartNode(AstNode node) {
 			nodeStack.Push(node);
 			// Method-level debug spans (v1): one SourceStatement covers the whole rendered
 			// method and maps to the method's whole IL range (the 2.3 engine's degraded shape
-			// for bodies it could not track statement-level).
+			// for bodies it could not track statement-level). Only computed when the caller
+			// asked for it (CalculateILSpans); the export and console pipelines skip it.
 			if (node is MethodDeclaration method) {
 				var methodDef = node.Annotation<MethodDef>();
-				if (methodDef?.Body is not null) {
+				if (collectDebugInfo && methodDef?.Body is not null) {
 					var builder = new MethodDebugInfoBuilder(settingsVersion, StateMachineKind.None,
 						methodDef, null, Array.Empty<SourceLocal>(), null, null);
 					builder.StartPosition = output.NextPosition;
@@ -297,7 +300,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		/// The VB32 output visitor calls this from WriteKeyword right before the keyword is
 		/// written (and for declaration nodes), so StartLocation is the statement's text start.
 		/// </summary>
-		public void DebugStart(AstNode node) => debugStack.Push(new DebugState { StartLocation = output.NextPosition });
+		public void DebugStart(AstNode node) {
+			if (collectDebugInfo)
+				debugStack.Push(new DebugState { StartLocation = output.NextPosition });
+		}
 
 		public void DebugHidden(object hiddenILSpans) { }
 

@@ -215,7 +215,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				var converter = new CSharpToVBConverter32(module, new ILSpyEnvironmentProvider32(), engineTypeSystem);
 				var unit = (CompilationUnit)csharpUnit.AcceptVisitor(converter, null);
 				ApplyIdentifierRenames(csharpUnit, unit);
-				var outputFormatter = new VBTextOutputFormatter32(output);
+				var outputFormatter = new VBTextOutputFormatter32(output, 1, ctx.CalculateILSpans);
 				var formattingPolicy = new VBFormattingOptions {
 					NumberFormatter = ICSharpCode.NRefactory.NumberFormatter.GetVBInstance(hex: false, upper: true),
 				};

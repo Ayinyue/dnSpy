@@ -131,7 +131,8 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			}
 			DecompileCore(info.Type.Module, info.Output, info.Context,
 				d => d.DecompileType(new ICSharpCode.Decompiler.TypeSystem.FullTypeName(Common.TypeNameHelper.ToReflectionName(cecilType.FullName))),
-				d => d.Decompile(cecilType));
+				d => d.Decompile(cecilType),
+				knownType: info.Type);
 		}
 
 		void DecompileAssemblyInfo(DecompileAssemblyInfo info) {
@@ -160,7 +161,8 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			// passed type definitions themselves.
 			DecompileCore(type.Module, output, ctx,
 				d => d.DecompileTypes(new[] { cecilType }),
-				d => d.Decompile(cecilType));
+				d => d.Decompile(cecilType),
+				knownType: type);
 		}
 
 		void DecompileMember(IMDTokenProvider? member, IDecompilerOutput output, DecompilationContext ctx) {
@@ -192,7 +194,8 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 
 		void DecompileCore(ModuleDef module, IDecompilerOutput output, DecompilationContext ctx,
 				Func<ICSharpCode.Decompiler.CSharp.CSharpDecompiler, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree> decompile,
-				Func<ICSharpCode.Decompiler.CSharp.CSharpDecompiler, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree>? fallbackDecompile = null) {
+				Func<ICSharpCode.Decompiler.CSharp.CSharpDecompiler, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree>? fallbackDecompile = null,
+				TypeDef? knownType = null) {
 			ctx.CancellationToken.ThrowIfCancellationRequested();
 			var cecilModule = DnlibCecilBridge.TryGetModule(module);
 			if (cecilModule is null) {
@@ -214,7 +217,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					// then the uncompilable compiler-generated attributes, then render. A binder
 					// failure must not kill the decompilation: degrade to unannotated output.
 					try {
-						AstAnnotationBinder.Attach(module, tree);
+						AstAnnotationBinder.Attach(module, tree, knownType);
 					}
 					catch {
 						// annotations stay absent; rendering continues

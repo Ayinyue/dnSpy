@@ -99,8 +99,9 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				return;
 			}
 			DecompileCore(info.Type.Module, info.Output, info.Context,
-				d => d.DecompileType(new ICSharpCode.Decompiler.TypeSystem.FullTypeName(Common.TypeNameHelper.ToReflectionName(cecilType.FullName))),
-				d => d.Decompile(cecilType));
+				d => d.DecompileTypes(new[] { cecilType }),
+				d => d.Decompile(cecilType),
+				knownType: info.Type);
 		}
 
 		void DecompileAssemblyInfo(DecompileAssemblyInfo info) {
@@ -121,9 +122,12 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				WriteNote(output, "' ILSpy 3.2: cannot bridge this module (no in-memory snapshot available).");
 				return;
 			}
+			// DecompileTypes (not DecompileType): the latter resolves the name to its TOP-LEVEL
+			// type, so a nested type node rendered its whole declaring type (mirrors the C# fix).
 			DecompileCore(type.Module, output, ctx,
-				d => d.DecompileType(new ICSharpCode.Decompiler.TypeSystem.FullTypeName(Common.TypeNameHelper.ToReflectionName(cecilType.FullName))),
-				d => d.Decompile(cecilType));
+				d => d.DecompileTypes(new[] { cecilType }),
+				d => d.Decompile(cecilType),
+				knownType: type);
 		}
 
 		void DecompileMember(IMDTokenProvider? member, IDecompilerOutput output, DecompilationContext ctx) {
@@ -170,7 +174,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		void DecompileCore(ModuleDef module, IDecompilerOutput output, DecompilationContext ctx,
 				Func<ICSharpCode.Decompiler.CSharp.CSharpDecompiler, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree> decompile,
-				Func<ICSharpCode.Decompiler.CSharp.CSharpDecompiler, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree>? fallbackDecompile = null) {
+				Func<ICSharpCode.Decompiler.CSharp.CSharpDecompiler, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree>? fallbackDecompile = null,
+				TypeDef? knownType = null) {
 			ctx.CancellationToken.ThrowIfCancellationRequested();
 			var cecilModule = DnlibCecilBridge.TryGetModule(module);
 			if (cecilModule is null) {
@@ -202,7 +207,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 			try {
 				// The 3.2 tree has no dnlib annotations; the ported converter needs them.
-				AstAnnotationBinder.Attach(module, csharpUnit);
+				AstAnnotationBinder.Attach(module, csharpUnit, knownType);
 				// The 2.3 engine shows a 'Token: 0x... RID: ...' comment before every member
 				// declaration when ShowTokenAndRvaComments is on; the converter turns those
 				// comments into VB quotes.

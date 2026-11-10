@@ -31,7 +31,10 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 	/// This binder walks the tree once and attaches the dnlib definitions by name.
 	/// </summary>
 	static class AstAnnotationBinder {
-		public static void Attach(ModuleDef module, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree) {
+		public static void Attach(ModuleDef module, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree) =>
+			Attach(module, tree, null);
+
+		public static void Attach(ModuleDef module, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree, TypeDef? knownType) {
 			if (module is null || tree is null)
 				return;
 			var types = new Dictionary<string, TypeDef>(StringComparer.Ordinal);
@@ -62,13 +65,34 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 					bySimpleName[simpleName] = type;
 			}
 
+			// The caller knows exactly which type is being decompiled (dnSpy passes the TypeDef);
+			// bind it and its nested types directly by name, bypassing the simple-name ambiguity
+			// fallback that fails for nested types with common names (two ScrollDirection enums).
+			Dictionary<string, TypeDef>? knownTypes = null;
+			if (knownType is not null) {
+				knownTypes = new Dictionary<string, TypeDef>(StringComparer.Ordinal);
+				void AddKnown(TypeDef type) {
+					if (type.Name is not null)
+						knownTypes[type.Name.String] = type;
+					foreach (var nested in type.NestedTypes)
+						AddKnown(nested);
+				}
+				AddKnown(knownType);
+			}
+
 			var renames = new Dictionary<string, string>(StringComparer.Ordinal);
 			var methodNames = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
 			foreach (var typeDeclaration in tree.Descendants.OfType<ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration>()) {
-				var fullName = GetFullTypeName(typeDeclaration);
-				if (fullName is null || !types.TryGetValue(fullName, out var typeDef)) {
-					if (!bySimpleName.TryGetValue(typeDeclaration.Name, out typeDef) || ambiguousNames.Contains(typeDeclaration.Name))
-						continue;
+				TypeDef? typeDef = null;
+				if (knownTypes is not null && typeDeclaration.Name is not null &&
+						knownTypes.TryGetValue(typeDeclaration.Name, out var known))
+					typeDef = known;
+				else {
+					var fullName = GetFullTypeName(typeDeclaration);
+					if (fullName is null || !types.TryGetValue(fullName, out typeDef)) {
+						if (!bySimpleName.TryGetValue(typeDeclaration.Name, out typeDef) || ambiguousNames.Contains(typeDeclaration.Name))
+							continue;
+					}
 				}
 				typeDeclaration.AddAnnotation(typeDef);
 				AttachMembers(typeDef, typeDeclaration);

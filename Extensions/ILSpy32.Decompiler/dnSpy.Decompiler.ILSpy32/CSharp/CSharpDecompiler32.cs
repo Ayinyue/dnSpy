@@ -261,6 +261,33 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 									continue;
 								if (builders == null || !builders.TryGetValue(method, out var builder))
 									continue;
+								// Debug locals: the engine's variables carry the IL slot index and
+								// the decompiled name - map them onto the method's dnlib locals so
+								// the debugger's Locals window shows decompiled names.
+								try {
+									if (method.Body is not null) {
+										var locals = new List<SourceLocal>();
+										if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1")
+											Console.Error.WriteLine("VBVARS " + method.Name + " vars=[" + string.Join(",", function.Variables.Select(v => v.Kind + "#" + v.Index + ":" + v.Name)) + "]");
+										foreach (var v in function.Variables) {
+											// Local/UsingLocal/ForeachLocal carry real IL slots; parameters,
+											// stack slots and exception variables are not locals.
+											if (v.Index < 0 || v.Index >= method.Body.Variables.Count)
+												continue;
+											if (v.Kind == ICSharpCode.Decompiler.IL.VariableKind.Parameter ||
+													v.Kind == ICSharpCode.Decompiler.IL.VariableKind.StackSlot ||
+													v.Kind == ICSharpCode.Decompiler.IL.VariableKind.Exception)
+												continue;
+											var dnlibLocal = method.Body.Variables[v.Index];
+											locals.Add(new SourceLocal(dnlibLocal, v.Name ?? dnlibLocal.Name ?? string.Empty,
+												dnlibLocal.Type, SourceVariableFlags.None));
+										}
+										builder.Scope.Locals.AddRange(locals);
+									}
+								}
+								catch {
+									// locals mapping is an enhancement; never break the decompilation
+								}
 								foreach (var sp in sps) {
 									if (sp.IsHidden || sp.EndOffset <= sp.Offset)
 										continue;

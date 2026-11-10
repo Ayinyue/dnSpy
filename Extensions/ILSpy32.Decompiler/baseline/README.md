@@ -919,3 +919,21 @@ setter 写回。3.2 的 DecompilerSettings32 此前 `Options => Array.Empty`—�
 
 端到端验证：经 Options 契约关掉 ShowTokenAndRvaComments → Token 注释消失；关掉
 UsingDeclarations → using 消失、名字回全限定（与 2.3 关闭时形态一致）。
+
+## 调试映射与选项接线（2026-11-11 收口）
+
+- **语句级调试映射（C#/VB）**：C# 侧接入引擎 `CreateSequencePoints`（token writer 的
+  ILocatable 回填行列），VB 侧实现 DebugStart/DebugExpression/DebugEnd（2.3 形状）。
+  probe `spdump` 模式可 dump 每方法的 SourceStatement（IL↔文本对位）与 locals 计数。
+- **foreach 头部缺口**（第二真实库 dnSpy.AsmEditor.x 复验时发现）：VB32 visitor 不对
+  foreach 调 DebugExpression，头部指令无 SP——DebugEnd 空 Nodes 时子树扫描拾取头部
+  未领指令（内层语句先到先得）。
+- **CalculateILSpans 门控**：debug info 只在调用方请求时计算（`M3PROBE_CALC_SP=0`
+  可在 probe 里复现 0 debug info）。
+- **选项接线全量翻转**：probe `options-wiring` 模式对 19 项 bool 选项逐一 flip 并断言
+  输出响应（10 CHANGED/6 形态不匹配/3 引擎行为差异入审计文档）。
+- **调试 locals**：引擎变量表（ILVariable.Index=IL slot）映射 dnlib locals 产
+  SourceLocal；C# 在 SP 循环内收集，VB 经 CollectPendingLocals（C# 树 ILFunction
+  祖先链发现）注入 formatter。
+- 门禁参考基线随嵌套类型形态修复移位：VB realBadFiles 942/526/11 → 1731/741/11
+  （嵌套从"整个父类型"（可编译但错位）变为独立正确输出，run-regression.cmd 已注记）。

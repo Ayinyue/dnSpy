@@ -333,10 +333,27 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			var state = debugStack.Pop();
 			if (mappedInstructions is null || methodBuilders.Count == 0)
 				return;
+			// Declaration nodes (method signatures, fields, types) get their own
+			// StartNode/DebugEnd pair that fires BEFORE the body statements render; collecting
+			// IL there would claim every instruction before the statements do (the 2.3 engine
+			// skips its DebugEnd on the same node kinds).
+			if (node is MemberDeclaration || node is TypeDeclaration || node is Accessor)
+				return;
 			var spans = new List<ILSpan>();
-			foreach (var rendered in state.Nodes) {
-				foreach (var ann in rendered.Annotations)
-					CollectILSpansFrom(ann as EngineIL.ILInstruction, spans);
+			if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1" && state.Nodes.Count == 0)
+				Console.Error.WriteLine("VBSP-EMPTY " + node.GetType().Name + " at " + state.StartLocation);
+			if (state.Nodes.Count == 0) {
+				// Some statements (ForEachStatement) never report nodes through
+				// DebugExpression. Their inner statements have already claimed their IL by
+				// now (DebugEnd is innermost-first), so a full-subtree scan only picks up
+				// the statement's own header instructions that are still unclaimed.
+				CollectILSpansFromTree(node, spans);
+			}
+			else {
+				foreach (var rendered in state.Nodes) {
+					foreach (var ann in rendered.Annotations)
+						CollectILSpansFrom(ann as EngineIL.ILInstruction, spans);
+				}
 			}
 			if (spans.Count == 0)
 				return;
@@ -345,6 +362,13 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			var textSpan = new TextSpan(state.StartLocation, output.NextPosition - state.StartLocation);
 			foreach (var ilSpan in ILSpan.OrderAndCompact(spans))
 				builder.Add(new SourceStatement(ilSpan, textSpan));
+		}
+
+		void CollectILSpansFromTree(AstNode node, List<ILSpan> spans) {
+			foreach (var ann in node.Annotations)
+				CollectILSpansFrom(ann as EngineIL.ILInstruction, spans);
+			foreach (var child in node.Children)
+				CollectILSpansFromTree(child, spans);
 		}
 
 		void CollectILSpansFrom(EngineIL.ILInstruction inst, List<ILSpan> spans) {

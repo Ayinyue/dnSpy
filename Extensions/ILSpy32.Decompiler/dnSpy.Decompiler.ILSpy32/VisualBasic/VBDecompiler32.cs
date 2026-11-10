@@ -212,10 +212,13 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				// declaration when ShowTokenAndRvaComments is on; the converter turns those
 				// comments into VB quotes.
 				CSharpDecompiler32.InsertTokenComments(csharpUnit, module as ModuleDefMD, settings.ShowTokenAndRvaComments);
+				// Debug locals come from the C# tree's engine variables (the converted VB nodes
+				// carry no variable annotations), so collect them before the tree is consumed.
+				var pendingLocals = CollectPendingLocals(module as ModuleDefMD, csharpUnit);
 				var converter = new CSharpToVBConverter32(module, new ILSpyEnvironmentProvider32(), engineTypeSystem);
 				var unit = (CompilationUnit)csharpUnit.AcceptVisitor(converter, null);
 				ApplyIdentifierRenames(csharpUnit, unit);
-				var outputFormatter = new VBTextOutputFormatter32(output, 1, ctx.CalculateILSpans);
+				var outputFormatter = new VBTextOutputFormatter32(output, 1, ctx.CalculateILSpans, pendingLocals);
 				var formattingPolicy = new VBFormattingOptions {
 					NumberFormatter = ICSharpCode.NRefactory.NumberFormatter.GetVBInstance(hex: false, upper: true),
 				};
@@ -231,5 +234,53 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		static void WriteNote(IDecompilerOutput output, string text) =>
 			output.Write(text, null, DecompilerReferenceFlags.None, BoxedTextColor.Text);
+
+		/// <summary>
+		/// Debug locals for the Locals window: walks the C# tree the way the engine's own
+		/// sequence-point builder does (node annotations lead to IL instructions whose
+		/// ancestors contain the ILFunction), then maps each function's variables - which
+		/// carry the IL slot index and the decompiled name - onto the method's dnlib locals.
+		/// Local/UsingLocal/ForeachLocal kinds bind by slot; parameters, stack slots and
+		/// exception variables are excluded, as are engine-lifted variables whose slot index
+		/// is out of range.
+		/// </summary>
+		static Dictionary<MethodDef, SourceLocal[]> CollectPendingLocals(ModuleDefMD? module, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree csharpUnit) {
+			var result = new Dictionary<MethodDef, SourceLocal[]>();
+			if (module is null || csharpUnit is null)
+				return result;
+			try {
+				var functions = new HashSet<ICSharpCode.Decompiler.IL.ILFunction>();
+				foreach (var node in csharpUnit.Descendants) {
+					foreach (var ann in node.Annotations) {
+						if (ann is ICSharpCode.Decompiler.IL.ILInstruction inst) {
+							var function = inst.Ancestors.OfType<ICSharpCode.Decompiler.IL.ILFunction>().FirstOrDefault();
+							if (function?.CecilMethod is not null)
+								functions.Add(function);
+						}
+					}
+				}
+				foreach (var function in functions) {
+					if (!(module.ResolveToken((uint)function.CecilMethod.MetadataToken.ToInt32()) is MethodDef method) || method.Body is null)
+						continue;
+					var locals = new List<SourceLocal>();
+					foreach (var v in function.Variables) {
+						if (v.Index < 0 || v.Index >= method.Body.Variables.Count)
+							continue;
+						if (v.Kind == ICSharpCode.Decompiler.IL.VariableKind.Parameter ||
+								v.Kind == ICSharpCode.Decompiler.IL.VariableKind.StackSlot ||
+								v.Kind == ICSharpCode.Decompiler.IL.VariableKind.Exception)
+							continue;
+						var dnlibLocal = method.Body.Variables[v.Index];
+						locals.Add(new SourceLocal(dnlibLocal, v.Name ?? dnlibLocal.Name ?? string.Empty,
+							dnlibLocal.Type, SourceVariableFlags.None));
+					}
+					result[method] = locals.ToArray();
+				}
+			}
+			catch {
+				// locals mapping is an enhancement; never break the decompilation
+			}
+			return result;
+		}
 	}
 }

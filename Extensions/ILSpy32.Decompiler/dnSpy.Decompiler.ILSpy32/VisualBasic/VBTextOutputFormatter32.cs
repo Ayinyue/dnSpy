@@ -25,6 +25,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 	readonly List<MethodDebugInfo> debugInfos = new List<MethodDebugInfo>();
 	readonly int settingsVersion;
 	readonly bool collectDebugInfo;
+	readonly Dictionary<MethodDef, SourceLocal[]> pendingLocals;
 	// Live while a method builder is open: instructions already claimed by an inner
 	// statement's sequence point, so outer statements don't duplicate them.
 	HashSet<EngineIL.ILInstruction> mappedInstructions;
@@ -36,10 +37,12 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		/// </summary>
 		public IEnumerable<MethodDebugInfo> DebugInfos => debugInfos;
 
-		public VBTextOutputFormatter32(IDecompilerOutput output, int settingsVersion = 1, bool collectDebugInfo = true) {
+		public VBTextOutputFormatter32(IDecompilerOutput output, int settingsVersion = 1, bool collectDebugInfo = true,
+				Dictionary<MethodDef, SourceLocal[]>? pendingLocals = null) {
 			this.output = output ?? throw new ArgumentNullException(nameof(output));
 			this.settingsVersion = settingsVersion;
 			this.collectDebugInfo = collectDebugInfo;
+			this.pendingLocals = pendingLocals ?? new Dictionary<MethodDef, SourceLocal[]>();
 		}
 
 		public void StartNode(AstNode node) {
@@ -53,6 +56,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				if (collectDebugInfo && methodDef?.Body is not null) {
 					var builder = new MethodDebugInfoBuilder(settingsVersion, StateMachineKind.None,
 						methodDef, null, Array.Empty<SourceLocal>(), null, null);
+					// Debug locals collected from the C# tree's engine variables (the converted
+					// VB nodes carry no variable annotations) - see VBDecompiler32.
+					if (pendingLocals.TryGetValue(methodDef, out var locals))
+						builder.Scope.Locals.AddRange(locals);
 					builder.StartPosition = output.NextPosition;
 					methodBuilders.Push((builder, methodDef));
 					mappedInstructions = new HashSet<EngineIL.ILInstruction>();

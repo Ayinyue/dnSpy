@@ -33,6 +33,7 @@
 | Decompile（类型/成员/属性/字段/事件） | ✅ | 全部实现；单成员带声明类型注释行（3f8e2ddb1） |
 | DecompileAssemblyInfo / PartialType / TypeMethods | ✅ | 330f7d6c7 |
 | ProjectFileExtension | ✅ | .cs/.vbproj |
+| **导出工程端到端**（2026-11-11） | 🟡 | dnSpy.Console `--sdk-project` 实测（3.2 默认语言 + 显式 2.3 语言对照）：C#/VB 文件结构/csproj/AssemblyInfo（VB 含 My Project 结构）产全。编译错误与 2.3 同族——①编译器生成名 `<X>d__N` 裸文本的 CS1525/CS1001（**2.3 导出同样失败**，24 处相同；Escape 是显示级转义不解决语言合法性）；②VB 的 BC30002（状态机类型定义缺失）为两引擎同族：MSBuild 层 Project.cs:130 只遍历顶层类型，且引擎宿主渲染隐藏状态机嵌套类（2.3/3.2 宿主文件均为 0 处 `<get_Filenames>d__3` 定义）；③增量 90 错误来自 3.2 的隐藏类型 fallback 特性多产 2 个文件（GUI 显示价值）——比修 fallback 契约（视图/导出场景分叉）更保守，定性为与 2.3 一致的导出历史限制。**主程序对 2.3 引擎本体的直接引用为 0**（仅共享 dnSpy.Decompiler.MSBuild 层，语言无关） |
 | FileExtension / ContentTypeString / OrderUI | ✅ | 3.2 OrderUI = 2.3 + 0.5（语言列表 2.3 在前，便于对比） |
 | GenericGuid（语言族） | ✅ | 2.3/3.2 共享族 GUID，语言下拉成组 |
 | MetadataTextColorProvider | ✅ | VisualBasicMetadataTextColorProvider.Instance（两语言同款 kind 色规则） |

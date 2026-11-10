@@ -230,37 +230,37 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					tree.AcceptVisitor(new ICSharpCode.Decompiler.CSharp.OutputVisitor.CSharpOutputVisitor(
 						ICSharpCode.Decompiler.CSharp.OutputVisitor.TokenWriter.WrapInWriterThatSetsLocationsInAST(tokenWriter),
 						settings.EngineSettings.CSharpFormattingOptions));
-				// Debug info: statement-level IL<->text mapping. The engine's
-				// CreateSequencePoints walks the annotated AST (our token writer's ILocatable
-				// implementation gave every rendered node its line/column), pairing each
-				// statement's IL offsets with its text span. Methods without sequence points
-				// fall back to one whole-body SourceStatement - the 2.3 engine's degraded shape
-				// for bodies it could not track statement-level. Like the 2.3 engine, only
-				// computed when the caller asked for it (CalculateILSpans); the export and
-				// console pipelines skip it.
-				if (ctx.CalculateILSpans) {
-					Dictionary<MethodDef, MethodDebugInfoBuilder>? builders = null;
-					var withStatements = new HashSet<MethodDef>();
-					try {
-						var sequencePoints = engine.CreateSequencePoints(tree);
-						if (sequencePoints.Count > 0) {
-							builders = new Dictionary<MethodDef, MethodDebugInfoBuilder>();
-							foreach (var (method, start, end) in tokenWriter.MethodSpans) {
-								var builder = new MethodDebugInfoBuilder(1, StateMachineKind.None,
-									method, null, Array.Empty<SourceLocal>(), null, null);
-								builder.StartPosition = start;
-								builder.EndPosition = end;
-								builder.Scope.Span = ILSpan.FromBounds(0, (uint)method.Body.GetCodeSize());
-								builders.Add(method, builder);
-							}
-							foreach (var (function, sps) in sequencePoints) {
-								// The bridge preserves rids, so the cecil method's token resolves
-								// back to the dnlib method; lambdas map to compiler-generated
-								// methods that are not rendered and get skipped here.
-								if (function.CecilMethod is null || !(module.ResolveToken((uint)function.CecilMethod.MetadataToken.ToInt32()) is MethodDef method))
-									continue;
-								if (builders == null || !builders.TryGetValue(method, out var builder))
-									continue;
+					// Debug info: statement-level IL<->text mapping. The engine's
+					// CreateSequencePoints walks the annotated AST (our token writer's ILocatable
+					// implementation gave every rendered node its line/column), pairing each
+					// statement's IL offsets with its text span. Methods without sequence points
+					// fall back to one whole-body SourceStatement - the 2.3 engine's degraded shape
+					// for bodies it could not track statement-level. Like the 2.3 engine, only
+					// computed when the caller asked for it (CalculateILSpans); the export and
+					// console pipelines skip it.
+					if (ctx.CalculateILSpans) {
+						Dictionary<MethodDef, MethodDebugInfoBuilder>? builders = null;
+						var withStatements = new HashSet<MethodDef>();
+						try {
+							var sequencePoints = engine.CreateSequencePoints(tree);
+							if (sequencePoints.Count > 0) {
+								builders = new Dictionary<MethodDef, MethodDebugInfoBuilder>();
+								foreach (var (method, start, end) in tokenWriter.MethodSpans) {
+									var builder = new MethodDebugInfoBuilder(1, StateMachineKind.None,
+										method, null, Array.Empty<SourceLocal>(), null, null);
+									builder.StartPosition = start;
+									builder.EndPosition = end;
+									builder.Scope.Span = ILSpan.FromBounds(0, (uint)method.Body.GetCodeSize());
+									builders.Add(method, builder);
+								}
+								foreach (var (function, sps) in sequencePoints) {
+									// The bridge preserves rids, so the cecil method's token resolves
+									// back to the dnlib method; lambdas map to compiler-generated
+									// methods that are not rendered and get skipped here.
+									if (function.CecilMethod is null || !(module.ResolveToken((uint)function.CecilMethod.MetadataToken.ToInt32()) is MethodDef method))
+										continue;
+									if (builders == null || !builders.TryGetValue(method, out var builder))
+										continue;
 								// Debug locals: the engine's variables carry the IL slot index and
 								// the decompiled name - map them onto the method's dnlib locals so
 								// the debugger's Locals window shows decompiled names.
@@ -268,7 +268,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 									if (method.Body is not null) {
 										var locals = new List<SourceLocal>();
 										if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1")
-											Console.Error.WriteLine("VBVARS " + method.Name + " vars=[" + string.Join(",", function.Variables.Select(v => v.Kind + "#" + v.Index + ":" + v.Name)) + "]");
+											Console.Error.WriteLine("DBGLOCALS " + method.Name + " vars=[" + string.Join(",", function.Variables.Select(v => v.Kind + "#" + v.Index + ":" + v.Name)) + "]");
 										foreach (var v in function.Variables) {
 											// Local/UsingLocal/ForeachLocal carry real IL slots; parameters,
 											// stack slots and exception variables are not locals.

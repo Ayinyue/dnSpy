@@ -214,7 +214,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				CSharpDecompiler32.InsertTokenComments(csharpUnit, module as ModuleDefMD, settings.ShowTokenAndRvaComments);
 				// Debug locals come from the C# tree's engine variables (the converted VB nodes
 				// carry no variable annotations), so collect them before the tree is consumed.
-				var pendingLocals = CollectPendingLocals(module as ModuleDefMD, csharpUnit);
+				// Only when the caller asked for debug info, like the sequence points.
+				var pendingLocals = ctx.CalculateILSpans
+					? CollectPendingLocals(module as ModuleDefMD, csharpUnit)
+					: null;
 				var converter = new CSharpToVBConverter32(module, new ILSpyEnvironmentProvider32(), engineTypeSystem);
 				var unit = (CompilationUnit)csharpUnit.AcceptVisitor(converter, null);
 				ApplyIdentifierRenames(csharpUnit, unit);

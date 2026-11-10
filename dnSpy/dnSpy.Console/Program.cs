@@ -226,6 +226,9 @@ namespace dnSpy_Console {
 		static IEnumerable<IDecompiler> GetAllLanguages() {
 			var asmNames = new string[] {
 				"dnSpy.Decompiler.ILSpy.Core",
+				// The 3.2 extension ships its own IDecompilerProvider with a parameterless
+				// fallback constructor, so it loads the same way the GUI's MEF catalog does.
+				"dnSpy.Decompiler.ILSpy32.x",
 			};
 			foreach (var asmName in asmNames) {
 				foreach (var l in GetLanguagesInAssembly(asmName))
@@ -235,12 +238,50 @@ namespace dnSpy_Console {
 
 		static IEnumerable<IDecompiler> GetLanguagesInAssembly(string asmName) {
 			var asm = TryLoad(asmName);
+			if (Environment.GetEnvironmentVariable("DNSPY_CONSOLE_DIAG") == "1")
+				Console.Error.WriteLine($"CONSOLE-DIAG load {asmName}: {(asm is null ? "FAILED" : "ok")}");
 			if (asm is not null) {
-				foreach (var type in asm.GetTypes()) {
-					if (!type.IsAbstract && !type.IsInterface && typeof(IDecompilerProvider).IsAssignableFrom(type)) {
-						var p = (IDecompilerProvider)Activator.CreateInstance(type)!;
-						foreach (var l in p.Create())
-							yield return l;
+				Type[] types;
+				try {
+					types = asm.GetTypes();
+				}
+				catch (ReflectionTypeLoadException ex) {
+					types = ex.Types.Where(t => t is not null).Cast<Type>().ToArray();
+				}
+				catch {
+					yield break;
+				}
+				foreach (var type in types) {
+					// 2.3 languages implement IDecompilerProvider; the 3.2 languages implement
+					// the ILSpy 3.x IDecompilerCreator interface (same Create() contract).
+					if (type.IsAbstract || type.IsInterface)
+						continue;
+					IEnumerable<IDecompiler>? created = null;
+					if (typeof(IDecompilerProvider).IsAssignableFrom(type)) {
+						try {
+							created = ((IDecompilerProvider)Activator.CreateInstance(type)!).Create();
+						}
+						catch (Exception createEx) {
+							if (Environment.GetEnvironmentVariable("DNSPY_CONSOLE_DIAG") == "1")
+								Console.Error.WriteLine($"CONSOLE-DIAG create {type.FullName}: {createEx.GetType().Name}: {createEx.Message}");
+							continue;
+						}
+					} else if (typeof(IDecompilerCreator).IsAssignableFrom(type)) {
+						try {
+							created = ((IDecompilerCreator)Activator.CreateInstance(type)!).Create();
+						}
+						catch (Exception createEx) {
+							if (Environment.GetEnvironmentVariable("DNSPY_CONSOLE_DIAG") == "1")
+								Console.Error.WriteLine($"CONSOLE-DIAG create {type.FullName}: {createEx.GetType().Name}: {createEx.Message}");
+							continue;
+						}
+					}
+					if (created is null)
+						continue;
+					foreach (var l in created) {
+						if (Environment.GetEnvironmentVariable("DNSPY_CONSOLE_DIAG") == "1")
+							Console.Error.WriteLine($"CONSOLE-DIAG lang {l.UniqueNameUI} order={l.OrderUI} generic={l.GenericGuid}");
+						yield return l;
 					}
 				}
 			}
@@ -251,6 +292,18 @@ namespace dnSpy_Console {
 		static Assembly? TryLoad(string asmName) {
 			try {
 				return Assembly.Load(asmName);
+			}
+			catch {
+			}
+			// .NET Core's Assembly.Load only probes what this app's deps.json registers; the
+			// decompiler extensions live in the same bin directory, so load them from disk.
+			try {
+				var dir = Path.GetDirectoryName(typeof(ILSpan).Assembly.Location);
+				if (!string.IsNullOrEmpty(dir)) {
+					var dll = Path.Combine(dir, asmName + ".dll");
+					if (File.Exists(dll))
+						return Assembly.LoadFrom(dll);
+				}
 			}
 			catch {
 			}
@@ -981,13 +1034,18 @@ namespace dnSpy_Console {
 		IDecompiler GetLanguage() => GetLanguageOrNull() ?? throw new InvalidOperationException();
 		IDecompiler? GetLanguageOrNull() {
 			bool hasGuid = Guid.TryParse(language, out var guid);
-			return AllLanguages.FirstOrDefault(a => {
+			var matches = AllLanguages.Where(a => {
 				if (StringComparer.OrdinalIgnoreCase.Equals(language, a.UniqueNameUI))
 					return true;
 				if (hasGuid && (guid.Equals(a.UniqueGuid) || guid.Equals(a.GenericGuid)))
 					return true;
 				return false;
 			});
+			// A generic family GUID matches several decompilers (2.3 and 3.2 languages share
+			// it); pick the highest-OrderUI one deterministically instead of whatever order
+			// the loader happened to yield them in. Exact name/unique-guid matches are unique
+			// and unaffected.
+			return matches.OrderByDescending(a => a.OrderUI).FirstOrDefault();
 		}
 
 		IDecompiler[] AllLanguages => allLanguages;

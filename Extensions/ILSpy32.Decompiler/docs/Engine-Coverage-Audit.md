@@ -25,6 +25,7 @@
 | BC30345 / BC30521 余量 | 🟡 | C# out/值重载对、Show(Nothing) 歧义——VB 语言无法表达，按既定策略不修 |
 | 全量输出形态差异（2026-11-10 对拍 dnSpy.dll 全部 3267 文件） | 🟡 | 3.2 零失败、零空文件；与 2.3 的剩余形态差异定性为有意：①自动属性 `=> "x"` 表达式体 vs 2.3 的 get/set 块——2.3 引擎时代不支持 expression-bodied，3.2 输出更现代；②状态机类型的 `<>1__state` 字段与 `Current` 属性 3.2 完整显示而 2.3 集成版隐藏——3.2 更完整；③using 集差异为既有家族。已知局限仅剩 VB 属性访问器/构造器的方法级 span（非 MethodDeclaration 节点）、外部属性/事件引用不合成（站点已正确着色）与调试 locals 的 hoistedField 映射（3.2 引擎的 symbols 管线未激活，SourceLocal 为空——PDB 主名的 locals 显示不受影响，仅迭代器/async 提升字段的聚合显示退化；引擎级专项，见第 7 节 7） |
 | **功能接线全仓 sweep**（2026-11-10，137 个 IDecompiler/服务消费点） | ✅ | ①语言判断 11 处全部族级 GUID（GenericGuid）或语言无关路径——2.3 字面量 GUID 判断仅 Analyzer 一处（已加 3.2）；②dnSpy.Console 修复（3.2 语言注册 + 族 GUID 确定性，1dfa6b5d3，实测 default==32/!=23）；③CalculateILSpans 门控对齐 2.3（5afad216b）；④选项接线全量翻转验证 10/19 实测响应；⑤真实库 VB 语句级 SP 抽验（BookmarksVM 14+ 方法语句级） |
+| **单元测试**（2026-11-12） | ✅ | ①3.2 引擎上游测试套复活（此前无法运行）：net46→net462、Immutable 1.3.1→1.7.1、NUnit 3.13.1+adapter 4.6.0（旧 adapter 自带旧版 cecil 与引擎类型身份冲突）、Tester 增加 SnippetResolver——564 测试全跑：407 过/142 败/15 跳，失败构成 = UseMcs 环境缺失（无 mono）+ using 顺序（移植有意对齐 dnSpy 2.3）+ 零星，**无引擎逻辑回归**；②2.3 引擎无自带测试套（上游 2.3 分仓）——由双门禁+对拍覆盖；③probe `engine-tests` 模式：本轮修复的 14 项回归断言固化（语句级 SP C#/VB、locals、CalculateILSpans 门控、嵌套类型渲染+knownType、状态机完整性）——ALL PASS，probe 工具与样本源入库（baseline/probe/，de7d085d0） |
 
 ## 2. IDecompiler 契约面
 

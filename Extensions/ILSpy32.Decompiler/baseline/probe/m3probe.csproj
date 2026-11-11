@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- The dump modes write decompiled .cs/.vb files into subfolders of this project;
+         they must never be picked up as sources. -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="SettingsMigrationTests.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- All references are compile-only (Private=false): at runtime every engine and
+         dependency must resolve through the AssemblyResolve handler to the authoritative
+         dnSpy bin directory, otherwise stale CopyLocal copies in the app base win the
+         default-context probe and the probe silently runs old engine builds. -->
+    <Reference Include="dnlib">
+      <HintPath>..\..\..\..\dnSpy\dnSpy\bin\Release\net10.0-windows\dnlib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="dnSpy.Contracts.Logic">
+      <HintPath>..\..\..\..\dnSpy\dnSpy\bin\Release\net10.0-windows\dnSpy.Contracts.Logic.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="dnSpy.Decompiler.ILSpy32.x">
+      <HintPath>..\..\..\..\dnSpy\dnSpy\bin\Release\net10.0-windows\dnSpy.Decompiler.ILSpy32.x.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="dnSpy.Contracts.DnSpy">
+      <HintPath>..\..\..\..\dnSpy\dnSpy\bin\Release\net10.0-windows\dnSpy.Contracts.DnSpy.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Mono.Cecil">
+      <HintPath>..\..\..\..\dnSpy\dnSpy\bin\Release\net10.0-windows\Mono.Cecil.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

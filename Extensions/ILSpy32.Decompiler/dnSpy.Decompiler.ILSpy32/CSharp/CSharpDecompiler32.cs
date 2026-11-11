@@ -310,6 +310,10 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					}
 					foreach (var (method, start, end) in tokenWriter.MethodSpans) {
 						if (builders != null && withStatements.Contains(method)) {
+							// Cover the whole body with the statement IL spans, like the 2.3
+							// engine's sequence points did - otherwise instructions between
+							// statements have no debugger highlight.
+							builders[method].CompactILSpans((uint)method.Body.GetCodeSize());
 							output.AddDebugInfo(builders[method].Create());
 							continue;
 						}

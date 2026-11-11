@@ -25,6 +25,10 @@ class Probe {
 			InstallBinResolver(new[] { args[2] });
 			return EngineTests(args[1], args[2]);
 		}
+		if (args.Length > 0 && args[0] == "dbg-map") {
+			InstallBinResolver(new[] { args[2] });
+			return DbgMap(args[1], args[2]);
+		}
 		if (args.Length > 0 && args[0] == "options-wiring") {
 			InstallBinResolver(new[] { args[2] });
 			return OptionsWiring(args[1], args[2], args[3]);
@@ -470,6 +474,65 @@ class Probe {
 		}
 		Console.WriteLine($"SUMMARY changed={changes} same={same}");
 		return 0;
+	}
+
+	// ==== dbg-map: exercise the two dnSpy consumer APIs (MethodDebugInfo
+	// GetSourceStatementByCodeOffset / GetSourceStatementByTextOffset) against real 3.2
+	// output, the same calls the debugger highlight and the bookmark/locate paths make.
+	static int DbgMap(string spTestDll, string dnspyBin) {
+		var failures = 0;
+		void Check(bool ok, string what) {
+			Console.WriteLine((ok ? "PASS " : "FAIL ") + what);
+			if (!ok)
+				failures++;
+		}
+		var dec32 = Create32CSharp(dnspyBin);
+		var dec23 = Create23(dnspyBin, "CSharp");
+		var decVB = Create32VB(dnspyBin);
+		var module = ModuleDefMD.Load(spTestDll);
+		var statementVariety = module.Types.First(t => t.FullName == "SpTestNamespace.StatementVariety");
+
+		foreach (var (tag, dec) in new[] { ("3.2", dec32), ("2.3", dec23), ("3.2VB", decVB) }) {
+			var output = new SpCaptureOutput();
+			dec.Decompile(statementVariety, output, new dnSpy.Contracts.Decompiler.DecompilationContext { CalculateILSpans = true });
+			var text = output.ToString();
+			Console.WriteLine($"[{tag}] debugInfos={output.DebugInfos.Count}");
+			foreach (var mdi in output.DebugInfos) {
+				var method = mdi.Method;
+				if (method?.Body is null)
+					continue;
+				// 1) IL coverage: every instruction offset must land in some statement.
+				int ilHits = 0, ilTotal = 0;
+				foreach (var ins in method.Body.Instructions) {
+					ilTotal++;
+					if (mdi.GetSourceStatementByCodeOffset((uint)ins.Offset) is not null)
+						ilHits++;
+				}
+				var ilRatio = ilTotal == 0 ? 1.0 : (double)ilHits / ilTotal;
+				Console.WriteLine($"  IL coverage {method.Name}: {ilHits}/{ilTotal} ({ilRatio:P0})");
+
+				// 2) Text coverage: the middle of every non-empty line must resolve to a statement.
+				int textHits = 0, textTotal = 0;
+				int lineStart = 0;
+				for (var li = 0; li < textLines(text).Length; li++) {
+					var line = textLines(text)[li];
+					var lineEnd = lineStart + line.Length + 1; // the split kept \r; \n is the +1
+					var lineLen = line.TrimEnd('\r').Length;
+					if (lineLen > 0) {
+						textTotal++;
+						var mid = lineStart + lineLen / 2;
+						if (mdi.GetSourceStatementByTextOffset(lineStart, lineEnd, mid) is not null)
+							textHits++;
+					}
+					lineStart = lineEnd;
+				}
+				var textRatio = textTotal == 0 ? 1.0 : (double)textHits / textTotal;
+				Console.WriteLine($"  Text coverage {method.Name}: {textHits}/{textTotal} ({textRatio:P0})");
+			}
+		}
+		return 0;
+
+		static string[] textLines(string s) => s.Replace("\r\n", "\n").Split('\n');
 	}
 
 	// ==== engine-tests: regression assertions for the 3.2 coverage work, run against the

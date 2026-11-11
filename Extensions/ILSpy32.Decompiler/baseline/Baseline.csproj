@@ -11,6 +11,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The probe/ subfolder is its own project (the double-engine verification
+         harness); its sources must not leak into this compilation. -->
+    <Compile Remove="probe\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- dnSpy decompiler contracts (IDecompiler, IDecompilerOutput) + dnlib.
          Engine assemblies are NOT referenced at compile time: the two engine
          generations are loaded by path at runtime so they can be compared in

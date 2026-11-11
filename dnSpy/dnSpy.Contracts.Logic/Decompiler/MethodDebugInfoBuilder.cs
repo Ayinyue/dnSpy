@@ -106,6 +106,33 @@ namespace dnSpy.Contracts.Decompiler {
 		public void Add(SourceStatement statement) => statements.Add(statement);
 
 		/// <summary>
+		/// Extends the statements' IL spans so they cover the whole method body: sort by IL
+		/// start, pull the first start back to 0, fill every gap by extending each end to the
+		/// next start, and extend the last end to <paramref name="codeSize"/>. The 2.3 engine's
+		/// sequence points covered the whole body; without this the debugger has no highlight
+		/// for instructions that sit between statements (branches, spills, prolog code).
+		/// Text spans are left untouched.
+		/// </summary>
+		/// <param name="codeSize">Size of the method body in bytes</param>
+		public void CompactILSpans(uint codeSize) {
+			if (statements.Count == 0)
+				return;
+			statements.Sort(SourceStatement.SpanStartComparer);
+			for (var i = 0; i < statements.Count - 1; i++) {
+				var cur = statements[i];
+				var next = statements[i + 1];
+				if (cur.ILSpan.End < next.ILSpan.Start)
+					statements[i] = new SourceStatement(ILSpan.FromBounds(cur.ILSpan.Start, next.ILSpan.Start), cur.TextSpan);
+			}
+			var last = statements[statements.Count - 1];
+			if (last.ILSpan.End < codeSize)
+				statements[statements.Count - 1] = new SourceStatement(ILSpan.FromBounds(last.ILSpan.Start, codeSize), last.TextSpan);
+			var first = statements[0];
+			if (first.ILSpan.Start > 0)
+				statements[0] = new SourceStatement(new ILSpan(0, first.ILSpan.End), first.TextSpan);
+		}
+
+		/// <summary>
 		/// Creates a <see cref="MethodDebugInfo"/>
 		/// </summary>
 		/// <returns></returns>

@@ -74,7 +74,12 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					methodBuilders.Pop();
 					mappedInstructions = null;
 					builder.EndPosition = output.NextPosition;
-					if (!withStatements.Contains(builder)) {
+					if (withStatements.Contains(builder)) {
+						// Cover the whole body with the statement IL spans, like the 2.3
+						// engine's sequence points did.
+						builder.CompactILSpans((uint)method.Body!.GetCodeSize());
+					}
+					else {
 						// No statement-level sequence points made it: fall back to the v1
 						// whole-body span, the shape the 2.3 engine used for bodies it could
 						// not track statement-level.

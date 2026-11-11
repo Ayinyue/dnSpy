@@ -29,6 +29,10 @@ class Probe {
 			InstallBinResolver(new[] { args[2] });
 			return DbgMap(args[1], args[2]);
 		}
+		if (args.Length > 0 && args[0] == "dbg-map2") {
+			InstallBinResolver(new[] { args[2] });
+			return DbgMap2(args[1], args[2], args[3], args[4], int.Parse(args[5]));
+		}
 		if (args.Length > 0 && args[0] == "options-wiring") {
 			InstallBinResolver(new[] { args[2] });
 			return OptionsWiring(args[1], args[2], args[3]);
@@ -628,8 +632,109 @@ class Probe {
 			Check(o.DebugInfos.Count > 0 && stmtLevel > 0, $"8a VB state machine has statement SPs ({o.DebugInfos.Count} infos, {stmtLevel} statement-level)");
 		}
 
+		// 9. Reference highlighting: every call site of the same external method must produce
+		// the same reference instance (or one dnSpy's comparer accepts), or highlight and
+		// go-to-both-sites break. WriteLine is called from four statements in the sample.
+		{
+			var o = new ColorCaptureOutput();
+			dec32cs.Decompile(statementVariety, o, new dnSpy.Contracts.Decompiler.DecompilationContext { CalculateILSpans = false });
+			var writeLineRefs = o.Entries.Where(e => e.Reference is dnlib.DotNet.IMemberRef mr && mr.Name == "WriteLine")
+				.Select(e => (dnlib.DotNet.IMemberRef)e.Reference)
+				.ToList();
+			Check(writeLineRefs.Count >= 2, $"9a multiple WriteLine call sites captured ({writeLineRefs.Count} sites)");
+			Check(writeLineRefs.Distinct().Count() == 1, $"9b all WriteLine sites share one reference instance ({writeLineRefs.Distinct().Count()} distinct)");
+
+			// The synthesized path (table miss): two structurally identical MemberRefUsers
+			// must compare equal through dnlib's SigComparer - the same comparer dnSpy's
+			// SpanDataReferenceInfoExtensions.CompareReferences falls back to after its own
+			// name/declaring-type fast checks.
+			var corlibRef = new dnlib.DotNet.AssemblyRefUser("System.Runtime");
+			var listTypeRef = new dnlib.DotNet.TypeRefUser(module, "System.Collections.Generic", "List`1", corlibRef);
+			var sig = dnlib.DotNet.MethodSig.CreateInstance(module.CorLibTypes.Void, new dnlib.DotNet.GenericInstSig(new dnlib.DotNet.ClassSig(listTypeRef), module.CorLibTypes.String));
+			var siteA = new dnlib.DotNet.MemberRefUser(module, "Add", sig, listTypeRef);
+			var siteB = new dnlib.DotNet.MemberRefUser(module, "Add", sig, listTypeRef);
+			var comparer = new SigComparer(SigComparerOptions.CompareDeclaringTypes | SigComparerOptions.PrivateScopeIsComparable);
+			Check(comparer.Equals(siteA, siteB), "9c dnlib SigComparer matches two structurally identical synthesized MemberRefs");
+			var siteC = new dnlib.DotNet.MemberRefUser(module, "Add", dnlib.DotNet.MethodSig.CreateInstance(module.CorLibTypes.Void, module.CorLibTypes.Object), listTypeRef);
+			Check(!comparer.Equals(siteA, siteC), "9d SigComparer distinguishes synthesized overloads");
+		}
+
 		Console.WriteLine(failures == 0 ? "ENGINE-TESTS: ALL PASS" : $"ENGINE-TESTS: {failures} FAILURES");
 		return failures == 0 ? 0 : 1;
+	}
+
+	// ==== dbg-map2: IL/text coverage report over an arbitrary target assembly with a
+	// chosen engine (32cs/32vb/23cs) - the general-purpose shape of dbg-map for real
+	// libraries with large methods and deep control flow.
+	static int DbgMap2(string targetDll, string dnspyBin, string engine, string typeFilter, int maxTypes) {
+		var dec = engine switch {
+			"32vb" => Create32VB(dnspyBin),
+			"23cs" => Create23(dnspyBin, "CSharp"),
+			_ => Create32CSharp(dnspyBin),
+		};
+		var module = ModuleDefMD.Load(targetDll);
+		var allTypes = new System.Collections.Generic.List<TypeDef>();
+		void Collect(System.Collections.Generic.IEnumerable<TypeDef> list) {
+			foreach (var t in list) {
+				allTypes.Add(t);
+				Collect(t.NestedTypes);
+			}
+		}
+		Collect(module.Types);
+		var types = allTypes
+			.Where(t => !t.Name.StartsWith("<") || typeFilter.Length > 0)
+			.Where(t => t.FullName.IndexOf(typeFilter, StringComparison.OrdinalIgnoreCase) >= 0)
+			.Take(maxTypes)
+			.ToList();
+		int worstIL = 100, worstText = 100;
+		string worstILName = "-", worstTextName = "-";
+		foreach (var type in types) {
+			var output = new SpCaptureOutput();
+			try {
+				dec.Decompile(type, output, new dnSpy.Contracts.Decompiler.DecompilationContext { CalculateILSpans = true });
+			}
+			catch (Exception ex) {
+				Console.WriteLine($"TYPE {type.FullName}: THREW {ex.GetType().Name}: {ex.Message}");
+				continue;
+			}
+			var text = output.ToString();
+			foreach (var mdi in output.DebugInfos) {
+				var method = mdi.Method;
+				if (method?.Body is null || method.Body.Instructions.Count == 0)
+					continue;
+				int ilHits = 0, ilTotal = 0;
+				foreach (var ins in method.Body.Instructions) {
+					ilTotal++;
+					if (mdi.GetSourceStatementByCodeOffset((uint)ins.Offset) is not null)
+						ilHits++;
+				}
+				var ilRatio = (double)ilHits * 100 / ilTotal;
+				if (ilTotal >= 8 && ilRatio < worstIL) {
+					worstIL = (int)ilRatio;
+					worstILName = $"{type.Name}.{method.Name}";
+				}
+				int textHits = 0;
+				foreach (var st in mdi.Statements) {
+					var mid = st.TextSpan.Start + (st.TextSpan.Length / 2);
+					var lineStart = text.LastIndexOf('\n', Math.Max(0, mid - 1));
+					if (lineStart < 0)
+						lineStart = 0;
+					var nl = text.IndexOf('\n', mid);
+					var lineEnd = nl < 0 ? text.Length : nl + 1;
+					if (mdi.GetSourceStatementByTextOffset(lineStart, lineEnd, mid) is not null)
+						textHits++;
+				}
+				var textRatio = mdi.Statements.Length == 0 ? 100.0 : (double)textHits * 100 / mdi.Statements.Length;
+				if (mdi.Statements.Length >= 3 && textRatio < worstText) {
+					worstText = (int)textRatio;
+					worstTextName = $"{type.Name}.{method.Name}";
+				}
+				if (ilRatio < 100 || textRatio < 100)
+					Console.WriteLine($"  {type.Name}.{method.Name}: IL {ilHits}/{ilTotal} ({ilRatio:F0}%) text {textHits}/{mdi.Statements.Length} ({textRatio:F0}%)");
+			}
+		}
+		Console.WriteLine($"WORST IL coverage: {worstIL}% ({worstILName}); WORST text coverage: {worstText}% ({worstTextName})");
+		return 0;
 	}
 
 	static int SpDumpLang(string[] args) {

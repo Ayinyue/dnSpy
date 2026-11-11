@@ -937,3 +937,18 @@ UsingDeclarations → using 消失、名字回全限定（与 2.3 关闭时形�
   祖先链发现）注入 formatter。
 - 门禁参考基线随嵌套类型形态修复移位：VB realBadFiles 942/526/11 → 1731/741/11
   （嵌套从"整个父类型"（可编译但错位）变为独立正确输出，run-regression.cmd 已注记）。
+
+## 3.2 引擎上游测试套（2026-11-11 复活并基线化）
+
+ICSharpCode.Decompiler.Tests（ILSpy 3.x 上游测试，564 个）此前因移植环境问题无法运行，
+修复三处：TargetFramework net46→net462（兼容引擎的 netstandard2.0）、System.Collections.Immutable
+1.3.1→1.7.1（消 NU1605 降级）、NUnit 3.9→3.13.1 + adapter 4.6.0（旧 adapter 自带的旧版
+Mono.Cecil 与引擎的 cecil 类型身份冲突导致 override 失配）。Tester 增加 SnippetResolver
+（.NET Framework 参考程序集 + 运行时目录），snippet 编译后的模块引用可解析。
+
+基线（dotnet vstest，净环境）：**564 总 / 407 通过 / 142 失败 / 15 跳过**。失败构成：
+- ~70× UseMcs 变体：本机无 mono msc 编译器（环境缺失，Win32Exception 文件不存在）
+- ~60× UseRoslyn/None/Optimize 变体：diff 行 ~95% 为 using 语句——移植版有意把
+  IntroduceUsingDeclarations 的排序对齐 dnSpy 2.3（上游 ILSpy 3.x expected 文件不同）
+- 零星：匿名类型/元组等个别形态（<8 行）
+无引擎逻辑回归：失败在各 fixture 均匀分布（编译器变体参数化），无单点功能崩溃。

@@ -511,28 +511,27 @@ class Probe {
 				var ilRatio = ilTotal == 0 ? 1.0 : (double)ilHits / ilTotal;
 				Console.WriteLine($"  IL coverage {method.Name}: {ilHits}/{ilTotal} ({ilRatio:P0})");
 
-				// 2) Text coverage: the middle of every non-empty line must resolve to a statement.
+				// 2) Text coverage: the midpoint of every statement's TextSpan must resolve
+				//    through GetSourceStatementByTextOffset (the bookmark/locate path).
 				int textHits = 0, textTotal = 0;
-				int lineStart = 0;
-				for (var li = 0; li < textLines(text).Length; li++) {
-					var line = textLines(text)[li];
-					var lineEnd = lineStart + line.Length + 1; // the split kept \r; \n is the +1
-					var lineLen = line.TrimEnd('\r').Length;
-					if (lineLen > 0) {
-						textTotal++;
-						var mid = lineStart + lineLen / 2;
-						if (mdi.GetSourceStatementByTextOffset(lineStart, lineEnd, mid) is not null)
-							textHits++;
-					}
-					lineStart = lineEnd;
+				foreach (var st in mdi.Statements) {
+					var mid = st.TextSpan.Start + (st.TextSpan.Length / 2);
+					var lineStart = text.LastIndexOf('\n', Math.Max(0, mid - 1));
+					if (lineStart < 0)
+						lineStart = 0;
+					var nl = text.IndexOf('\n', mid);
+					var lineEnd = nl < 0 ? text.Length : nl + 1;
+					textTotal++;
+					if (mdi.GetSourceStatementByTextOffset(lineStart, lineEnd, mid) is not null)
+						textHits++;
 				}
 				var textRatio = textTotal == 0 ? 1.0 : (double)textHits / textTotal;
-				Console.WriteLine($"  Text coverage {method.Name}: {textHits}/{textTotal} ({textRatio:P0})");
+				Check(textRatio >= 0.9, $"Text coverage {method.Name}: {textHits}/{textTotal} ({textRatio:P0})");
 			}
 		}
 		return 0;
 
-		static string[] textLines(string s) => s.Replace("\r\n", "\n").Split('\n');
+		static string[] textLines(string s) => s.Split('\n');
 	}
 
 	// ==== engine-tests: regression assertions for the 3.2 coverage work, run against the

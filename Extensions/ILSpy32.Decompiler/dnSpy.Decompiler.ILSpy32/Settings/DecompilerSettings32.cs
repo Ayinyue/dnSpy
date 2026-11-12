@@ -56,6 +56,23 @@ namespace dnSpy.Decompiler.ILSpy32.Settings {
 			}
 		}
 
+		bool sortMembers;
+
+		/// <summary>
+		/// Whether members are sorted alphabetically inside their groups (methods,
+		/// properties, events, fields, nested types). The 2.3 engine had this switch
+		/// (off by default); the extension implements the reorder itself.
+		/// </summary>
+		public bool SortMembers {
+			get => sortMembers;
+			set {
+				if (sortMembers != value) {
+					sortMembers = value;
+					RaiseVersionChanged();
+				}
+			}
+		}
+
 		public DecompilerSettings32() : this(vbCompatibility: false) {
 		}
 
@@ -162,6 +179,15 @@ namespace dnSpy.Decompiler.ILSpy32.Settings {
 			yield return BooleanOption(DecompilerOptionConstants.AlwaysGenerateExceptionVariableForCatchBlocksUnlessTypeIsObject_GUID,
 				"Always name the exception variable in catch blocks",
 				() => EngineSettings.AlwaysGenerateExceptionVariableForCatchBlocks, v => { EngineSettings.AlwaysGenerateExceptionVariableForCatchBlocks = v; RaiseVersionChanged(); });
+
+			// Extension-owned option: the 2.3 engine had a SortMembers switch (off by default)
+			// and the decompiled member order must follow it, so the extension implements the
+			// member reorder itself (see CSharpDecompiler32.ReorderMembers).
+			yield return new DecompilerOption<bool>(DecompilerOptionConstants.SortMembers_GUID,
+				() => SortMembers, v => SortMembers = v) {
+				Description = "Sort members alphabetically (methods, properties, events, fields, nested types)",
+				Name = DecompilerOptionConstants.SortMembers_NAME,
+			};
 
 			// Extension-owned option: the 3.2 engine has no token-comment switch.
 			yield return new DecompilerOption<bool>(DecompilerOptionConstants.ShowTokenAndRvaComments_GUID,

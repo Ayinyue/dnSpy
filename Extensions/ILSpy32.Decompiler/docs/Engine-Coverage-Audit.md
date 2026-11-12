@@ -11,7 +11,7 @@
 |---|---|---|
 | C# 反编译质量 | ✅ | 双门禁对 2.3 全面占优（syntax 875 vs 908、realBad 1818 vs 2168；早期 641/1467 为部分状态机类型输出失败时的计数，CallBuilder 修复后恢复为 875/1818 真实计数） |
 | VB 反编译质量 | ✅ | syntax 0 vs 2.3 的 1110；realBad 1731/741/11 vs 2.3 的 2396/918/51（基线随嵌套类型形态修复从 942/526/11 移位——独立正确输出替代"整个父类型"，见 run-regression.cmd 注记） |
-| using/Imports | ✅ | 2026-11-08 修复（DecompileType 收集重载 + FindRequiredImports 链解析） |
+| using/Imports | ✅ | 2026-11-08 修复（DecompileType 收集重载 + FindRequiredImports 链解析）；**2026-11-13 二次修复（用户实测反馈）**：①`using System;` 在部分类型缺失——2.3 的 IntroduceUsingDeclarations 有"always import System"而 3.2 缺（补上）；②using 声明顺序反（升序集合+同点插入=输出逆序）——按注释意图改降序遍历。实测 IWshShell：`using System;` 恢复首位、顺序与 2.3 一致；**C# 门禁 syntax 875→208、realBad 1818→1151**（全限定名噪音消除）；③attribute 顺序：伪属性（ComImport 等 flags）前置而 2.3 后置——CecilLoader.AddAttributes 重排为表属性→security→伪属性，实测 [Guid][TypeIdentifier][ComImport] 与 2.3 一致。VB 门禁 realBad 1731/741→**1068/518**（同步改善） |
 | Token/RVA 注释 | ✅ | InsertTokenComments，受 ShowTokenAndRvaComments 选项控制 |
 | using 升序 | ✅ | 与 2.3 排序一致 |
 | XML 文档注释 | ✅ | AddXmlDocumentationTransform + 桥接 FileName 回填 |

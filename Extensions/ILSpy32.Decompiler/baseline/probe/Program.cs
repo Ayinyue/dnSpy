@@ -656,6 +656,33 @@ class Probe {
 			Check(o.DebugInfos.Count > 0 && stmtLevel > 0, $"8a VB state machine has statement SPs ({o.DebugInfos.Count} infos, {stmtLevel} statement-level)");
 		}
 
+		// 10. Member sorting (SortMembers option): with the option on, the 2.3 grouping
+		// (methods, properties, events, fields, nested types) applies and each group is
+		// sorted with the 2.3 comparers; with it off, the metadata order is kept.
+		{
+			var settings = dec32cs.Settings;
+			var sortOption = settings.Options.First(o => o.Guid == dnSpy.Contracts.Decompiler.DecompilerOptionConstants.SortMembers_GUID);
+			var original = (bool)sortOption.Value;
+
+			sortOption.Value = true;
+			var sortedText = Decompile(dec32cs, statementVariety, calcSp: false).ToString();
+			if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1") {
+				foreach (var line2 in sortedText.Replace("\r\n", "\n").Split('\n'))
+					if (line2.Contains("AsyncWork") || line2.Contains("ControlFlow") || line2.Contains("SimpleStatements") || line2.Contains("CountTo") || line2.Contains("LinqAndLock") || line2.Contains("private ") || line2.Contains("Async") || line2.Contains("Task"))
+						Console.Error.WriteLine("SORTED-MEMBER " + line2.Trim().Substring(0, System.Math.Min(line2.Trim().Length, 60)));
+			}
+			sortOption.Value = original;
+			var unsortedText = Decompile(dec32cs, statementVariety, calcSp: false).ToString();
+
+			// Methods group comes first and is alphabetical; the fields group follows.
+			var firstMethod = sortedText.IndexOf("AsyncWork(", StringComparison.Ordinal);
+			var secondMethod = sortedText.IndexOf("ControlFlow(", StringComparison.Ordinal);
+			var fieldsIdx = sortedText.IndexOf("private int counter", StringComparison.Ordinal);
+			Check(firstMethod >= 0 && secondMethod > firstMethod, $"10a methods sorted alphabetically (AsyncWork@{firstMethod} < ControlFlow@{secondMethod})");
+			Check(fieldsIdx > secondMethod, $"10b fields group after methods group (counter@{fieldsIdx})");
+			Check(unsortedText.IndexOf("public int SimpleStatements", StringComparison.Ordinal) >= 0, "10c unsorted output keeps original members");
+		}
+
 		// 9. Reference highlighting: every call site of the same external method must produce
 		// the same reference instance (or one dnSpy's comparer accepts), or highlight and
 		// go-to-both-sites break. WriteLine is called from four statements in the sample.

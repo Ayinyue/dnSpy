@@ -191,8 +191,13 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					// The engine hides compiler-generated implementation-detail types entirely
 					// (<PrivateImplementationDetails> renders empty via MemberIsHidden); the 2.3
 					// engine showed their members. Re-decompile through the member list, which
-					// has no such filter.
-					if (fallbackDecompile != null && csharpUnit.Members.Count == 0)
+					// has no such filter. Note: the tree may contain using declarations and
+					// namespace declarations alongside types (IntroduceUsingDeclarations inserts
+					// usings with MemberRole; DoDecompileTypes wraps types in NamespaceDeclaration),
+					// so the emptiness check looks for actual type/namespace content, not the
+					// raw member count.
+					if (fallbackDecompile != null && !csharpUnit.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration>().Any()
+							&& !csharpUnit.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.NamespaceDeclaration>().Any())
 						csharpUnit = fallbackDecompile(engine);
 					engineTypeSystem = DnlibCecilBridge.TryGetTypeSystem(engine);
 				}

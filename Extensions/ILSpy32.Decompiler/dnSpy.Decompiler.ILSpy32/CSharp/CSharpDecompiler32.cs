@@ -209,8 +209,13 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					// The engine hides compiler-generated implementation-detail types entirely
 					// (<PrivateImplementationDetails> renders empty via MemberIsHidden); the 2.3
 					// engine showed their members. Re-decompile through the member list, which
-					// has no such filter.
-					if (fallbackDecompile != null && tree.Members.Count == 0)
+					// has no such filter. Note: the tree may contain using declarations and
+					// namespace declarations alongside types (IntroduceUsingDeclarations inserts
+					// usings with MemberRole; DoDecompileTypes wraps types in NamespaceDeclaration),
+					// so the emptiness check looks for actual type/namespace content, not the
+					// raw member count.
+					if (fallbackDecompile != null && !tree.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration>().Any()
+							&& !tree.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.NamespaceDeclaration>().Any())
 						tree = fallbackDecompile(engine);
 					StripCommentsInsideFieldDeclarations(tree);
 					// Definitions on the tree (the resolver reads them for colors/references),
@@ -226,6 +231,8 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					// The 2.3 engine shows a 'Token: 0x... RID: ...' comment before every member
 					// declaration when ShowTokenAndRvaComments is on (the dnSpy default).
 					InsertTokenComments(tree, module as ModuleDefMD, settings.ShowTokenAndRvaComments);
+					if (settings.SortMembers)
+						ReorderMembers(tree, module as ModuleDefMD);
 					var tokenWriter = new DnSpyTokenWriter(output, engine, module as ModuleDefMD, VisualBasicMetadataTextColorProvider.Instance, 1);
 					tree.AcceptVisitor(new ICSharpCode.Decompiler.CSharp.OutputVisitor.CSharpOutputVisitor(
 						ICSharpCode.Decompiler.CSharp.OutputVisitor.TokenWriter.WrapInWriterThatSetsLocationsInAST(tokenWriter),
@@ -387,6 +394,117 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 	/// declaration, so documentation comments (inserted earlier by the engine transform)
 	/// stay above it like in 2.3.
 	/// </summary>
+	/// <summary>
+	/// Reorders the members of every type declaration to match the 2.3 engine's default
+	/// grouping (methods, properties, events, fields, nested types - the order of its
+	/// decompilationObjects array) and, when SortMembers is on, sorts each group with the
+	/// same comparers the 2.3 engine used (dnSpy.Contracts.Logic MemberComparer). Types the
+	/// binder could not bind keep their original order.
+	/// </summary>
+	static void ReorderMembers(ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree, ModuleDefMD module) {
+		try {
+			foreach (var typeDecl in tree.Descendants.OfType<ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration>()) {
+				if (typeDecl.ClassType == ICSharpCode.Decompiler.CSharp.Syntax.ClassType.Enum)
+					continue; // enum members are ordered by their constant values, never sorted
+				var typeDef = typeDecl.Annotation<TypeDef>();
+				if (typeDef is null)
+					continue;
+
+				var methods = new List<ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration>();
+				var properties = new List<ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration>();
+				var events = new List<ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration>();
+				var fields = new List<ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration>();
+				var nestedTypes = new List<ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration>();
+				foreach (var member in typeDecl.Members) {
+					switch (member) {
+					case ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration nested:
+						nestedTypes.Add(nested);
+						break;
+					case ICSharpCode.Decompiler.CSharp.Syntax.PropertyDeclaration prop:
+						properties.Add(prop);
+						break;
+					case ICSharpCode.Decompiler.CSharp.Syntax.EventDeclaration ev:
+						events.Add(ev);
+						break;
+					case ICSharpCode.Decompiler.CSharp.Syntax.FieldDeclaration field:
+						fields.Add(field);
+						break;
+					default:
+						methods.Add(member);
+						break;
+					}
+				}
+
+				// Sort each group by its dnlib definition when the binder attached one; items
+				// without a definition keep their relative order (List.Sort is not stable, so
+				// equal keys must return 0 without reordering guarantees - acceptable here
+				// because unbound members are rare).
+				methods.Sort((a, b) => {
+					var ma = a.Annotation<MethodDef>();
+					var mb = b.Annotation<MethodDef>();
+					if (ma is null || mb is null)
+						return 0;
+					return dnSpy.Contracts.Decompiler.MethodDefComparer.Instance.Compare(ma, mb);
+				});
+				properties.Sort((a, b) => {
+					var pa = a.Annotation<PropertyDef>();
+					var pb = b.Annotation<PropertyDef>();
+					if (pa is null || pb is null)
+						return 0;
+					return dnSpy.Contracts.Decompiler.PropertyDefComparer.Instance.Compare(pa, pb);
+				});
+				events.Sort((a, b) => {
+					var ea = a.Annotation<EventDef>();
+					var eb = b.Annotation<EventDef>();
+					if (ea is null || eb is null)
+						return 0;
+					return dnSpy.Contracts.Decompiler.EventDefComparer.Instance.Compare(ea, eb);
+				});
+				fields.Sort((a, b) => {
+					var fa = GetFieldFor(a, module);
+					var fb = GetFieldFor(b, module);
+					if (fa is null || fb is null)
+						return 0;
+					return dnSpy.Contracts.Decompiler.FieldDefComparer.Instance.Compare(fa, fb);
+				});
+				nestedTypes.Sort((a, b) => {
+					var ta = a.Annotation<TypeDef>();
+					var tb = b.Annotation<TypeDef>();
+					if (ta is null || tb is null)
+						return 0;
+					return dnSpy.Contracts.Decompiler.TypeDefComparer.Instance.Compare(ta, tb);
+				});
+
+				// Re-add in the 2.3 grouping order.
+				typeDecl.Members.Clear();
+				foreach (var m in methods)
+					typeDecl.Members.Add(m);
+				foreach (var m in properties)
+					typeDecl.Members.Add(m);
+				foreach (var m in events)
+					typeDecl.Members.Add(m);
+				foreach (var m in fields)
+					typeDecl.Members.Add(m);
+				foreach (var m in nestedTypes)
+					typeDecl.Members.Add(m);
+			}
+		}
+		catch (Exception ex) {
+			// member reordering must never break the decompilation
+			if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1")
+				Console.Error.WriteLine("REORDER-EX " + ex.GetType().Name + ": " + ex.Message + " @ " + ex.StackTrace);
+		}
+	}
+
+	static dnlib.DotNet.FieldDef? GetFieldFor(ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration member, ModuleDefMD module) {
+		var ownerType = member.Ancestors.OfType<ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration>().FirstOrDefault();
+		var typeDef = ownerType?.Annotation<TypeDef>();
+		if (typeDef is null)
+			return null;
+		var variableName = (member as ICSharpCode.Decompiler.CSharp.Syntax.FieldDeclaration)?.Variables.FirstOrDefault()?.Name;
+		return variableName is null ? null : typeDef.Fields.FirstOrDefault(f => f.Name == variableName);
+	}
+
 	internal static void InsertTokenComments(ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree, ModuleDefMD module, bool showTokens) {
 		if (module is null || !showTokens)
 			return;

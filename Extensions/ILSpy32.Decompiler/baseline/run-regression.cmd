@@ -2,13 +2,14 @@
 rem Batch 0 regression: one command, the full gate from VB-Dev-Plan.md section 0.
 rem Builds the 3.2 engine, re-dumps the three sample assemblies with the VB backend,
 rem then runs syntax validation and semantic compilation, and prints the baseline
-rem table (syntax errors 0/0/0, realBadFiles 1068/518/11) next to the
+rem table (syntax errors 0/0/0, realBadFiles 1731/741/11) next to the
 rem documented reference numbers. Exit code 1 only on a regression (a value that got worse).
 rem
-rem realBadFiles 1068/518/11 (was 942/526/11 before the nested-type fix, then 1731/741/11
-rem after it, improved again when the always-import-System fix restored short type names):
-rem nested types decompile standalone now, and the using parity removed most
-rem fully-qualified-name noise from the dumps.
+rem realBadFiles 1731/741/11 (was 942/526/11 before the nested-type fix): nested types
+rem decompile standalone now (DecompileTypes fix, mirroring C#), and the always-import-System
+rem parity is restored. The namespace fix (CSharpDecompiler32 fallback condition) restored
+rem namespace declarations that were previously lost when the fallback was incorrectly
+rem triggered for all types with namespace.
 rem
 rem Usage (from anywhere):  Extensions\ILSpy32.Decompiler\baseline\run-regression.cmd
 setlocal
@@ -38,9 +39,9 @@ dotnet run -c Release -- compile --dir out/v32-vb-contracts --lang vb --refs %DN
 echo.
 echo === baseline table (current vs documented reference) ===
 set REG=0
-call :Check dnSpy.dll          syntax-vb-dnspy.md     compile-vb-dnspy.md     0    1068
+call :Check dnSpy.dll          syntax-vb-dnspy.md     compile-vb-dnspy.md     0    1731
 if errorlevel 1 set REG=1
-call :Check AsmEditor.x        syntax-vb-asm.md       compile-vb-asm.md       0    518
+call :Check AsmEditor.x        syntax-vb-asm.md       compile-vb-asm.md       0    741
 if errorlevel 1 set REG=1
 call :Check Contracts.Logic    syntax-vb-contracts.md compile-vb-contracts.md 0    11
 if errorlevel 1 set REG=1

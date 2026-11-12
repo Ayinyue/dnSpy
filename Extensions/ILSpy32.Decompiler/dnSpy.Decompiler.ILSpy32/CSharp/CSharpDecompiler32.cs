@@ -182,7 +182,9 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				WriteNote(output, "// ILSpy 3.2: cannot bridge this module (no in-memory snapshot available).");
 				return;
 			}
-			DecompileCore(module, output, ctx, d => d.Decompile(cecilMember));
+			// Pass the declaring type so the binder's knownType direct binding works for
+			// single-member decompiles (avoids simple-name ambiguity for nested types).
+			DecompileCore(module, output, ctx, d => d.Decompile(cecilMember), knownType: (member as IMemberDef)?.DeclaringType);
 		}
 
 		static IMemberDefinition? TryGetCecil(ModuleDef module, uint rawToken) {

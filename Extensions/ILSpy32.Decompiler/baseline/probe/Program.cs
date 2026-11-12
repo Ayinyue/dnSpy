@@ -606,6 +606,30 @@ class Probe {
 			Check(sp.DebugInfos.Count == 0, $"{name} CalculateILSpans=false -> 0 debug infos ({sp.DebugInfos.Count})");
 		}
 
+		// 5c/5d. IL coverage after CompactILSpans must be 100% on both 3.2 backends,
+		// and the 2.3 engine stays at its own (>=99%) level as the comparison baseline.
+		double ILCoverage(dnSpy.Contracts.Decompiler.IDecompiler dec, TypeDef type) {
+			var o = new SpCaptureOutput();
+			dec.Decompile(type, o, new dnSpy.Contracts.Decompiler.DecompilationContext { CalculateILSpans = true });
+			int hits = 0, total = 0;
+			foreach (var mdi in o.DebugInfos) {
+				if (mdi.Method?.Body is null)
+					continue;
+				foreach (var ins in mdi.Method.Body.Instructions) {
+					total++;
+					if (mdi.GetSourceStatementByCodeOffset((uint)ins.Offset) is not null)
+						hits++;
+				}
+			}
+			return total == 0 ? 100.0 : hits * 100.0 / total;
+		}
+		Check(ILCoverage(dec32cs, statementVariety) >= 100.0, "5c C# IL coverage = 100% after CompactILSpans");
+		Check(ILCoverage(dec32vb, statementVariety) >= 100.0, "5d VB IL coverage = 100% after CompactILSpans");
+		{
+			var dec23 = Create23(dnspyBin, "CSharp");
+			Check(ILCoverage(dec23, statementVariety) >= 97.0, "5e 2.3 IL coverage >= 97% (comparison baseline; 97.5 measured on the Debug sample)");
+		}
+
 		// 6. Nested types: decompiling Inner renders Inner itself, not the whole declaring type.
 		{
 			var o = Decompile(dec32cs, innerType, calcSp: false);

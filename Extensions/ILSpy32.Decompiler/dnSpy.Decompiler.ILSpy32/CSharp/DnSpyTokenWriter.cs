@@ -492,8 +492,88 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 
 		public override void WriteToken(Role role, string token) {
 			lastColorPath = "token";
+			// The 2.3 engine attaches the member reference to operator/punctuation tokens of
+			// binary/unary/assignment/indexer expressions and delegate invokes, so clicking
+			// '+' navigates to op_Addition and the indexer brackets to the accessor. Replicate
+			// that using the current node's resolve results.
+			var tokenRef = GetCurrentTokenReference() as dnlib.DotNet.IMemberRef;
+			if (tokenRef is not null) {
+				lastColorPath = "token-ref";
+				EmitText(token, tokenRef, DecompilerReferenceFlags.None, ColorOfToken(token, role));
+				isAtStartOfLine = false;
+				return;
+			}
 			EmitText(token, ColorOfToken(token, role));
 			isAtStartOfLine = false;
+		}
+
+		/// <summary>
+		/// Member reference for the current punctuation/operator token, mirroring the 2.3
+		/// TextTokenWriter.WriteToken: expressions that map to a member (operators bind to
+		/// op_Addition etc., indexer brackets to the accessor, delegate invokes to Invoke).
+		/// </summary>
+		object? GetCurrentTokenReference() {
+			if (nodeStack.Count == 0)
+				return null;
+			var node = nodeStack.Peek();
+			var isOperatorLike = node is BinaryOperatorExpression || node is UnaryOperatorExpression ||
+				node is AssignmentExpression || node is IndexerExpression;
+			var isDelegateInvoke = node is InvocationExpression &&
+				node.Annotation<ResolveResult>() is InvocationResolveResult irr && irr.Member is ICSharpCode.Decompiler.TypeSystem.IMethod m &&
+				m.DeclaringType?.Kind == TypeKind.Delegate;
+			if (!isOperatorLike && !isDelegateInvoke)
+				return null;
+			// User-defined operators carry their operator method (op_Addition etc.); indexer
+			// brackets and delegate invokes carry a MemberResolveResult, which ResolveReference
+			// handles. String concatenation binds to a synthetic operator with no metadata
+			// method - the 2.3 engine showed String.Concat here (its ReplaceMethodCallsWithOperators
+			// folds Concat into '+' and copies the invocation annotation onto the folded node),
+			// so synthesize the same reference from the corlib TypeRef table.
+			var orr = node.Annotation<OperatorResolveResult>();
+			if (orr is not null) {
+				if (orr.UserDefinedOperatorMethod is not null)
+					return ToDnlib(TryGetCecil(orr.UserDefinedOperatorMethod));
+				if (orr.OperatorType == System.Linq.Expressions.ExpressionType.Add && orr.Operands.Any(o => o.Type?.FullName == "System.String"))
+					return SynthesizeStringConcatRef();
+				return null;
+			}
+			var resolved = ResolveReference(node);
+			if (resolved is not null)
+				return resolved;
+			// External accessors (e.g. List<T>.get_Item behind an indexer expression) can fail
+			// GetCecil; the module's own MemberRef table has the authoritative entry.
+			if (node.Annotation<ICSharpCode.Decompiler.Semantics.MemberResolveResult>() is { } mrr &&
+					mrr.Member is ICSharpCode.Decompiler.TypeSystem.IMember tm) {
+				// The module's MemberRef table keys on the declaring type as the IL spelled it:
+				// generic instantiations carry their arguments (List`1<System.String>) and the
+				// member name is the accessor's (get_Item), not the property's (Item).
+				var declaringNames = new List<string>();
+				if (mrr.TargetResult?.Type is not null)
+					declaringNames.Add(mrr.TargetResult.Type.FullName);
+				if (tm.DeclaringType is not null)
+					declaringNames.Add(tm.DeclaringType.FullName);
+				var memberNames = new List<string> { tm.Name };
+				if (tm is ICSharpCode.Decompiler.TypeSystem.IProperty property) {
+					if (property.Getter is not null)
+						memberNames.Add(property.Getter.Name);
+					if (property.Setter is not null)
+						memberNames.Add(property.Setter.Name);
+				}
+				foreach (var declaringName in declaringNames)
+					foreach (var memberName in memberNames)
+						if (Common.DnlibReferenceMapper.FindMemberRefInTable(module, declaringName, memberName) is { } found)
+							return found;
+			}
+			return null;
+		}
+
+		object? SynthesizeStringConcatRef() {
+			var stringTypeRef = Common.DnlibReferenceMapper.ResolveTypeRefByName(module, "String", 0);
+			if (stringTypeRef is null)
+				return null;
+			return new MemberRefUser(module, "Concat",
+				MethodSig.CreateStatic(module.CorLibTypes.String, module.CorLibTypes.String, module.CorLibTypes.Object),
+				stringTypeRef);
 		}
 
 		/// <summary>

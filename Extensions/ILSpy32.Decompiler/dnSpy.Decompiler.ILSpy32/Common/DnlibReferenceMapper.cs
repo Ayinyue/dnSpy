@@ -325,6 +325,41 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		/// refs is authoritative, so the resulting reference navigates to the right assembly.
 		/// The generic arity comes from the metadata name suffix (List`1).
 		/// </summary>
+		/// <summary>
+		/// Looks up a MemberRef in the module's own reference table by declaring-type full name
+		/// and member name (the exact call the IL made). Used when the type-system member
+		/// cannot be bridged through cecil (external accessors, external operator methods) and
+		/// the table entry carries the authoritative assembly scope.
+		/// </summary>
+		public static MemberRef? FindMemberRefInTable(ModuleDefMD module, string declaringTypeFullName, string memberName) {
+			if (memberRefTable is null || !ReferenceEquals(memberRefTableModule, module)) {
+				memberRefTable = new Dictionary<string, MemberRef>(StringComparer.Ordinal);
+				memberRefTableModule = module;
+				foreach (var existing in module.GetMemberRefs()) {
+					if (existing.Class?.FullName is string cls)
+						memberRefTable[cls + "::" + existing.Name] = existing;
+				}
+			}
+			if (memberRefTable.TryGetValue(declaringTypeFullName + "::" + memberName, out var found))
+				return found;
+			// The type-system full name of a generic type omits the arity suffix (List vs
+			// List`1) and generic instances (List`1<System.String>), while dnlib keys carry
+			// them. Match by prefix: the declaring name followed by the arity tick or an
+			// instantiation angle bracket.
+			MemberRef? prefixMatch = null;
+			foreach (var kv in memberRefTable) {
+				var colon = kv.Key.IndexOf("::", StringComparison.Ordinal);
+				if (colon < 0 || kv.Key.Substring(colon + 2) != memberName)
+					continue;
+				var cls = kv.Key.Substring(0, colon);
+				if (cls == declaringTypeFullName ||
+					(cls.Length > declaringTypeFullName.Length && cls.StartsWith(declaringTypeFullName, StringComparison.Ordinal) &&
+					 (cls[declaringTypeFullName.Length] == '`' || cls[declaringTypeFullName.Length] == '<')))
+					prefixMatch ??= kv.Value;
+			}
+			return prefixMatch;
+		}
+
 		public static TypeRef? ResolveTypeRefByName(ModuleDefMD module, string name, int arity) {
 			var table = GetOrCreateTypeRefTable(module);
 			if (!table.TryGetValue(name, out var candidates))

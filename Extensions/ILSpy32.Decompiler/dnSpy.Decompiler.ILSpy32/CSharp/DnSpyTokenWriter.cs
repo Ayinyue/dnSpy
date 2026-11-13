@@ -28,6 +28,7 @@ using dnSpy.Contracts.Text;
 using ICSharpCode.Decompiler.CSharp;
 using ICSharpCode.Decompiler.CSharp.OutputVisitor;
 using ICSharpCode.Decompiler.CSharp.Resolver;
+using ICSharpCode.Decompiler.IL;
 using ICSharpCode.Decompiler.CSharp.Syntax;
 using CS = ICSharpCode.Decompiler.CSharp.Syntax;
 using ICSharpCode.Decompiler.Semantics;
@@ -227,6 +228,31 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			if (!lastColorPath.StartsWith("ref-", StringComparison.Ordinal))
 				lastColorPath = "fallback";
 			var color = SyntacticColor(identifier);
+			// Parameters, locals, generic parameters and using-namespace segments: the 2.3
+			// engine attached references to all of these (dnlib Param, SourceLocal,
+			// GenericParamDef, NamespaceReference). dnSpy treats referenced identifiers
+			// differently (highlight-all-occurrences, definitions in bold), so the missing
+			// references showed as display differences.
+			if (TryGetVariableReference(identifier, color) is { } variableRef) {
+				lastColorPath = "ref-variable";
+				EmitText(text, variableRef.reference, variableRef.flags, color);
+				return;
+			}
+			if (TryGetGenericParameterReference(identifier, color) is { } genericRef) {
+				lastColorPath = "ref-genericparam";
+				EmitText(text, genericRef, DecompilerReferenceFlags.None, color);
+				return;
+			}
+			if (TryGetUsingNamespaceReference(identifier, color) is { } namespaceRef) {
+				lastColorPath = "ref-nsusing";
+				EmitText(text, namespaceRef, DecompilerReferenceFlags.None, color);
+				return;
+			}
+			if (TryGetNamespaceDeclarationReference(identifier, color) is { } declarationNamespaceRef) {
+				lastColorPath = "ref-nsdecl";
+				EmitText(text, declarationNamespaceRef, DecompilerReferenceFlags.None, color);
+				return;
+			}
 			// Member usages of same-type members: attach the definition as a navigation
 			// reference, matching what the 2.3 engine emitted for these sites.
 			if (identifier.Parent is MemberReferenceExpression usageMemberRef && usageMemberRef.MemberNameToken == identifier &&
@@ -382,6 +408,197 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		/// used to attach references for member usages whose engine resolve results are
 		/// missing, matching the references the 2.3 engine emitted.
 		/// </summary>
+		/// <summary>
+		/// The enclosing method as the binder annotated it (MethodDeclaration, accessor,
+		/// constructor, operator all carry MethodDef annotations).
+		/// </summary>
+		MethodDef? FindEnclosingMethod() {
+			foreach (var node in nodeStack) {
+				if (node.Annotation<MethodDef>() is { } methodDef)
+					return methodDef;
+			}
+			return null;
+		}
+
+		/// <summary>
+		/// Reference for a parameter or local identifier: the 2.3 engine emitted the dnlib
+		/// <see cref="Param"/> for parameters (all occurrences, declaration and usages) and a
+		/// cached <see cref="SourceLocal"/> for locals, so dnSpy highlights every occurrence
+		/// and shows definitions in bold. Parameters map by IL slot (the engine's
+		/// ILVariable.Index matches dnlib MethodDef.Parameters including the implicit this);
+		/// locals map by IL slot into the method body's variable table.
+		/// </summary>
+		(object reference, DecompilerReferenceFlags flags)? TryGetVariableReference(Identifier identifier, object color) {
+			var parent = identifier.Parent;
+			if (parent is null)
+				return null;
+
+			ILVariable? variable = null;
+			var isDefinition = false;
+			if (parent is ParameterDeclaration parameterDeclaration) {
+				// Declaration name: resolve the enclosing method's parameter by name.
+				var methodDef = FindEnclosingMethod();
+				if (methodDef is null)
+					return null;
+				var parameter = methodDef.Parameters.FirstOrDefault(p => p.Name == parameterDeclaration.Name);
+				if (parameter is null && parameterDeclaration.Parent is MethodDeclaration md2) {
+					// Parameter names can be missing or synthesized; fall back to position
+					// (instance methods carry the implicit this at index 0 in dnlib).
+					var position = 0;
+					foreach (var pd in md2.Parameters) {
+						if (pd == parameterDeclaration)
+							break;
+						position++;
+					}
+					if (position < md2.Parameters.Count)
+						parameter = methodDef.Parameters.Skip(1).Skip(position).FirstOrDefault();
+				}
+				if (parameter is null)
+					return null;
+				lastColorPath = "ref-paramdecl";
+				return (parameter, DecompilerReferenceFlags.Local | DecompilerReferenceFlags.Definition);
+			}
+			if (parent is VariableInitializer initializer) {
+				variable = initializer.GetILVariable();
+				isDefinition = true;
+			}
+			else if (parent is ForeachStatement foreachStatement) {
+				variable = foreachStatement.GetILVariable();
+				isDefinition = true;
+			}
+			else if (parent is IdentifierExpression usage) {
+				variable = usage.GetILVariable();
+			}
+
+			if (variable is null)
+				return null;
+			var method = FindEnclosingMethod();
+			if (method is null)
+				return null;
+			if (variable.Kind == VariableKind.Parameter) {
+				// The engine's parameter index includes the implicit this, matching
+				// dnlib MethodDef.Parameters.
+				if (variable.Index < 0 || variable.Index >= method.Parameters.Count)
+					return null;
+				lastColorPath = "ref-param";
+				var flags = isDefinition ? DecompilerReferenceFlags.Local | DecompilerReferenceFlags.Definition : DecompilerReferenceFlags.Local;
+				return (method.Parameters[variable.Index], flags);
+			}
+			if (variable.Kind is VariableKind.Local or VariableKind.UsingLocal or VariableKind.ForeachLocal) {
+				if (method.Body is null || variable.Index < 0 || variable.Index >= method.Body.Variables.Count)
+					return null;
+				var dnlibLocal = method.Body.Variables[variable.Index];
+				var key = (method, variable.Index);
+				if (!sourceLocalCache.TryGetValue(key, out var sourceLocal)) {
+					sourceLocal = new SourceLocal(dnlibLocal, variable.Name ?? dnlibLocal.Name ?? string.Empty,
+						dnlibLocal.Type, SourceVariableFlags.None);
+					sourceLocalCache[key] = sourceLocal;
+				}
+				lastColorPath = "ref-local";
+				var flags = isDefinition ? DecompilerReferenceFlags.Local | DecompilerReferenceFlags.Definition : DecompilerReferenceFlags.Local;
+				return (sourceLocal, flags);
+			}
+			return null;
+		}
+
+		readonly Dictionary<(MethodDef, int), SourceLocal> sourceLocalCache = new Dictionary<(MethodDef, int), SourceLocal>();
+
+		/// <summary>
+		/// Reference for a generic parameter identifier (declaration or usage): the 2.3 engine
+		/// emitted the dnlib GenericParamDef for both type and method type parameters.
+		/// </summary>
+		IMemberDef? TryGetGenericParameterReference(Identifier identifier, object color) {
+			var parent = identifier.Parent;
+			// Scan the node stack outward: innermost (method) parameters win over type
+			// parameters, mirroring GenericParameterColorByName's color precedence.
+			foreach (var node in nodeStack) {
+				if (node is MethodDeclaration methodDeclaration && methodDeclaration.Annotation<MethodDef>() is { } methodDef) {
+					var gp = methodDef.GenericParameters.FirstOrDefault(g => g.Name == identifier.Name)
+						?? (methodDeclaration.TypeParameters.Any(tp => tp.Name == identifier.Name) ? methodDef.GenericParameters.FirstOrDefault() : null);
+					if (gp is not null)
+						return gp;
+				}
+				if (node is CS.TypeDeclaration typeDeclaration && typeDeclaration.Annotation<TypeDef>() is { } typeDef) {
+					var gp = typeDef.GenericParameters.FirstOrDefault(g => g.Name == identifier.Name)
+						?? (typeDeclaration.TypeParameters.Any(tp => tp.Name == identifier.Name) ? typeDef.GenericParameters.FirstOrDefault() : null);
+					if (gp is not null)
+						return gp;
+				}
+			}
+			return null;
+		}
+
+		/// <summary>
+		/// Namespace reference for the segments of a using declaration: the 2.3 engine
+		/// emitted NamespaceReference(assembly, segment) on every segment of the import.
+		/// The assembly is resolved by finding any TypeRef of that namespace in the module's
+		/// reference table (its scope is the assembly the namespace is imported from).
+		/// </summary>
+		object? TryGetUsingNamespaceReference(Identifier identifier, object color) {
+			if (identifier.Parent is not SimpleType && identifier.Parent is not MemberType)
+				return null;
+			// The full namespace of the import: walk the MemberType chain.
+			// Reconstruct the full namespace of the import by walking the MemberType chain:
+			// 'using System.Runtime.InteropServices;' - the identifier 'Interoperability...'
+			// segment chain builds 'System.Runtime.InteropServices'.
+			string BuildNamespace(AstType type) {
+				switch (type) {
+				case SimpleType simple:
+					return simple.Identifier;
+				case MemberType member:
+					var prefix = BuildNamespace(member.Target);
+					return prefix is null ? null : prefix + "." + member.MemberName;
+				default:
+					return null;
+				}
+			}
+			string? fullNamespace = null;
+			for (var node = identifier.Parent as AstNode; node is not null; node = node.Parent) {
+				if (node is UsingDeclaration usingDeclaration) {
+					fullNamespace = BuildNamespace(usingDeclaration.Import);
+					break;
+				}
+			}
+			if (fullNamespace is null)
+				return null;
+			var typeRef = module.GetTypeRefs().FirstOrDefault(tr => tr.Namespace == fullNamespace);
+			var assembly = typeRef?.ResolutionScope as AssemblyRef ?? module.CorLibTypes.AssemblyRef;
+			return new NamespaceReference(assembly, identifier.Name);
+		}
+
+		/// <summary>
+		/// Namespace reference for the segments of a namespace declaration
+		/// ('namespace SpTestNamespace;'): the 2.3 engine emitted NamespaceReference on
+		/// every declaration segment too, with the assembly declaring the namespace.
+		/// </summary>
+		object? TryGetNamespaceDeclarationReference(Identifier identifier, object color) {
+			if (identifier.Parent is not NamespaceDeclaration && !(identifier.Parent is MemberType && identifier.Parent.Parent is NamespaceDeclaration) && !(identifier.Parent is SimpleType && identifier.Parent.Parent is NamespaceDeclaration))
+				return null;
+			// Reconstruct the full declared namespace.
+			string BuildNamespace(AstNode node) {
+				switch (node) {
+				case NamespaceDeclaration nsDecl:
+					return string.Join(".", nsDecl.Identifiers);
+				case MemberType member:
+					return member.MemberName;
+				default:
+					return null;
+				}
+			}
+			for (var node = identifier.Parent as AstNode; node is not null; node = node.Parent) {
+				if (node is NamespaceDeclaration) {
+					var fullNamespace = BuildNamespace(node);
+					if (fullNamespace is null)
+						return null;
+					var typeRef = module.GetTypeRefs().FirstOrDefault(tr => tr.Namespace == fullNamespace)
+						?? module.GetTypeRefs().FirstOrDefault(tr => fullNamespace.StartsWith(tr.Namespace + ".", StringComparison.Ordinal) || tr.Namespace == string.Empty);
+					var assembly = (typeRef?.ResolutionScope as AssemblyRef) ?? module.CorLibTypes.AssemblyRef;
+					return new NamespaceReference(assembly, identifier.Name);
+				}
+			}
+			return null;
+		}
+
 		IMemberDef? FindEnclosingTypeMember(string name) {
 			foreach (var node in nodeStack) {
 				if (node is CS.TypeDeclaration typeDecl && typeDecl.Annotation<TypeDef>() is { } typeDef) {

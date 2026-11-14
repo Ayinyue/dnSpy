@@ -103,6 +103,13 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			}
 
 			var memberRef = GetCurrentMemberReference() ?? (object?)(extraData as NamespaceReference);
+			// The converter passes variable references (dnlib Param/Local, synthesized
+			// SourceLocal) through extraData as well - emit them with the Local flag.
+			if (memberRef is null && extraData is Parameter or Local or SourceLocal) {
+				ColorPathSink?.Invoke("local-ref-extra");
+				output.Write(IdentifierEscaper.Escape(identifier), extraData, DecompilerReferenceFlags.Local, data);
+				return;
+			}
 			if (memberRef is not null) {
 				// External type names: the 2.3 engine colors them plain Type (only types defined
 				// in the decompiled module get their kind color). Namespace segments carry their
@@ -166,14 +173,16 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		/// the identifier nodes. The 2.3 engine emitted the same references with the Local
 		/// flag, so dnSpy highlights all occurrences of a local together.
 		/// </summary>
-		object? GetCurrentLocalReferenceFrom(AstNode? node) {
+		object? GetCurrentLocalReferenceFrom(object? node) {
+			if (node is not AstNode astNode)
+				return null;
 			if (node is null)
 				return null;
-			if (node.Annotation<Parameter>() is { } parameter)
+			if (astNode.Annotation<Parameter>() is { } parameter)
 				return parameter;
-			if (node.Annotation<SourceLocal>() is { } sourceLocal)
+			if (astNode.Annotation<SourceLocal>() is { } sourceLocal)
 				return sourceLocal;
-			if (node.Annotation<Local>() is { } local)
+			if (astNode.Annotation<Local>() is { } local)
 				return local;
 			return null;
 		}

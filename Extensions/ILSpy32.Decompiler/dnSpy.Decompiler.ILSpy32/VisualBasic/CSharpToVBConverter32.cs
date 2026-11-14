@@ -903,6 +903,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		/// </summary>
 		System.Collections.Generic.IEnumerable<object> ResolveIdentifierAnnotations(CS.IdentifierExpression identifierExpression) {
 			object? decisive = ResolveDnlibReference(identifierExpression);
+			if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1" && identifierExpression.Identifier == "num" && decisive is null) {
+				var ilv = ICSharpCode.Decompiler.CSharp.AnnotationExtensions.GetILVariable(identifierExpression);
+				Console.Error.WriteLine("NUM-DIAG ilv=" + (ilv is null ? "NULL" : ilv.Kind + "#" + ilv.Index) + " method=" + (FindEnclosingMethod(identifierExpression)?.Name ?? "null"));
+			}
 			if (decisive is null) {
 				var ilv = ICSharpCode.Decompiler.CSharp.AnnotationExtensions.GetILVariable(identifierExpression);
 				if (ilv is not null) {

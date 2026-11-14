@@ -1154,8 +1154,11 @@ namespace ICSharpCode.NRefactory.VB {
 				if (identifier.Parent is ParameterDeclaration)
 					data = BoxedTextColor.Parameter;
 			}
-			var nsRef = identifier.Annotation<NamespaceReference>();
-			WriteIdentifier(identifier.Name, data, identifierRole, nsRef);
+			// Pass the FIRST annotation through extraData: it is the decisive reference the
+			// converter composed (NamespaceReference, dnlib Param/Local, synthesized
+			// SourceLocal, TypeDef/MethodDef...) - the formatter emits it as the reference.
+			var firstAnnotation = identifier.Annotation<object>();
+			WriteIdentifier(identifier.Name, data, identifierRole, firstAnnotation);
 		}
 
 		static bool IsValidIdentifier(string identifier)

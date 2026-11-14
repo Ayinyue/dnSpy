@@ -78,7 +78,12 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		readonly HashSet<string> memberTypeNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 		// Parameter renames forced by the type-name collision above; consulted when references
 		// to the original parameter name are emitted.
-		readonly Dictionary<string, string> paramNameRenames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		// Case-sensitive lookup: the keys are C# identifiers as spelled at their declarations,
+		// and every C# reference spells them identically. A case-insensitive lookup would
+		// rewrite a DIFFERENT member whose name differs only in case ('Parameter' property vs
+		// 'parameter' parameter) into the renamed parameter - the assignment
+		// 'Parameter = parameter' silently became 'parameter2 = parameter2' (a no-op).
+		readonly Dictionary<string, string> paramNameRenames = new Dictionary<string, string>(StringComparer.Ordinal);
 		// Every local name the method declares. ILSpy already disambiguates repeats by appending
 		// a digit (array, array2), so a generated name must not reuse any of them.
 		readonly HashSet<string> reservedLocalNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -646,7 +651,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		public AstNode VisitBaseReferenceExpression(CS.BaseReferenceExpression baseReferenceExpression, object data)
 		{
 			InstanceExpression result = new InstanceExpression(InstanceExpressionType.MyBase, ToNRefactoryLocation(baseReferenceExpression.StartLocation));
-
+			// The 2.3 engine emitted the base type's reference on the MyBase keyword (the
+			// formatter's node is InstanceExpression branch is ported); supply the annotation.
+			if (FindEnclosingType(baseReferenceExpression)?.BaseType is { } baseType)
+				result.AddAnnotation(baseType);
 			return EndNode(baseReferenceExpression, result);
 		}
 
@@ -883,15 +891,143 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		public AstNode VisitIdentifierExpression(CS.IdentifierExpression identifierExpression, object data)
 		{
-			var expr = new IdentifierExpression();
-			expr.Identifier = Identifier.Create(ResolveIdentifierAnnotations(identifierExpression),
+			var identifier = Identifier.Create(ResolveIdentifierAnnotations(identifierExpression),
 				ResolveLocalName(identifierExpression.Identifier));
-			ConvertNodes(identifierExpression.TypeArguments, expr.TypeArguments);
+			// The 2.3 engine built every implicit-this instance access as an explicit
+			// ThisReferenceExpression node (ldarg.0 emitted one with the declaring type's
+			// annotation), so its VB output qualified instance members with Me. The 3.2 tree
+			// leaves the target implicit; recreate the same display here.
+			Expression qualified;
+			if (ShouldQualifyWithMe(identifierExpression)) {
+				var me = new InstanceExpression(InstanceExpressionType.Me, ICSharpCode.NRefactory.TextLocation.Empty);
+				if (FindEnclosingType(identifierExpression) is { } enclosingType)
+					me.AddAnnotation(enclosingType);
+				var memberAccess = new MemberAccessExpression { Target = me, MemberName = identifier };
+				ConvertNodes(identifierExpression.TypeArguments, memberAccess.TypeArguments);
+				qualified = memberAccess;
+			}
+			else {
+				var expr = new IdentifierExpression();
+				expr.Identifier = identifier;
+				ConvertNodes(identifierExpression.TypeArguments, expr.TypeArguments);
+				qualified = expr;
+			}
+			AppendExplicitTypeArgumentsIfNeeded(identifierExpression, qualified);
 			if (provider.IsMethodGroup(identifierExpression)) {
-				return EndNode(identifierExpression, new UnaryOperatorExpression(UnaryOperatorType.AddressOf, expr));
+				return EndNode(identifierExpression, new UnaryOperatorExpression(UnaryOperatorType.AddressOf, qualified));
 			}
 
-			return EndNode(identifierExpression, expr);
+			return EndNode(identifierExpression, qualified);
+		}
+
+		/// <summary>
+		/// Explicit 'Of T' for a bare generic call target the 3.2 C# engine printed without
+		/// type arguments (C# re-infers them): VB cannot always re-infer, and a Me-qualified
+		/// generic call inside a lambda loses inference outright (BC32050). When the resolved
+		/// method's inferred arguments are all method type parameters - which are in lexical
+		/// scope - emit them explicitly, like the 2.3 engine did ('Create(Of T)()').
+		/// </summary>
+		void AppendExplicitTypeArgumentsIfNeeded(CS.IdentifierExpression identifierExpression, Expression target) {
+			var typeArguments = target switch {
+				IdentifierExpression identifier => identifier.TypeArguments,
+				MemberAccessExpression memberAccess => memberAccess.TypeArguments,
+				_ => null,
+			};
+			if (typeArguments is null ||
+					identifierExpression.TypeArguments.Count > 0 ||
+					!(identifierExpression.Parent is CS.InvocationExpression invocation) ||
+					invocation.Target != identifierExpression ||
+					typeArguments.Count > 0)
+				return;
+			if (invocation.Annotation<ICSharpCode.Decompiler.Semantics.ResolveResult>() is not ICSharpCode.Decompiler.CSharp.Resolver.CSharpInvocationResolveResult invRR ||
+					invRR.Member is not ICSharpCode.Decompiler.TypeSystem.IMethod genericMethod ||
+					genericMethod.TypeParameters.Count == 0 ||
+					genericMethod.TypeParameters.Count != genericMethod.TypeArguments.Count)
+				return;
+			foreach (var arg in genericMethod.TypeArguments) {
+				if (arg is ICSharpCode.Decompiler.TypeSystem.ITypeParameter tp &&
+						tp.OwnerType == ICSharpCode.Decompiler.TypeSystem.SymbolKind.Method)
+					typeArguments.Add(new SimpleType(
+						new object[] {
+							(object?)FindGenericParameterReference(tp.Name, identifierExpression)
+								?? GenericParameterColorByName(tp.Name, identifierExpression)
+								?? BoxedTextColor.TypeGenericParameter,
+						},
+						tp.Name));
+				else
+					return;
+			}
+		}
+
+		/// <summary>
+		/// True when an identifier usage refers to an instance member through the implicit
+		// this (no explicit target node): the resolver hangs a MemberResolveResult on the
+		// identifier itself, or - for a bare call target - on the enclosing invocation.
+		/// Static members keep their plain form (VB needs ClassName.Member for those).
+		/// </summary>
+		bool ShouldQualifyWithMe(CS.IdentifierExpression usage) {
+			ICSharpCode.Decompiler.Semantics.MemberResolveResult? rr;
+			if (usage.Parent is CS.InvocationExpression invocation && invocation.Target == usage) {
+				rr = usage.Annotation<ICSharpCode.Decompiler.Semantics.MemberResolveResult>()
+					?? invocation.Annotation<ICSharpCode.Decompiler.Semantics.MemberResolveResult>();
+				// The event field itself is an instance member, but the converter rewrites
+				// its raise into RaiseEvent with a plain name - leave the target alone.
+				if (rr?.Member is ICSharpCode.Decompiler.TypeSystem.IEvent)
+					return false;
+			}
+			else {
+				rr = usage.Annotation<ICSharpCode.Decompiler.Semantics.MemberResolveResult>();
+			}
+			if (rr?.Member is not { IsStatic: false } member)
+				return false;
+			if (IsInsideInitializer(usage))
+				return false;
+			var kind = member.DeclaringType?.GetDefinition()?.Kind;
+			// Interface members come through explicit interface calls elsewhere, and a
+			// delegate's Invoke behind a delegate-valued field/local invocation
+			// ('this.dField(...)') is not a real instance access - VB needs the bare
+			// delegate name there (Me inside a Module is BC32001 outright).
+			if (kind is ICSharpCode.Decompiler.TypeSystem.TypeKind.Interface or ICSharpCode.Decompiler.TypeSystem.TypeKind.Delegate)
+				return false;
+			return true;
+		}
+
+		/// <summary>
+		/// True when the node sits in a field/property/event initializer: VB rejects Me there
+		/// (BC30043 in instance initializers, BC32001 inside a Module, BC30369 for shared
+		/// ones), so implicit-this references keep their bare form. The first declaration
+		/// above the node decides: method bodies (locals included) come after a method node,
+		/// initializers come after the field/property node.
+		/// </summary>
+		static bool IsInsideInitializer(CS.AstNode node) {
+			for (var n = node; n is not null; n = n.Parent) {
+				switch (n) {
+				case CS.FieldDeclaration:
+				case CS.PropertyDeclaration:
+				case CS.EventDeclaration:
+					return true;
+				case CS.MethodDeclaration:
+				case CS.ConstructorDeclaration:
+				case CS.OperatorDeclaration:
+				case CS.Accessor:
+				case CS.AnonymousMethodExpression:
+				case CS.LambdaExpression:
+					return false;
+				}
+			}
+			return false;
+		}
+
+		/// <summary>
+		/// The dnlib type of the innermost enclosing (decompiled) type declaration - the
+		/// reference the 2.3 engine attached to ThisReferenceExpression via the method's
+		/// declaring type.
+		/// </summary>
+		TypeDef? FindEnclosingType(CS.AstNode node) {
+			for (var n = node; n is not null; n = n.Parent)
+				if (n.Annotation<TypeDef>() is { } typeDef)
+					return typeDef;
+			return null;
 		}
 		/// <summary>
 		/// Annotations for a converted identifier usage. The VB output stage colors an
@@ -1222,6 +1358,14 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		public AstNode VisitObjectCreateExpression(CS.ObjectCreateExpression objectCreateExpression, object data)
 		{
 			var expr = new ObjectCreationExpression((AstType)objectCreateExpression.Type.AcceptVisitor(this, data));
+			// The 2.3 engine attached the constructor's MemberRef to the type name token of
+			// an object creation; the output stage reads it from this node (the formatter
+			// redirects a Type-role child of ObjectCreationExpression to its parent), so the
+			// ctor ref must live here. External ctors fall back to the module's MemberRef
+			// table (constructor name is always .ctor).
+			var ctorRef = ResolveCtorRefForCreation(objectCreateExpression);
+			if (ctorRef is not null)
+				expr.AddAnnotation(ctorRef);
 			ConvertNodes(objectCreateExpression.Arguments, expr.Arguments);
 			// "new Delegate(M)" is just "AddressOf M" in VB, but only when the type really is a
 			// delegate: "new Lazy(Of T)(M)" must keep its constructor call (BC30581).
@@ -1403,6 +1547,11 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		public AstNode VisitThisReferenceExpression(CS.ThisReferenceExpression thisReferenceExpression, object data)
 		{
 			InstanceExpression result = new InstanceExpression(InstanceExpressionType.Me, ToNRefactoryLocation(thisReferenceExpression.StartLocation));
+			// The 2.3 engine annotated the C# this node with the method's declaring type, so
+			// its formatter emitted the Me keyword with that reference; the formatter side
+			// (node is InstanceExpression) is already ported - supply the annotation.
+			if (FindEnclosingType(thisReferenceExpression) is { } enclosingType)
+				result.AddAnnotation(enclosingType);
 			return EndNode(thisReferenceExpression, result);
 		}
 
@@ -1724,8 +1873,13 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		{
 			var newNamespace = new NamespaceDeclaration();
 
+			var declaredNs = string.Join(".", namespaceDeclaration.Identifiers);
 			foreach (var name in namespaceDeclaration.Identifiers) {
-				var newId = new Identifier(BoxedTextColor.Namespace, name, ICSharpCode.NRefactory.TextLocation.Empty);
+				// Each declaration segment carries the NamespaceReference the 2.3 engine
+				// emitted (module's own assembly + segment name) for navigation.
+				var newId = new Identifier(
+					new object[] { new NamespaceReference(module.Assembly, name), BoxedTextColor.Namespace },
+					name, ICSharpCode.NRefactory.TextLocation.Empty);
 				newNamespace.Identifiers.Add(newId);
 			}
 			var parent = namespaceStack.Count > 0 ? namespaceStack.Peek() + "." : string.Empty;
@@ -2100,14 +2254,49 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		/// color the FIRST annotation so the output stage picks it up (engine resolve results
 		/// on the import names would otherwise color them Text).
 		/// </summary>
-		/// <summary>Rebuilds the import name so every segment carries the Namespace color.</summary>
+		/// <summary>Rebuilds the import name so every segment carries the Namespace color AND
+		/// the NamespaceReference (assembly + segment) the 2.3 engine emitted for navigation.</summary>
 		AstType RebuildWithNamespaceColors(AstType type) {
-			if (type is QualifiedType qualified)
-				return new QualifiedType(RebuildWithNamespaceColors(qualified.Target),
-					Identifier.Create(BoxedTextColor.Namespace, qualified.Name));
+			// The top call passes the node's own full namespace: the name segment uses it to
+			// resolve a TypeRef of that namespace (for the NamespaceReference), so the last -
+			// most specific - segment carries the reference like the 2.3 engine's output.
+			return RebuildWithNamespaceColors(type, type.ToString());
+		}
+
+		AstType RebuildWithNamespaceColors(AstType type, string? fullNamespace) {
+			if (type is QualifiedType qualified) {
+				// The target's full namespace is the prefix of this node's full namespace.
+				var thisNs = type.ToString();
+				var targetNs = thisNs.EndsWith("." + qualified.Name, StringComparison.Ordinal)
+					? thisNs.Substring(0, thisNs.Length - qualified.Name.Length - 1)
+					: null;
+				return new QualifiedType(RebuildWithNamespaceColors(qualified.Target, targetNs),
+					Identifier.Create(ComposeNamespaceSegmentAnnotations(qualified.Name, fullNamespace), qualified.Name));
+			}
 			if (type is SimpleType simple)
-				return new SimpleType(new[] { (object)BoxedTextColor.Namespace }, simple.Identifier);
+				return new SimpleType(ComposeNamespaceSegmentAnnotations(simple.Identifier, fullNamespace), simple.Identifier);
 			return type;
+		}
+
+		/// <summary>
+		/// Annotations for one namespace segment: Namespace color first, then the
+		/// NamespaceReference (resolved from any TypeRef of that namespace in the module's
+		/// reference table, so dnSpy navigates to the declaring assembly).
+		/// </summary>
+		System.Collections.Generic.IEnumerable<object> ComposeNamespaceSegmentAnnotations(string segment, string? fullNamespace) {
+			if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1")
+				Console.Error.WriteLine("NSSEG segment=" + segment + " full=" + (fullNamespace ?? "null"));
+			yield return BoxedTextColor.Namespace;
+			if (fullNamespace is not null) {
+				var typeRef = module.GetTypeRefs().FirstOrDefault(tr => tr.Namespace == fullNamespace)
+					?? module.GetTypeRefs().FirstOrDefault(tr => tr.Namespace.StartsWith(fullNamespace + ".", StringComparison.Ordinal));
+				if (typeRef?.ResolutionScope is dnlib.DotNet.IAssembly assembly)
+					yield return new NamespaceReference(assembly, segment);
+				else if (typeRef is not null && typeRef.ResolutionScope is dnlib.DotNet.IAssembly scope)
+					yield return new NamespaceReference(scope, segment);
+				else
+					yield return new NamespaceReference(module.CorLibTypes.AssemblyRef, segment);
+			}
 		}
 
 		public AstNode VisitExternAliasDeclaration(CS.ExternAliasDeclaration externAliasDeclaration, object data)
@@ -3260,7 +3449,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 						return null;
 					parameterSig = argument;
 				}
-				var type = CreateTypeFromSig(parameterSig);
+				var type = CreateTypeFromSig(module, parameterSig);
 				if (type is null)
 					return null;
 				result.Add(new DelegateParameter { Name = parameter.Name ?? "arg" + (i + 1), Type = type });
@@ -4021,13 +4210,13 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			// cannot express every spec - a tuple type argument defeats it - and the C# type
 			// builder writes short names the output file cannot resolve without Imports.
 			if (type is TypeSpec spec) {
-				var fromSig = CreateTypeFromSig(spec.TypeSig);
+				var fromSig = CreateTypeFromSig(module, spec.TypeSig);
 				if (fromSig != null)
 					return fromSig;
 			}
 			var cecilType = DnlibCecilBridge.TryGetTypeReference(module, type);
 			if (cecilType is null) {
-				var fromSig = CreateTypeFromSig(type.ToTypeSig());
+				var fromSig = CreateTypeFromSig(module, type.ToTypeSig());
 				return fromSig ?? (AstType)AstType.FromName(type.FullName, BoxedTextColor.Type);
 			}
 			var csAstType = ICSharpCode.Decompiler.CSharp.CSharpDecompiler.ConvertType(cecilType);
@@ -4039,15 +4228,15 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		/// Builds a fully qualified VB type straight from a metadata signature: every segment with
 		/// Global, the arity stripped and the generic arguments converted recursively.
 		/// </summary>
-		static AstType CreateTypeFromSig(TypeSig sig) {
+		static AstType CreateTypeFromSig(ModuleDef module, TypeSig sig) {
 			sig = sig?.RemovePinnedAndModifiers();
 			switch (sig) {
 			case null:
 				return null;
 			case GenericInstSig generic:
-				return CreateNamedType(generic.GenericType?.TypeDefOrRef?.FullName, generic.GenericArguments);
+				return CreateNamedType(module, generic.GenericType?.TypeDefOrRef?.FullName, generic.GenericArguments);
 			case ArraySigBase array:
-				var element = CreateTypeFromSig(array.Next);
+				var element = CreateTypeFromSig(module, array.Next);
 				if (element is null)
 					return null;
 				var composed = new ComposedType { BaseType = element };
@@ -4058,32 +4247,90 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				return string.IsNullOrEmpty(name) ? null : new SimpleType((IEnumerable<object>)null, name);
 			}
 			case TypeDefOrRefSig named:
-				return named.TypeDefOrRef is null ? null : CreateNamedType(named.TypeDefOrRef.FullName, null);
+				return named.TypeDefOrRef is null ? null : CreateNamedType(module, named.TypeDefOrRef.FullName, null);
 			default:
 				return null;
 			}
 		}
 
-		static AstType CreateNamedType(string fullName, IList<TypeSig> genericArguments) {
+		/// <summary>
+		/// NamespaceReference for a dotted namespace prefix: the assembly scope comes from any
+		/// TypeRef of that namespace in the module's reference table - the same resolution the
+		/// 2.3 engine emitted on every namespace segment.
+		/// </summary>
+		static NamespaceReference? NamespaceReferenceFor(ModuleDefMD moduleMd, string fullNamespace) {
+			if (string.IsNullOrEmpty(fullNamespace))
+				return null;
+			var typeRef = moduleMd.GetTypeRefs().FirstOrDefault(tr => tr.Namespace == fullNamespace)
+				// Intermediate namespaces often have no exact TypeRef; any deeper namespace of
+				// the same root resolves to the same owning assembly.
+				?? moduleMd.GetTypeRefs().FirstOrDefault(tr => tr.Namespace.StartsWith(fullNamespace + ".", StringComparison.Ordinal));
+			return typeRef?.ResolutionScope is dnlib.DotNet.IAssembly scope ? new NamespaceReference(scope, fullNamespace) : null;
+		}
+
+		static AstType CreateNamedType(ModuleDef module, string fullName, IList<TypeSig> genericArguments) {
 			if (string.IsNullOrEmpty(fullName))
 				return null;
+			var moduleMd = module as ModuleDefMD;
 			var segments = fullName.Split('/');
-			var names = new List<string>(segments[0].Split('.'));
+			// The dotted parts of the first segment are namespace and top-level type name; the
+			// rest are nested type names - namespace references only fit the true namespaces.
+			var dotted = segments[0].Split('.');
+			var namespaceCount = dotted.Length - 1;
+			var names = new List<string>(dotted);
 			for (int i = 1; i < segments.Length; i++)
 				names.Add(segments[i]);
 
 			AstType result = new PrimitiveType("Global");
-			foreach (var raw in names) {
-				var name = raw;
+			for (int i = 0; i < names.Count; i++) {
+				var name = names[i];
 				int tick = name.LastIndexOf('`');
 				if (tick > 0)
 					name = name.Substring(0, tick);
-				result = new QualifiedType(result, Identifier.Create((object)null, name));
+				object nameAnnotation;
+				NamespaceReference? nsRef = null;
+				if (i < namespaceCount) {
+					var prefix = string.Join(".", names.Take(i + 1));
+					nsRef = moduleMd is not null ? NamespaceReferenceFor(moduleMd, prefix) : null;
+					nameAnnotation = BoxedTextColor.Namespace;
+				}
+				else if (i == namespaceCount) {
+					// The top-level type segment: local types keep their definition, external
+					// ones map to the module's own TypeRef (the 2.3 engine's shapes). When the
+					// table has no entry, synthesize one - the 2.3 engine's importer created
+					// these TypeRefs on demand (compiler-emitted attribute types like
+					// OutAttribute often have no pre-existing entry).
+					var local = LookupLocalTypeStatic(module, name);
+					var tableRef = local is not null ? null : (moduleMd is not null ? Common.DnlibReferenceMapper.ResolveTypeRefByName(moduleMd, name, -1) : null);
+					if (local is not null)
+						nameAnnotation = local;
+					else if (tableRef is not null)
+						nameAnnotation = tableRef;
+					else if (moduleMd is not null)
+						nameAnnotation = new TypeRefUser(moduleMd, string.Join(".", names.Take(namespaceCount)), name, moduleMd.CorLibTypes.AssemblyRef);
+					else
+						nameAnnotation = BoxedTextColor.Type;
+				}
+				else {
+					nameAnnotation = BoxedTextColor.Type;
+				}
+				var segment = new QualifiedType(result, Identifier.Create(nameAnnotation, name));
+				// Color first, reference second (see QualifyMemberType). The reference is
+				// attached to both the identifier token and the node (the output stage reads
+				// member references from the nodeStack's current node, not the identifier).
+				if (nsRef is not null) {
+					segment.NameToken.AddAnnotation(nsRef);
+					segment.AddAnnotation(nsRef);
+				}
+				else if (nameAnnotation is dnlib.DotNet.ITypeDefOrRef) {
+					segment.AddAnnotation(nameAnnotation);
+				}
+				result = segment;
 			}
 			if (genericArguments is null || genericArguments.Count == 0 || !(result is QualifiedType leaf))
 				return result;
 			foreach (var argument in genericArguments) {
-				var converted = CreateTypeFromSig(argument);
+				var converted = CreateTypeFromSig(module, argument);
 				if (converted is null)
 					return null;
 				leaf.TypeArguments.Add(converted);
@@ -4131,6 +4378,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				// and keeps its kind color (local type) or plain Type (external, via the module's
 				// own TypeRef tables) - matching the 2.3 engine.
 				object nameAnnotation;
+				NamespaceReference? nsRef = null;
 				if (i == names.Count - 1) {
 					var typeName = names[i];
 					var localType = LookupLocalType(typeName);
@@ -4141,9 +4389,27 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 							: BoxedTextColor.Type);
 				}
 				else {
+					// The 2.3 engine emitted a NamespaceReference on every namespace segment;
+					// resolve the owning assembly from any TypeRef of the segment's namespace.
+					var prefix = string.Join(".", names.Take(i + 1));
+					nsRef = module is ModuleDefMD moduleMd ? NamespaceReferenceFor(moduleMd, prefix) : null;
 					nameAnnotation = BoxedTextColor.Namespace;
 				}
-				result = new QualifiedType(result, Identifier.Create(nameAnnotation, names[i]));
+				var segment = new QualifiedType(result, Identifier.Create(nameAnnotation, names[i]));
+				// Color first, reference second: the output stage colors by the FIRST annotation
+				// and picks the reference up by its type. The reference is attached to both the
+				// identifier token and the node (the output stage reads member references from
+				// the nodeStack's current node, not the identifier).
+				if (nsRef is not null) {
+					segment.NameToken.AddAnnotation(nsRef);
+					segment.AddAnnotation(nsRef);
+				}
+				else if (nameAnnotation is dnlib.DotNet.ITypeDefOrRef) {
+					// A resolved type segment (local TypeDef or mapped TypeRef): the token got it
+					// from Identifier.Create; the node needs it too for the output stage.
+					segment.AddAnnotation(nameAnnotation);
+				}
+				result = segment;
 			}
 			// Re-attach the converted type arguments; clone so the old tree keeps its children.
 			if (result is QualifiedType leaf && arguments.Count > 0) {
@@ -4872,8 +5138,34 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					break;
 			}
 
-			return EndNode(primitiveType, new PrimitiveType(typeName));
+			var primitive = new PrimitiveType(typeName);
+			// The 2.3 engine attached a corlib TypeRef to every primitive type keyword, so
+			// its formatter emitted 'As String' etc. with the reference; the formatter side
+			// (node is PrimitiveType) is already ported - supply the annotation here.
+			if (primitiveTypeCorlibNames.TryGetValue(typeName, out var corlibName))
+				primitive.AddAnnotation(module.CorLibTypes.GetTypeRef("System", corlibName));
+			return EndNode(primitiveType, primitive);
 		}
+
+		static readonly System.Collections.Generic.Dictionary<string, string> primitiveTypeCorlibNames =
+			new System.Collections.Generic.Dictionary<string, string>(StringComparer.Ordinal) {
+				{ "Object", "Object" },
+				{ "Boolean", "Boolean" },
+				{ "Char", "Char" },
+				{ "SByte", "SByte" },
+				{ "Byte", "Byte" },
+				{ "Short", "Int16" },
+				{ "UShort", "UInt16" },
+				{ "Integer", "Int32" },
+				{ "UInteger", "UInt32" },
+				{ "Long", "Int64" },
+				{ "ULong", "UInt64" },
+				{ "Single", "Single" },
+				{ "Double", "Double" },
+				{ "Decimal", "Decimal" },
+				{ "String", "String" },
+				{ "Void", "Void" },
+			};
 
 		public AstNode VisitComment (CS.Comment comment, object data)
 		{
@@ -4899,9 +5191,10 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				Variance = (VarianceModifier)typeParameterDeclaration.Variance,
 				NameToken = Identifier.Create(
 					ComposeAnnotations(
-						typeParameterDeclaration.Parent is CS.MethodDeclaration
-							? BoxedTextColor.MethodGenericParameter
-							: BoxedTextColor.TypeGenericParameter,
+						(object?)FindGenericParameterReference(typeParameterDeclaration.Name, typeParameterDeclaration)
+							?? (typeParameterDeclaration.Parent is CS.MethodDeclaration
+								? BoxedTextColor.MethodGenericParameter
+								: BoxedTextColor.TypeGenericParameter),
 						typeParameterDeclaration.NameToken.Annotations),
 					typeParameterDeclaration.Name)
 			};
@@ -5053,8 +5346,9 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 			// Generic parameter declarations and in-scope usages.
 			if (parent is CS.TypeParameterDeclaration) {
-				var genericColor = GenericParameterColorByName(identifier.Name, identifier);
-				return genericColor ?? BoxedTextColor.TypeGenericParameter;
+				return (object?)FindGenericParameterReference(identifier.Name, identifier)
+					?? GenericParameterColorByName(identifier.Name, identifier)
+					?? BoxedTextColor.TypeGenericParameter;
 			}
 
 			// Qualified type name segments: only the last segment is a type name; the
@@ -5083,6 +5377,8 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					return BoxedTextColor.Namespace;
 				if (usage.Parent is CS.InvocationExpression invocation && invocation.Target == usage)
 					return BoxedTextColor.InstanceMethod;
+				if (FindGenericParameterReference(identifier.Name, identifier) is { } usageGp)
+					return usageGp;
 				var genericColor = GenericParameterColorByName(identifier.Name, identifier);
 				if (genericColor != null)
 					return genericColor;
@@ -5111,8 +5407,36 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		}
 
 		object TypeUsageColor(string name, CS.AstNode scopeRoot) {
-			var genericColor = GenericParameterColorByName(name, scopeRoot);
-			return genericColor ?? BoxedTextColor.Type;
+			return (object?)FindGenericParameterReference(name, scopeRoot)
+				?? GenericParameterColorByName(name, scopeRoot)
+				?? BoxedTextColor.Type;
+		}
+
+		/// <summary>
+		/// The dnlib generic parameter for an in-scope generic parameter name: scans the
+		/// enclosing declarations' dnlib annotations (innermost method wins, mirroring the
+		/// color precedence), matching by name, then by declaration order for renamed
+		/// parameters. The 2.3 engine emitted the GenericParam as a navigation reference on
+		/// every generic parameter token, declaration or usage.
+		/// </summary>
+		dnlib.DotNet.GenericParam? FindGenericParameterReference(string name, CS.AstNode scopeRoot) {
+			if (string.IsNullOrEmpty(name))
+				return null;
+			for (var node = scopeRoot; node is not null; node = node.Parent) {
+				if (node is CS.MethodDeclaration md && md.Annotation<MethodDef>() is { } methodDef) {
+					var methodGp = methodDef.GenericParameters.FirstOrDefault(g => g.Name == name)
+						?? (md.TypeParameters.Any(tp => tp.Name == name) ? methodDef.GenericParameters.FirstOrDefault() : null);
+					if (methodGp is not null)
+						return methodGp;
+				}
+				if (node is CS.TypeDeclaration td && td.Annotation<TypeDef>() is { } typeDef) {
+					var typeGp = typeDef.GenericParameters.FirstOrDefault(g => g.Name == name)
+						?? (td.TypeParameters.Any(tp => tp.Name == name) ? typeDef.GenericParameters.FirstOrDefault() : null);
+					if (typeGp is not null)
+						return typeGp;
+				}
+			}
+			return null;
 		}
 
 		/// <summary>
@@ -5200,6 +5524,30 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		}
 
 		/// <summary>
+		/// Constructor reference for an object creation: the engine annotates the
+		/// ObjectCreateExpression with a CSharpInvocationResolveResult whose Member is the
+		/// ctor; external ctors fall back to the module's MemberRef table (constructor name
+		/// is always .ctor). Mirrors the C# token writer's new-keyword path.
+		/// </summary>
+		object? ResolveCtorRefForCreation(CS.ObjectCreateExpression node) {
+			var rr = node.Annotation<ICSharpCode.Decompiler.Semantics.ResolveResult>();
+			ICSharpCode.Decompiler.TypeSystem.IMethod? ctor = rr switch {
+				ICSharpCode.Decompiler.CSharp.Resolver.CSharpInvocationResolveResult csInv => (ICSharpCode.Decompiler.TypeSystem.IMethod?)csInv.Member,
+				ICSharpCode.Decompiler.Semantics.InvocationResolveResult inv => (ICSharpCode.Decompiler.TypeSystem.IMethod?)inv.Member,
+				_ => null,
+			};
+			if (ctor is null)
+				return null;
+			var resolved = ToDnlibRef(TryGetCecilRef(ctor));
+			if (resolved is not null)
+				return resolved;
+			if (ctor.DeclaringType is not null && module is ModuleDefMD moduleMd)
+				return Common.DnlibReferenceMapper.FindMemberRefInTable(moduleMd, ctor.DeclaringType.FullName, ".ctor")
+					?? Common.DnlibReferenceMapper.FindMemberRefInTable(moduleMd, ctor.DeclaringType.FullName, ctor.Name);
+			return null;
+		}
+
+		/// <summary>
 		/// Resolves a type-system member to a dnlib reference when the cecil bridge fails
 		/// (external members): looks up the module's own MemberRef table by declaring type and
 		/// member name, with accessor-name variants for properties/events and prefix matching
@@ -5234,6 +5582,17 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				foreach (var memberName in memberNames)
 					if (module is ModuleDefMD moduleMd && Common.DnlibReferenceMapper.FindMemberRefInTable(moduleMd, declaringName, memberName) is { } found)
 						return found;
+			// Array.Length/LongLength compiles to the raw ldlen instruction (no MemberRef in
+			// the table); the 2.3 engine synthesized the get_Length MemberRefUser, so match it.
+			if (member is ICSharpCode.Decompiler.TypeSystem.IProperty lengthProperty &&
+					member.DeclaringType?.FullName == "System.Array" &&
+					(lengthProperty.Name == "Length" || lengthProperty.Name == "LongLength")) {
+				var arrayTypeRef = new TypeRefUser(module, "System", "Array", module.CorLibTypes.AssemblyRef);
+				var sig = MethodSig.CreateInstance(lengthProperty.Name == "Length"
+					? module.CorLibTypes.Int32
+					: module.CorLibTypes.Int64);
+				return new MemberRefUser(module, "get_" + lengthProperty.Name, sig, arrayTypeRef);
+			}
 			return null;
 		}
 
@@ -5273,6 +5632,19 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		/// and namespace segments get the Namespace color. Attribute type names drop the
 		/// 'Attribute' suffix in C# and VB output, hence the suffix fallback.
 		/// </summary>
+		/// <summary>Full dotted name of a type node's MemberType chain ('A.B.C' of 'C').</summary>
+		static string? BuildQualifiedNamespace(CS.AstType typeNode) {
+			switch (typeNode) {
+			case CS.SimpleType simple:
+				return simple.Identifier;
+			case CS.MemberType memberType:
+				var prefix = BuildQualifiedNamespace(memberType.Target);
+				return prefix is null ? null : prefix + "." + memberType.MemberName;
+			default:
+				return null;
+			}
+		}
+
 		object? ResolveTypeNameFallback(CS.AstType typeNode) {
 			if (module is not ModuleDefMD moduleMd)
 				return null;
@@ -5295,8 +5667,20 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			}
 			if (string.IsNullOrEmpty(name))
 				return null;
-			if (isSegment)
+			if (isSegment) {
+				// Every namespace segment the 2.3 engine emitted carried a NamespaceReference
+				// (assembly resolved from any TypeRef of that namespace). Rebuild the segment's
+				// full namespace from the AST chain to find the same TypeRef.
+				if (BuildQualifiedNamespace(typeNode) is { } fullNamespace) {
+					var typeRef = moduleMd.GetTypeRefs().FirstOrDefault(tr => tr.Namespace == fullNamespace)
+						?? moduleMd.GetTypeRefs().FirstOrDefault(tr => fullNamespace.StartsWith(tr.Namespace + ".", StringComparison.Ordinal));
+					if (typeRef?.ResolutionScope is dnlib.DotNet.IAssembly scope)
+						return new NamespaceReference(scope, name);
+				}
 				return BoxedTextColor.Namespace;
+			}
+			if (FindGenericParameterReference(name, typeNode) is { } fallbackGp)
+				return fallbackGp;
 			var genericColor = GenericParameterColorByName(name, typeNode);
 			if (genericColor != null)
 				return genericColor;
@@ -5316,6 +5700,23 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		}
 
 		System.Collections.Generic.Dictionary<string, TypeDef>? localTypesByName;
+
+		static TypeDef? LookupLocalTypeStatic(ModuleDef module, string simpleName) {
+			if (module is not ModuleDefMD moduleMd)
+				return null;
+			if (sharedLocalTypesByName is null || !ReferenceEquals(sharedLocalTypesByNameModule, module)) {
+				sharedLocalTypesByName = new System.Collections.Generic.Dictionary<string, TypeDef>(StringComparer.Ordinal);
+				sharedLocalTypesByNameModule = module;
+				foreach (var typeDef in moduleMd.Types) {
+					if (!sharedLocalTypesByName.ContainsKey(typeDef.Name))
+						sharedLocalTypesByName[typeDef.Name] = typeDef;
+				}
+			}
+			return sharedLocalTypesByName.TryGetValue(simpleName, out var found) ? found : null;
+		}
+
+		static System.Collections.Generic.Dictionary<string, TypeDef>? sharedLocalTypesByName;
+		static ModuleDef? sharedLocalTypesByNameModule;
 
 		TypeDef? LookupLocalType(string simpleName) {
 			if (module is not ModuleDefMD moduleMd)

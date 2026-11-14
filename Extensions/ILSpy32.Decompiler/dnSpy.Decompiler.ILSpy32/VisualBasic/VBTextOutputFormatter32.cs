@@ -103,6 +103,14 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			}
 
 			var memberRef = GetCurrentMemberReference() ?? (object?)(extraData as NamespaceReference);
+			// Generic parameters flow through extraData too (the converter attaches the dnlib
+			// GenericParam as the decisive annotation): the 2.3 engine emitted the same
+			// reference on every generic parameter token, declaration or usage.
+			if (memberRef is null && extraData is dnlib.DotNet.GenericParam genericParam) {
+				ColorPathSink?.Invoke("generic-ref-extra");
+				output.Write(IdentifierEscaper.Escape(identifier), genericParam, DecompilerReferenceFlags.None, data);
+				return;
+			}
 			// The converter passes variable references (dnlib Param/Local, synthesized
 			// SourceLocal) through extraData as well - emit them with the Local flag.
 			if (memberRef is null && extraData is Parameter or Local or SourceLocal) {

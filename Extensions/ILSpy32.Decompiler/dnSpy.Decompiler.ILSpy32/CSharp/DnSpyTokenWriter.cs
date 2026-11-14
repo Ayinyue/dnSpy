@@ -235,6 +235,21 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			// GenericParamDef, NamespaceReference). dnSpy treats referenced identifiers
 			// differently (highlight-all-occurrences, definitions in bold), so the missing
 			// references showed as display differences.
+			// IL labels of unreconstructable control flow: the 2.3 engine matched a goto with
+			// its target label via a shared string reference (method + label name), so dnSpy
+			// highlights the pair together; both carry the Label color.
+			if (identifier.Parent is CS.LabelStatement labelStatement && FindEnclosingMethod() is { } labelMethod) {
+				lastColorPath = "ref-label-def";
+				EmitText(text, labelMethod.ToString() + labelStatement.Label,
+					DecompilerReferenceFlags.Local | DecompilerReferenceFlags.Definition, BoxedTextColor.Label);
+				return;
+			}
+			if (identifier.Parent is CS.GotoStatement gotoStatement && FindEnclosingMethod() is { } gotoMethod) {
+				lastColorPath = "ref-label-ref";
+				EmitText(text, gotoMethod.ToString() + gotoStatement.Label,
+					DecompilerReferenceFlags.Local, BoxedTextColor.Label);
+				return;
+			}
 			if (TryGetVariableReference(identifier, color) is { } variableRef) {
 				lastColorPath = "ref-variable";
 				EmitText(text, variableRef.reference, variableRef.flags, color);
@@ -745,6 +760,20 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 						isAtStartOfLine = false;
 						return;
 					}
+				}
+			}
+			// The 'delegate' keyword of anonymous methods carries the compiler-generated
+			// method the body was reconstructed from (the node's ILFunction annotation);
+			// the 2.3 engine attached the same MethodDef so dnSpy navigates to the hidden
+			// method.
+			if (keyword == "delegate" && nodeStack.Count > 0 && nodeStack.Peek() is CS.AnonymousMethodExpression anonMethod &&
+					anonMethod.Annotation<ILFunction>() is { } anonFunction && anonFunction.CecilMethod is not null) {
+				var anonRef = ToDnlib(anonFunction.CecilMethod);
+				if (anonRef is not null) {
+					lastColorPath = "keyword-delegate";
+					EmitText(keyword, anonRef, DecompilerReferenceFlags.None, BoxedTextColor.Keyword);
+					isAtStartOfLine = false;
+					return;
 				}
 			}
 			// The 'new' keyword carries the constructor reference, mirroring the 2.3 engine's

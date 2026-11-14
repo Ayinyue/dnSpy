@@ -192,6 +192,28 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				return sourceLocal;
 			if (astNode.Annotation<Local>() is { } local)
 				return local;
+			// IL labels of unreconstructable control flow: the 2.3 engine matched a goto with
+			// its target label via a shared string reference (method + label name), so dnSpy
+			// highlights the pair together. The label name is written while the Identifier
+			// token is on the stack (parent = IdentifierExpression, grandparent = statement).
+			var labelString = LabelReferenceString(
+				(astNode.Parent?.Parent as GoToStatement)?.Label ?? (astNode.Parent?.Parent as LabelDeclarationStatement)?.Label);
+			if (labelString is not null)
+				return labelString;
+			return null;
+		}
+
+		/// <summary>
+		/// Shared string reference for a goto/label pair - the same string on both tokens makes
+		/// dnSpy highlight the goto with its target (the 2.3 engine's mechanism).
+		/// </summary>
+		object? LabelReferenceString(AstNode? label) {
+			if (label is null)
+				return null;
+			foreach (var nd in nodeStack) {
+				if (nd.Annotation<MethodDef>() is { } methodDef)
+					return methodDef.ToString() + label;
+			}
 			return null;
 		}
 

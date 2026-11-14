@@ -227,6 +227,8 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			// failed); only plain identifiers get the generic fallback tag.
 			if (!lastColorPath.StartsWith("ref-", StringComparison.Ordinal))
 				lastColorPath = "fallback";
+			if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1" && identifier.Name == "Length")
+				Console.Error.WriteLine("LEN-IDENT parent=" + identifier.Parent?.GetType().Name + " anns=[" + string.Join(",", (identifier.Parent ?? (AstNode)identifier).Annotations.Select(a => a.GetType().Name)) + "]");
 			var color = SyntacticColor(identifier);
 			// Parameters, locals, generic parameters and using-namespace segments: the 2.3
 			// engine attached references to all of these (dnlib Param, SourceLocal,
@@ -665,6 +667,17 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		}
 
 		public override void WriteKeyword(Role role, string keyword) {
+			// The 'new' keyword carries the constructor reference, mirroring the 2.3 engine's
+			// WriteKeyword on ObjectCreateExpression nodes.
+			if (keyword == "new" && nodeStack.Count > 0 && nodeStack.Peek() is ObjectCreateExpression) {
+				var ctorRef = ResolveReference(nodeStack.Peek()) ?? FindMemberRefForTypeSystemMemberFromCtor(nodeStack.Peek());
+				if (ctorRef is not null) {
+					lastColorPath = "keyword-new";
+					EmitText(keyword, ctorRef, DecompilerReferenceFlags.None, BoxedTextColor.Keyword);
+					isAtStartOfLine = false;
+					return;
+				}
+			}
 			// Primitive type keywords carry a corlib reference like the 2.3 engine, so
 			// 'string'/'int'/'void' navigate to their System.* definitions.
 			if (primitiveTypeFullNames.TryGetValue(keyword, out var fullName) && corlibAssemblyRef is not null) {
@@ -713,8 +726,10 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			// binary/unary/assignment/indexer expressions and delegate invokes, so clicking
 			// '+' navigates to op_Addition and the indexer brackets to the accessor. Replicate
 			// that using the current node's resolve results.
-			var tokenRef = GetCurrentTokenReference() as dnlib.DotNet.IMemberRef;
-			if (tokenRef is not null) {
+			var tokenRef = GetCurrentTokenReference();
+			if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1" && tokenRef is dnlib.DotNet.TypeRefUser)
+				Console.Error.WriteLine("TOK-TYPEREF token=" + token + " node=" + (nodeStack.Count > 0 ? nodeStack.Peek().GetType().Name : "?") + " anns=[" + string.Join(",", (nodeStack.Count > 0 ? nodeStack.Peek() : (AstNode?)null)?.Annotations.Select(a => a.GetType().Name) ?? Array.Empty<string>()) + "]");
+			if (tokenRef is dnlib.DotNet.IMemberRef && tokenRef is not dnlib.DotNet.TypeRefUser) {
 				lastColorPath = "token-ref";
 				EmitText(token, tokenRef, DecompilerReferenceFlags.None, ColorOfToken(token, role));
 				isAtStartOfLine = false;
@@ -754,9 +769,12 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					return SynthesizeStringConcatRef();
 				return null;
 			}
-			var resolved = ResolveReference(node);
-			if (resolved is not null)
-				return resolved;
+			// NOT the general ResolveReference: assignment nodes can carry a TypeResolveResult
+			// (field store through an object), which would wrongly put a type reference on the
+			// operator token. Only member resolve results are valid here.
+			if (node.Annotation<ICSharpCode.Decompiler.Semantics.MemberResolveResult>() is { } tmrr && tmrr.Member is not null)
+				if (FindMemberRefForTypeSystemMember(tmrr.Member, node) is { } found)
+					return found;
 			// External accessors (e.g. List<T>.get_Item behind an indexer expression) can fail
 			// GetCecil; the module's own MemberRef table has the authoritative entry.
 			if (node.Annotation<ICSharpCode.Decompiler.Semantics.MemberResolveResult>() is { } mrr &&
@@ -879,6 +897,19 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				EmitText(literalValue, BoxedTextColor.Number);
 				return;
 			}
+			// Numeric literals carry their primitive type reference (Hidden|Local|NoFollow),
+			// matching the 2.3 engine's MakePrimitive annotations - hovering a number shows
+			// its type. Strings/chars/bools never had references in 2.3.
+			if (nodeStack.Count > 0 && nodeStack.Peek().Annotation<ResolveResult>() is { } primitiveRR &&
+					primitiveRR.Type?.FullName is string primitiveFullName && value is IFormattable &&
+					value is not string && value is not char && !(value is bool) &&
+					GetPrimitiveTypeRef(primitiveFullName) is { } primitiveTypeRef) {
+				lastColorPath = "primitive-ref";
+				EmitText(FormatPrimitiveLiteral(value), primitiveTypeRef,
+					DecompilerReferenceFlags.Local | DecompilerReferenceFlags.Hidden | DecompilerReferenceFlags.NoFollow,
+					BoxedTextColor.Number);
+				return;
+			}
 
 			if (value is null) {
 				EmitText("null", BoxedTextColor.Keyword);
@@ -946,6 +977,39 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			}
 
 			EmitText(value.ToString(), BoxedTextColor.Number);
+		}
+
+		/// <summary>
+		/// Constructor reference for the 'new' keyword: the ObjectCreateExpression carries a
+		/// CSharpInvocationResolveResult whose Member is the ctor; external ctors fall back to
+		/// the module's MemberRef table (constructor name is always .ctor).
+		/// </summary>
+		object? FindMemberRefForTypeSystemMemberFromCtor(AstNode node) {
+			var rr = node.Annotation<ResolveResult>();
+			ICSharpCode.Decompiler.TypeSystem.IMethod? ctor = rr switch {
+				ICSharpCode.Decompiler.CSharp.Resolver.CSharpInvocationResolveResult csInv => (ICSharpCode.Decompiler.TypeSystem.IMethod?)csInv.Member,
+				InvocationResolveResult inv => (ICSharpCode.Decompiler.TypeSystem.IMethod?)inv.Member,
+				_ => null,
+			};
+			if (ctor is null)
+				return null;
+			var resolved = ToDnlib(TryGetCecil(ctor));
+			if (resolved is not null)
+				return resolved;
+			if (ctor.DeclaringType is not null)
+				return Common.DnlibReferenceMapper.FindMemberRefInTable(module, ctor.DeclaringType.FullName, ".ctor")
+					?? Common.DnlibReferenceMapper.FindMemberRefInTable(module, ctor.DeclaringType.FullName, ctor.Name);
+			return null;
+		}
+
+		static string FormatPrimitiveLiteral(object value) {
+			var sb = new StringBuilder();
+			sb.Append(((IFormattable)value).ToString(null, NumberFormatInfo.InvariantInfo));
+			if (value is uint || value is ulong)
+				sb.Append('u');
+			if (value is long || value is ulong)
+				sb.Append('L');
+			return sb.ToString();
 		}
 
 		public override void WritePrimitiveType(string type) {
@@ -1022,7 +1086,13 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			var rr = node.Annotation<MemberResolveResult>();
 			if (rr?.Member != null) {
 				lastColorPath = "ref-rr";
-				return ToDnlib(TryGetCecil(rr.Member));
+				var memberResolved = ToDnlib(TryGetCecil(rr.Member));
+				if (memberResolved is not null)
+					return memberResolved;
+				// External members (x.Length, x.Count on BCL types, external accessors) can
+				// fail GetCecil; the module's own MemberRef table carries the authoritative
+				// entry - the same ref the 2.3 engine emitted for these sites.
+				return FindMemberRefForTypeSystemMember(rr.Member, node);
 			}
 			var trr = node.Annotation<TypeResolveResult>();
 			if (trr?.Type?.GetDefinition() != null) {
@@ -1106,6 +1176,78 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			catch {
 				return null;
 			}
+		}
+
+		/// <summary>
+		/// Resolves a type-system member to a dnlib reference when the cecil bridge fails
+		/// (external members): looks up the module's own MemberRef table by declaring type and
+		/// member name (with accessor-name variants for properties and prefix matching for
+		/// generic instantiations). The table entry carries the authoritative assembly scope,
+		/// matching the reference the 2.3 engine emitted for the same site.
+		/// </summary>
+		object? FindMemberRefForTypeSystemMember(ICSharpCode.Decompiler.TypeSystem.IMember member, AstNode node) {
+			var declaringNames = new List<string>();
+			if (node is MemberReferenceExpression usageMre && usageMre.Target is not null) {
+				var targetType = GetTypeNameTextForTarget(usageMre.Target);
+				if (targetType is not null)
+					declaringNames.Add(targetType);
+			}
+			else if (node is InvocationExpression usageInv && usageInv.Target is MemberReferenceExpression invMre && invMre.Target is not null) {
+				var targetType = GetTypeNameTextForTarget(invMre.Target);
+				if (targetType is not null)
+					declaringNames.Add(targetType);
+			}
+			else if (node is IndexerExpression indexExpr) {
+				var targetType = GetTypeNameTextForTarget(indexExpr.Target);
+				if (targetType is not null)
+					declaringNames.Add(targetType);
+			}
+			if (member.DeclaringType is not null)
+				declaringNames.Add(member.DeclaringType.FullName);
+			if (declaringNames.Count == 0)
+				return null;
+			var memberNames = new List<string> { member.Name };
+			if (member is ICSharpCode.Decompiler.TypeSystem.IProperty property) {
+				if (property.Getter is not null)
+					memberNames.Add(property.Getter.Name);
+				if (property.Setter is not null)
+					memberNames.Add(property.Setter.Name);
+			}
+			if (member is ICSharpCode.Decompiler.TypeSystem.IEvent ev2) {
+				if (ev2.AddAccessor is not null)
+					memberNames.Add(ev2.AddAccessor.Name);
+				if (ev2.RemoveAccessor is not null)
+					memberNames.Add(ev2.RemoveAccessor.Name);
+			}
+			foreach (var declaringName in declaringNames)
+				foreach (var memberName in memberNames)
+					if (Common.DnlibReferenceMapper.FindMemberRefInTable(module, declaringName, memberName) is { } found)
+						return found;
+			// Array.Length/LongLength compiles to the raw ldlen instruction (no MemberRef in
+			// the table); the 2.3 engine synthesized the get_Length MemberRefUser, so match it.
+			if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1")
+				Console.Error.WriteLine("ARR-TRY decl=" + member.DeclaringType?.FullName + " name=" + member.Name + " isProp=" + (member is ICSharpCode.Decompiler.TypeSystem.IProperty));
+			if (member is ICSharpCode.Decompiler.TypeSystem.IProperty lengthProperty &&
+					member.DeclaringType?.FullName == "System.Array" &&
+					(lengthProperty.Name == "Length" || lengthProperty.Name == "LongLength")) {
+				var arrayTypeRef = new TypeRefUser(module, "System", "Array", module.CorLibTypes.AssemblyRef);
+				var sig = MethodSig.CreateInstance(lengthProperty.Name == "Length"
+					? module.CorLibTypes.Int32
+					: module.CorLibTypes.Int64);
+				return new MemberRefUser(module, "get_" + lengthProperty.Name, sig, arrayTypeRef);
+			}
+			return null;
+		}
+
+		/// <summary>The type name an expression target refers to (member-access chains only).</summary>
+		static string? GetTypeNameTextForTarget(AstNode target) {
+			// 'x.Member' where x is a local/param/field: the target expression has no type
+			// annotation we can use for the table lookup; declaring type name is tried instead.
+			if (target is MemberReferenceExpression inner)
+				return inner.MemberName;
+			if (target is IdentifierExpression ident)
+				return ident.Identifier;
+			return null;
 		}
 
 		object? ToDnlib(Mono.Cecil.MemberReference? cecilMember) {

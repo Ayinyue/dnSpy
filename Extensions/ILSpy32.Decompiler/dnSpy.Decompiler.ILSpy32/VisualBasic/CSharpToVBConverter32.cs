@@ -4265,7 +4265,13 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				// Intermediate namespaces often have no exact TypeRef; any deeper namespace of
 				// the same root resolves to the same owning assembly.
 				?? moduleMd.GetTypeRefs().FirstOrDefault(tr => tr.Namespace.StartsWith(fullNamespace + ".", StringComparison.Ordinal));
-			return typeRef?.ResolutionScope is dnlib.DotNet.IAssembly scope ? new NamespaceReference(scope, fullNamespace) : null;
+			if (typeRef?.ResolutionScope is dnlib.DotNet.IAssembly scope)
+				return new NamespaceReference(scope, fullNamespace);
+			// The module's own namespaces have no TypeRef entries (its types are TypeDefs, not
+			// TypeRefs); the 2.3 engine used the module's own assembly as the scope there.
+			if (moduleMd.Types.Any(t => t.Namespace == fullNamespace || t.Namespace.StartsWith(fullNamespace + ".", StringComparison.Ordinal)))
+				return new NamespaceReference(moduleMd.Assembly, fullNamespace);
+			return null;
 		}
 
 		static AstType CreateNamedType(ModuleDef module, string fullName, IList<TypeSig> genericArguments) {

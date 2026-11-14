@@ -22,6 +22,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using System.Runtime.CompilerServices;
 using dnlib.DotNet;
 using dnSpy.Contracts.Decompiler;
 using dnSpy.Contracts.Text;
@@ -496,23 +497,35 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				return (method.Parameters[variable.Index], flags);
 			}
 			if (variable.Kind is VariableKind.Local or VariableKind.UsingLocal or VariableKind.ForeachLocal) {
-				if (method.Body is null || variable.Index < 0 || variable.Index >= method.Body.Variables.Count)
-					return null;
-				var dnlibLocal = method.Body.Variables[variable.Index];
-				var key = (method, variable.Index);
-				if (!sourceLocalCache.TryGetValue(key, out var sourceLocal)) {
-					sourceLocal = new SourceLocal(dnlibLocal, variable.Name ?? dnlibLocal.Name ?? string.Empty,
-						dnlibLocal.Type, SourceVariableFlags.None);
-					sourceLocalCache[key] = sourceLocal;
-				}
-				lastColorPath = "ref-local";
 				var flags = isDefinition ? DecompilerReferenceFlags.Local | DecompilerReferenceFlags.Definition : DecompilerReferenceFlags.Local;
-				return (sourceLocal, flags);
+				if (method.Body is not null && variable.Index >= 0 && variable.Index < method.Body.Variables.Count) {
+					var dnlibLocal = method.Body.Variables[variable.Index];
+					var key = (method, variable.Index);
+					if (!sourceLocalCache.TryGetValue(key, out var sourceLocal)) {
+						sourceLocal = new SourceLocal(dnlibLocal, variable.Name ?? dnlibLocal.Name ?? string.Empty,
+							dnlibLocal.Type, SourceVariableFlags.None);
+						sourceLocalCache[key] = sourceLocal;
+					}
+					lastColorPath = "ref-local";
+					return (sourceLocal, flags);
+				}
+				// Captured/hoisted variables have no IL slot in this method (the engine promotes
+				// them to display-class fields and hides the display class). The 2.3 engine still
+				// emitted a SourceLocal for them (with the hoisted field set), so synthesize one
+				// cached per variable instance - dnSpy highlights locals by reference identity.
+				if (hoistedLocalCache.TryGetValue(variable, out var hoisted))
+					return (hoisted, flags);
+				var synthesized = new SourceLocal(null, variable.Name ?? string.Empty,
+					module.CorLibTypes.Object, SourceVariableFlags.None);
+				hoistedLocalCache.Add(variable, synthesized);
+				lastColorPath = "ref-local-hoisted";
+				return (synthesized, flags);
 			}
 			return null;
 		}
 
 		readonly Dictionary<(MethodDef, int), SourceLocal> sourceLocalCache = new Dictionary<(MethodDef, int), SourceLocal>();
+		readonly ConditionalWeakTable<ICSharpCode.Decompiler.IL.ILVariable, SourceLocal> hoistedLocalCache = new ConditionalWeakTable<ICSharpCode.Decompiler.IL.ILVariable, SourceLocal>();
 
 		/// <summary>
 		/// Reference for a generic parameter identifier (declaration or usage): the 2.3 engine

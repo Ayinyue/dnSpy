@@ -2,10 +2,12 @@
 rem Batch 0 regression: one command, the full gate from VB-Dev-Plan.md section 0.
 rem Builds the 3.2 engine, re-dumps the three sample assemblies with the VB backend,
 rem then runs syntax validation and semantic compilation, and prints the baseline
-rem table (syntax errors 0/0/0, realBadFiles 1731/741/11) next to the
+rem table (syntax errors 0/0/0, realBadFiles 1729/740/11) next to the
 rem documented reference numbers. Exit code 1 only on a regression (a value that got worse).
 rem
-rem realBadFiles 1731/741/11 (was 942/526/11 before the nested-type fix): nested types
+rem realBadFiles 1729/740/11 (was 1731/741/11 before the VB reference/display batch of
+rem 2026-11-15: Me qualification fixed silent self-assignments, generic calls emit explicit
+rem Of T): nested types
 rem decompile standalone now (DecompileTypes fix, mirroring C#), and the always-import-System
 rem parity is restored. The namespace fix (CSharpDecompiler32 fallback condition) restored
 rem namespace declarations that were previously lost when the fallback was incorrectly

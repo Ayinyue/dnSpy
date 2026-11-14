@@ -3879,7 +3879,13 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 								continue;
 							if (ifaceProp.PropertyType?.FullName != prop.PropertySig.RetType?.FullName)
 								continue;
-							var res = new ImplementsResult(ii.Interface, ifaceProp.Name, ifaceProp);
+							// A raw Mono.Cecil PropertyDefinition is unusable as a reference (the
+						// formatter only reads dnlib IMemberRef) - synthesize the getter's
+						// MemberRef in the interface's scope, which dnSpy resolves to the property.
+							var res = new ImplementsResult(ii.Interface, ifaceProp.Name,
+								DnlibCecilBridge.TryGetTypeReference(module, ii.Interface) is Mono.Cecil.TypeReference ifaceRef && ifaceRef.Resolve() is Mono.Cecil.TypeDefinition itd && module is ModuleDefMD moduleMd2
+									? Common.DnlibReferenceMapper.MapExternalMember(moduleMd2, itd.Methods.FirstOrDefault(mm => mm.Name == "get_" + ifaceProp.Name) ?? (Mono.Cecil.MemberReference)ifaceProp)
+									: ifaceProp);
 							if (!TryAddClause(emitted, res))
 								continue;
 							yield return res;
@@ -4588,8 +4594,13 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				// property, and an AstNode can only have one parent ("Node is already used in
 				// another tree"). The output visitor ignores the declarator's Type when its
 				// parent is a PropertyDeclaration and writes "= initializer" only.
+				// The name needs the binder's dnlib PropertyDef (ResolveDefinitionNameAnnotation)
+				// like every other declaration - the engine's own name-token annotations are
+				// Mono.Cecil objects the formatter cannot use.
 				v.Identifiers.Add(new VariableIdentifier() {
-					Name = Identifier.Create(propertyDeclaration.NameToken.Annotations, propertyDeclaration.Name)
+					Name = Identifier.Create(ComposeAnnotations(
+						ResolveDefinitionNameAnnotation(propertyDeclaration),
+						propertyDeclaration.NameToken.Annotations), propertyDeclaration.Name)
 				});
 				v.Initializer = (Expression)propertyDeclaration.Initializer.AcceptVisitor(this, data);
 				decl.Variables.Add(v);
@@ -4654,8 +4665,17 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		public AstNode VisitSimpleType(CS.SimpleType simpleType, object data)
 		{
 			var resolvedSimpleRef = ResolveDnlibReference(simpleType) ?? ResolveTypeNameFallback(simpleType);
+			if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1" && simpleType.Identifier == "TabService") {
+				var trr = simpleType.Annotation<ICSharpCode.Decompiler.Semantics.TypeResolveResult>();
+				Console.Error.WriteLine("VBSIMPLE name=TabService dnlibRef=" + (resolvedSimpleRef?.GetType().Name ?? "null") + " trr=" + (trr is not null ? trr.Type?.FullName + "/def=" + (trr.Type?.GetDefinition() != null) : "none"));
+			}
 			var type = new SimpleType(
 				ComposeAnnotations(resolvedSimpleRef, simpleType.IdentifierToken.Annotations), simpleType.Identifier);
+			// The output stage reads member references from the nodeStack's current node (the
+			// SimpleType), not the identifier token child - attach the decisive reference to
+			// both, or type usages like 'As TabService' render without references.
+			if (resolvedSimpleRef is not null)
+				type.AddAnnotation(resolvedSimpleRef);
 			ConvertNodes(simpleType.TypeArguments, type.TypeArguments);
 
 			return EndNode(simpleType, type);
@@ -5092,8 +5112,28 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			if (engineTypeSystem is null || node is null)
 				return null;
 			var rr = node.Annotation<ICSharpCode.Decompiler.Semantics.MemberResolveResult>();
-			if (rr?.Member != null)
-				return ToDnlibRef(TryGetCecilRef(rr.Member));
+			if (rr?.Member != null) {
+				var resolved = ToDnlibRef(TryGetCecilRef(rr.Member));
+				if (resolved is not null)
+					return resolved;
+				// External members (x.Dispatcher, x.TextSnapshot on WPF/BCL types) fail
+				// GetCecil; the module's own MemberRef table carries the authoritative entry
+				// - the same fallback the C# token writer uses.
+				return FindMemberRefForTypeSystemMember(rr.Member, node);
+			}
+			// Call targets: the engine annotates the InvocationExpression, not the target
+			// member access (CallBuilder's RequireTarget path creates a bare member access).
+			// Resolve the called method from there - the 2.3 engine attached the same ref to
+			// the target identifier.
+			if (node.Parent is CS.InvocationExpression invocation && invocation.Target == node &&
+					node.Annotation<ICSharpCode.Decompiler.Semantics.ResolveResult>() is null &&
+					invocation.Annotation<ICSharpCode.Decompiler.Semantics.ResolveResult>() is ICSharpCode.Decompiler.Semantics.InvocationResolveResult targetRR &&
+					targetRR.Member != null) {
+				var targetResolved = ToDnlibRef(TryGetCecilRef(targetRR.Member));
+				if (targetResolved is not null)
+					return targetResolved;
+				return FindMemberRefForTypeSystemMember(targetRR.Member, node);
+			}
 			var trr = node.Annotation<ICSharpCode.Decompiler.Semantics.TypeResolveResult>();
 			if (trr?.Type?.GetDefinition() != null)
 				return ToDnlibRef(TryGetCecilRef(trr.Type.GetDefinition()));
@@ -5111,6 +5151,44 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				var typeDefinition = typeSymbol.GetDefinition();
 				return typeDefinition != null ? ToDnlibRef(TryGetCecilRef(typeDefinition)) : null;
 			}
+			return null;
+		}
+
+		/// <summary>
+		/// Resolves a type-system member to a dnlib reference when the cecil bridge fails
+		/// (external members): looks up the module's own MemberRef table by declaring type and
+		/// member name, with accessor-name variants for properties/events and prefix matching
+		/// for generic instantiations.
+		/// </summary>
+		object? FindMemberRefForTypeSystemMember(ICSharpCode.Decompiler.TypeSystem.IMember member, CS.AstNode node) {
+			var declaringNames = new List<string>();
+			if (member.DeclaringType is not null)
+				declaringNames.Add(member.DeclaringType.FullName);
+			switch (node) {
+			case CS.MemberReferenceExpression usageMre when usageMre.Target is CS.TypeReferenceExpression tre:
+				// 'StaticType.Member' - the target names the declaring type directly.
+				declaringNames.Insert(0, tre.Type.ToString());
+				break;
+			}
+			if (declaringNames.Count == 0)
+				return null;
+			var memberNames = new List<string> { member.Name };
+			if (member is ICSharpCode.Decompiler.TypeSystem.IProperty property) {
+				if (property.Getter is not null)
+					memberNames.Add(property.Getter.Name);
+				if (property.Setter is not null)
+					memberNames.Add(property.Setter.Name);
+			}
+			if (member is ICSharpCode.Decompiler.TypeSystem.IEvent ev) {
+				if (ev.AddAccessor is not null)
+					memberNames.Add(ev.AddAccessor.Name);
+				if (ev.RemoveAccessor is not null)
+					memberNames.Add(ev.RemoveAccessor.Name);
+			}
+			foreach (var declaringName in declaringNames)
+				foreach (var memberName in memberNames)
+					if (module is ModuleDefMD moduleMd && Common.DnlibReferenceMapper.FindMemberRefInTable(moduleMd, declaringName, memberName) is { } found)
+						return found;
 			return null;
 		}
 

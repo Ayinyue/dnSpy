@@ -940,17 +940,35 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					if (parameter.Name == ilv.Name)
 						return parameter;
 				}
+				// Parameter names can be missing; fall back to position (the engine's index
+				// includes the implicit this, matching dnlib MethodDef.Parameters).
+				if (ilv.Index >= 0 && ilv.Index < method.Parameters.Count)
+					return method.Parameters[ilv.Index];
 				return null;
 			}
 			if ((ilv.Kind == ICSharpCode.Decompiler.IL.VariableKind.Local ||
-					ilv.Kind == ICSharpCode.Decompiler.IL.VariableKind.PinnedLocal) &&
+					ilv.Kind == ICSharpCode.Decompiler.IL.VariableKind.PinnedLocal ||
+					ilv.Kind == ICSharpCode.Decompiler.IL.VariableKind.UsingLocal ||
+					ilv.Kind == ICSharpCode.Decompiler.IL.VariableKind.ForeachLocal) &&
 					method?.Body is not null) {
 				var variables = method.Body.Variables;
 				if (ilv.Index >= 0 && ilv.Index < variables.Count)
 					return variables[ilv.Index];
 			}
-			return null;
+			// Captured/hoisted variables have no IL slot in this method (the engine promotes
+			// them to display-class fields and hides the display class). Synthesize a
+			// SourceLocal cached per variable instance so all occurrences share one reference
+			// and dnSpy highlights them together - the 2.3 engine emitted a SourceLocal (with
+			// the hoisted field set) for the same sites.
+			if (hoistedSourceLocals.TryGetValue(ilv, out var hoisted))
+				return hoisted;
+			var synthesized = new SourceLocal(null, ilv.Name ?? string.Empty,
+				module.CorLibTypes.Object, SourceVariableFlags.None);
+			hoistedSourceLocals[ilv] = synthesized;
+			return synthesized;
 		}
+
+		readonly Dictionary<ICSharpCode.Decompiler.IL.ILVariable, SourceLocal> hoistedSourceLocals = new Dictionary<ICSharpCode.Decompiler.IL.ILVariable, SourceLocal>();
 
 		/// <summary>Parameter/local color for variables whose dnlib object could not be mapped.</summary>
 		static object ILVariableFallbackColor(ICSharpCode.Decompiler.IL.ILVariable ilv) =>
@@ -4610,6 +4628,26 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			return EndNode(propertyDeclaration, decl);
 		}
 
+		/// <summary>
+		/// The dnlib Local (or synthesized hoisted SourceLocal) for a local declaration name -
+		// the same reference the usages carry, so dnSpy highlights them together.
+		/// </summary>
+		object? ResolveLocalDeclarationRef(CS.VariableInitializer variableInitializer) {
+			var ilv = ICSharpCode.Decompiler.CSharp.AnnotationExtensions.GetILVariable(variableInitializer);
+			if (ilv is null)
+				return null;
+			var method = FindEnclosingMethod(variableInitializer);
+			if (ilv.Kind is ICSharpCode.Decompiler.IL.VariableKind.Local or ICSharpCode.Decompiler.IL.VariableKind.PinnedLocal &&
+					method?.Body is not null && ilv.Index >= 0 && ilv.Index < method.Body.Variables.Count)
+				return method.Body.Variables[ilv.Index];
+			if (hoistedSourceLocals.TryGetValue(ilv, out var hoisted))
+				return hoisted;
+			var synthesized = new SourceLocal(null, ilv.Name ?? string.Empty,
+				module.CorLibTypes.Object, SourceVariableFlags.None);
+			hoistedSourceLocals[ilv] = synthesized;
+			return synthesized;
+		}
+
 		public AstNode VisitVariableInitializer(CS.VariableInitializer variableInitializer, object data)
 		{
 			var decl = new VariableDeclaratorWithTypeAndInitializer();
@@ -4625,9 +4663,12 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			object? declaratorAnnotation = null;
 			if (variableInitializer.Parent is CS.FieldDeclaration fieldDecl)
 				declaratorAnnotation = ResolveDefinitionNameAnnotation(fieldDecl);
+			// Local declaration names carry the dnlib Local (or the synthesized hoisted
+			// SourceLocal) so dnSpy highlights the declaration together with its usages.
+			var localDeclRef = ResolveLocalDeclarationRef(variableInitializer);
 			decl.Identifiers.Add(new VariableIdentifier() {
 				Name = Identifier.Create(ComposeAnnotations(
-					declaratorAnnotation ?? (variableInitializer.Parent is CS.FieldDeclaration ? (object)BoxedTextColor.InstanceField : BoxedTextColor.Local),
+					localDeclRef ?? declaratorAnnotation ?? (variableInitializer.Parent is CS.FieldDeclaration ? (object)BoxedTextColor.InstanceField : BoxedTextColor.Local),
 					variableInitializer.NameToken.Annotations), emittedName)
 			});
 			var initializer = (Expression)variableInitializer.Initializer.AcceptVisitor(this, data);

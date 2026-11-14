@@ -9,6 +9,7 @@
 using System;
 using System.Collections.Generic;
 using dnlib.DotNet;
+using Local = dnlib.DotNet.Emit.Local;
 using dnSpy.Contracts.Decompiler;
 using dnSpy.Contracts.Text;
 using ICSharpCode.NRefactory.VB;
@@ -120,7 +121,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				return;
 			}
 
-			var localRef = GetCurrentLocalReference();
+			var localRef = GetCurrentLocalReference() ?? GetCurrentLocalReferenceFrom(extraData as AstNode);
 			if (localRef is not null) {
 				ColorPathSink?.Invoke("local-ref");
 				output.Write(IdentifierEscaper.Escape(identifier), localRef, DecompilerReferenceFlags.Local, data);
@@ -153,8 +154,27 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		}
 
 		object? GetCurrentLocalReference() {
-			// Label references would need an IMethod annotation to build a qualified
-			// name; the 3.2 converter does not annotate labels with one, so skip it.
+			var node = nodeStack.Peek();
+			if (node is null)
+				return null;
+			return GetCurrentLocalReferenceFrom(node);
+		}
+
+		/// <summary>
+		/// Parameter and local references: the converter attaches the dnlib Param (parameters)
+		/// and the dnlib Local / synthesized SourceLocal (locals, including hoisted ones) to
+		/// the identifier nodes. The 2.3 engine emitted the same references with the Local
+		/// flag, so dnSpy highlights all occurrences of a local together.
+		/// </summary>
+		object? GetCurrentLocalReferenceFrom(AstNode? node) {
+			if (node is null)
+				return null;
+			if (node.Annotation<Parameter>() is { } parameter)
+				return parameter;
+			if (node.Annotation<SourceLocal>() is { } sourceLocal)
+				return sourceLocal;
+			if (node.Annotation<Local>() is { } local)
+				return local;
 			return null;
 		}
 
@@ -172,6 +192,11 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				if (parameterDef is not null)
 					return parameterDef;
 			}
+			// Local declaration names carry the dnlib Local or the synthesized SourceLocal.
+			if (node.Annotation<SourceLocal>() is { } sourceLocalDef)
+				return sourceLocalDef;
+			if (node.Annotation<Local>() is { } localDef)
+				return localDef;
 
 			return null;
 		}

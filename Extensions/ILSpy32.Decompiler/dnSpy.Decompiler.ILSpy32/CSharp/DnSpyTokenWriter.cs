@@ -707,13 +707,44 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					return;
 				}
 			}
-			if (nodeStack.Count > 0 && (keyword == "add" || keyword == "remove") && nodeStack.Peek() is Accessor) {
+			if (nodeStack.Count > 0 && (keyword == "add" || keyword == "remove" || keyword == "get" || keyword == "set") && nodeStack.Peek() is Accessor) {
 				var accessorMethod = FindEnclosingMethod();
 				if (accessorMethod is not null) {
 					lastColorPath = "keyword-accessor";
 					EmitText(keyword, accessorMethod, DecompilerReferenceFlags.None, BoxedTextColor.Keyword);
 					isAtStartOfLine = false;
 					return;
+				}
+			}
+			// 'operator' on OperatorDeclaration nodes carries the operator method.
+			if (keyword == "operator" && nodeStack.Count > 0 && nodeStack.Peek() is CS.OperatorDeclaration operatorDeclaration &&
+					operatorDeclaration.Annotation<MethodDef>() is { } operatorMethod) {
+				lastColorPath = "keyword-operator";
+				EmitText(keyword, operatorMethod, DecompilerReferenceFlags.None, BoxedTextColor.Keyword);
+				isAtStartOfLine = false;
+				return;
+			}
+			// 'base' on BaseReferenceExpression nodes carries the base type reference; on
+			// ConstructorInitializer nodes (': base(...)') it carries the base ctor - the
+			// 2.3 engine attached refs to both.
+			if (keyword == "base" && nodeStack.Count > 0) {
+				if (nodeStack.Peek() is BaseReferenceExpression) {
+					var baseType = FindEnclosingType()?.BaseType;
+					if (baseType is not null) {
+						lastColorPath = "keyword-base";
+						EmitText(keyword, baseType, DecompilerReferenceFlags.None, BoxedTextColor.Keyword);
+						isAtStartOfLine = false;
+						return;
+					}
+				}
+				else if (nodeStack.Peek() is ConstructorInitializer) {
+					var baseCtor = ResolveReference(nodeStack.Peek());
+					if (baseCtor is not null) {
+						lastColorPath = "keyword-base-ctor";
+						EmitText(keyword, baseCtor, DecompilerReferenceFlags.None, BoxedTextColor.Keyword);
+						isAtStartOfLine = false;
+						return;
+					}
 				}
 			}
 			// The 'new' keyword carries the constructor reference, mirroring the 2.3 engine's

@@ -410,6 +410,15 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		/// used to attach references for member usages whose engine resolve results are
 		/// missing, matching the references the 2.3 engine emitted.
 		/// </summary>
+		/// <summary>The enclosing type as the binder annotated it (TypeDeclaration nodes).</summary>
+		TypeDef? FindEnclosingType() {
+			foreach (var node in nodeStack) {
+				if (node is CS.TypeDeclaration && node.Annotation<TypeDef>() is { } typeDef)
+					return typeDef;
+			}
+			return null;
+		}
+
 		/// <summary>
 		/// The enclosing method as the binder annotated it (MethodDeclaration, accessor,
 		/// constructor, operator all carry MethodDef annotations).
@@ -667,6 +676,27 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		}
 
 		public override void WriteKeyword(Role role, string keyword) {
+			// The 'this' keyword carries the declaring type reference, and accessor keywords
+			// ('add'/'remove'/'get'/'set') carry their accessor method - both mirror the 2.3
+			// engine's WriteKeyword on ThisReferenceExpression/Accessor nodes.
+			if (nodeStack.Count > 0 && (keyword == "this" || keyword == "base") && nodeStack.Peek() is ThisReferenceExpression) {
+				var declaringType = FindEnclosingType();
+				if (declaringType is not null) {
+					lastColorPath = "keyword-this";
+					EmitText(keyword, declaringType, DecompilerReferenceFlags.None, BoxedTextColor.Keyword);
+					isAtStartOfLine = false;
+					return;
+				}
+			}
+			if (nodeStack.Count > 0 && (keyword == "add" || keyword == "remove") && nodeStack.Peek() is Accessor) {
+				var accessorMethod = FindEnclosingMethod();
+				if (accessorMethod is not null) {
+					lastColorPath = "keyword-accessor";
+					EmitText(keyword, accessorMethod, DecompilerReferenceFlags.None, BoxedTextColor.Keyword);
+					isAtStartOfLine = false;
+					return;
+				}
+			}
 			// The 'new' keyword carries the constructor reference, mirroring the 2.3 engine's
 			// WriteKeyword on ObjectCreateExpression nodes.
 			if (keyword == "new" && nodeStack.Count > 0 && nodeStack.Peek() is ObjectCreateExpression) {

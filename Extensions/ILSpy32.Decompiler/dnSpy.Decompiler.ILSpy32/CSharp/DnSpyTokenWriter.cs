@@ -22,7 +22,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text;
-using System.Runtime.CompilerServices;
 using dnlib.DotNet;
 using dnSpy.Contracts.Decompiler;
 using dnSpy.Contracts.Text;
@@ -447,6 +446,13 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 
 			ILVariable? variable = null;
 			var isDefinition = false;
+			if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1" && identifier.Name == "line2") {
+				var v2 = parent is IdentifierExpression ie2 ? ie2.GetILVariable() : (parent is VariableInitializer vi2 ? vi2.GetILVariable() : null);
+				if (v2 is null)
+					Console.Error.WriteLine("LINE2 NO-VAR parent=" + parent?.GetType().Name);
+				else
+					Console.Error.WriteLine("LINE2 var kind=" + v2.Kind + " idx=" + v2.Index + " bodyVars=" + (FindEnclosingMethod()?.Body?.Variables.Count ?? -1) + " fnKind=" + v2.Function?.Method?.Name);
+			}
 			if (parent is ParameterDeclaration parameterDeclaration) {
 				// Declaration name: resolve the enclosing method's parameter by name.
 				var methodDef = FindEnclosingMethod();
@@ -493,11 +499,16 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				if (variable.Index < 0 || variable.Index >= method.Parameters.Count)
 					return null;
 				lastColorPath = "ref-param";
-				var flags = isDefinition ? DecompilerReferenceFlags.Local | DecompilerReferenceFlags.Definition : DecompilerReferenceFlags.Local;
-				return (method.Parameters[variable.Index], flags);
+				return (method.Parameters[variable.Index], isDefinition ? DecompilerReferenceFlags.Local | DecompilerReferenceFlags.Definition : DecompilerReferenceFlags.Local);
 			}
+			// Captured/hoisted variables (Local without a slot, or lambda-body StackSlot
+			// references to hoisted fields) have no IL slot in this method. Both shapes render
+			// with the original variable name; the 2.3 engine still emitted a SourceLocal (with
+			// the hoisted field set), so synthesize one cached per (method, name) - dnSpy
+			// highlights locals by reference identity.
+			var flags = isDefinition ? DecompilerReferenceFlags.Local | DecompilerReferenceFlags.Definition : DecompilerReferenceFlags.Local;
+			var hoistedKey = (method, variable.Name ?? string.Empty);
 			if (variable.Kind is VariableKind.Local or VariableKind.UsingLocal or VariableKind.ForeachLocal) {
-				var flags = isDefinition ? DecompilerReferenceFlags.Local | DecompilerReferenceFlags.Definition : DecompilerReferenceFlags.Local;
 				if (method.Body is not null && variable.Index >= 0 && variable.Index < method.Body.Variables.Count) {
 					var dnlibLocal = method.Body.Variables[variable.Index];
 					var key = (method, variable.Index);
@@ -509,23 +520,18 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					lastColorPath = "ref-local";
 					return (sourceLocal, flags);
 				}
-				// Captured/hoisted variables have no IL slot in this method (the engine promotes
-				// them to display-class fields and hides the display class). The 2.3 engine still
-				// emitted a SourceLocal for them (with the hoisted field set), so synthesize one
-				// cached per variable instance - dnSpy highlights locals by reference identity.
-				if (hoistedLocalCache.TryGetValue(variable, out var hoisted))
-					return (hoisted, flags);
-				var synthesized = new SourceLocal(null, variable.Name ?? string.Empty,
-					module.CorLibTypes.Object, SourceVariableFlags.None);
-				hoistedLocalCache.Add(variable, synthesized);
-				lastColorPath = "ref-local-hoisted";
-				return (synthesized, flags);
 			}
-			return null;
+			if (hoistedNameCache.TryGetValue(hoistedKey, out var hoistedLocal))
+				return (hoistedLocal, flags);
+			var synthesizedLocal = new SourceLocal(null, variable.Name ?? string.Empty,
+				module.CorLibTypes.Object, SourceVariableFlags.None);
+			hoistedNameCache[hoistedKey] = synthesizedLocal;
+			lastColorPath = "ref-local-hoisted";
+			return (synthesizedLocal, flags);
 		}
 
 		readonly Dictionary<(MethodDef, int), SourceLocal> sourceLocalCache = new Dictionary<(MethodDef, int), SourceLocal>();
-		readonly ConditionalWeakTable<ICSharpCode.Decompiler.IL.ILVariable, SourceLocal> hoistedLocalCache = new ConditionalWeakTable<ICSharpCode.Decompiler.IL.ILVariable, SourceLocal>();
+		readonly Dictionary<(MethodDef, string), SourceLocal> hoistedNameCache = new Dictionary<(MethodDef, string), SourceLocal>();
 
 		/// <summary>
 		/// Reference for a generic parameter identifier (declaration or usage): the 2.3 engine

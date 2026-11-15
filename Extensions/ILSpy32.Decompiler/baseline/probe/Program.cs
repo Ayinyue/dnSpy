@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.IO;
 using System.Linq;
 using dnlib.DotNet;
@@ -73,6 +74,10 @@ class Probe {
 		if (args.Length > 0 && args[0] == "text") {
 			InstallBinResolver(new[] { args[2] });
 			return TextDump(args[1], args[2], args[3], args[4], args[5]);
+		}
+		if (args.Length > 0 && args[0] == "asyncdiff") {
+			InstallBinResolver(new[] { args[2] });
+			return AsyncDiff(args[1], args[2], int.Parse(args[3]));
 		}
 		if (args.Length > 0 && args[0] == "bench") {
 			InstallBinResolver(new[] { args[2] });
@@ -1242,9 +1247,22 @@ class Probe {
 		var output = new SpCaptureOutput();
 		dec.Decompile(target, output, new dnSpy.Contracts.Decompiler.DecompilationContext { CalculateILSpans = true });
 		Console.WriteLine("member-level: debugInfos=" + output.DebugInfos.Count + " textLen=" + output.Length);
+		var engineAsm = System.Reflection.Assembly.LoadFrom(Path.Combine(dnspyBin, "dnSpy.Decompiler.ILSpy32.x.dll"));
+		var twType = engineAsm.GetType("dnSpy.Decompiler.ILSpy32.CSharp.DnSpyTokenWriter");
+		Console.WriteLine("  GetCecil calls=" + twType?.GetField("GetCecilCalls", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public)?.GetValue(null) + " failures=" + twType?.GetField("GetCecilFailures", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public)?.GetValue(null));
 		var typeOutput = new SpCaptureOutput();
 		dec.Decompile(target.DeclaringType, typeOutput, new dnSpy.Contracts.Decompiler.DecompilationContext { CalculateILSpans = true });
 		Console.WriteLine("type-level:   debugInfos=" + typeOutput.DebugInfos.Count + " textLen=" + typeOutput.Length);
+		var twType2 = engineAsm.GetType("dnSpy.Decompiler.ILSpy32.CSharp.DnSpyTokenWriter");
+		var twT = engineAsm.GetType("dnSpy.Decompiler.ILSpy32.CSharp.DnSpyTokenWriter");
+		var mapperT = engineAsm.GetTypes().FirstOrDefault(t => t.Name == "DnlibReferenceMapper");
+		if (mapperT is null)
+			Console.WriteLine("  mapper type not found");
+		foreach (var (label, type, field) in new[] { ("resolveRef", twT, "ResolveReferenceTicks"), ("resolveToken", mapperT, "ResolveTokenTicks") }) {
+			var f = type?.GetField(field, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
+			var ticks = f?.GetValue(null);
+			Console.WriteLine($"  PROF[{label}] ticks=" + ticks + " ms~=" + (ticks is long t ? t / 10000.0 : -1));
+		}
 		var head = output.ToString();
 		foreach (var l in head.Split('\n').Where(l => l.Contains("failed") || l.Contains("Exception")).Take(3))
 			Console.WriteLine("  !! " + l.TrimEnd());
@@ -1306,17 +1324,29 @@ class Probe {
 			}
 			var times = new System.Collections.Generic.List<long>();
 			var sw = System.Diagnostics.Stopwatch.StartNew();
+			var perType = new System.Collections.Generic.List<(string Name, long Ms, int Calls, int Fails)>();
+			var engineAsmB = System.Reflection.Assembly.LoadFrom(Path.Combine(dnspyBin, "dnSpy.Decompiler.ILSpy32.x.dll"));
+			var twTypeB = engineAsmB.GetType("dnSpy.Decompiler.ILSpy32.CSharp.DnSpyTokenWriter");
+			var fCalls = twTypeB?.GetField("GetCecilCalls", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
+			var fFail = twTypeB?.GetField("GetCecilFailures", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
 			foreach (var t in sample) {
+				var c0 = fCalls is null ? 0 : (int)fCalls.GetValue(null)!;
+				var f0 = fFail is null ? 0 : (int)fFail.GetValue(null)!;
 				var one = System.Diagnostics.Stopwatch.StartNew();
 				var w = new SpCaptureOutput();
 				try { dec.Decompile(t, w, new dnSpy.Contracts.Decompiler.DecompilationContext()); } catch { }
 				one.Stop();
 				times.Add(one.ElapsedMilliseconds);
+				var c1 = fCalls is null ? 0 : (int)fCalls.GetValue(null)!;
+				var f1 = fFail is null ? 0 : (int)fFail.GetValue(null)!;
+				perType.Add((t.FullName!, one.ElapsedMilliseconds, c1 - c0, f1 - f0));
 			}
 			sw.Stop();
 			times.Sort();
 			var median = times.Count > 0 ? times[times.Count / 2] : 0;
 			Console.WriteLine($"{tag}: total {sw.ElapsedMilliseconds} ms for {times.Count} types, median {median} ms/type, max {times.LastOrDefault()} ms");
+			foreach (var (name, ms, calls, fails) in perType.OrderByDescending(p => p.Ms).Take(6))
+				Console.WriteLine($"  slow {ms,6} ms  {name}  cecilCalls={calls} fails={fails}");
 		}
 		return 0;
 	}
@@ -1351,6 +1381,69 @@ class Probe {
 			var last = mdi.Statements[mdi.Statements.Length - 1];
 			Console.WriteLine("    IL span: 0x" + first.ILSpan.Start.ToString("X") + " .. 0x" + last.ILSpan.End.ToString("X") + " (body " + mdi.Method.Body!.Instructions.Count + " ins, 0x" + mdi.Method.Body.Instructions.Last().Offset.ToString("X") + ")");
 		}
+		return 0;
+	}
+
+	/// <summary>
+	/// AsyncInfo numeric comparison between the 2.3 and 3.2 engines over every async kickoff
+	/// in the assembly: step pairs (yield offset, resume offset), SetResultOffset and the
+	/// builder field must agree, since both map the same MoveNext IL and dnSpy's async
+	/// stepper steps wrong on any disagreement.
+	/// </summary>
+	static int AsyncDiff(string targetDll, string dnspyBin, int max) {
+		var dec32 = Create32CSharp(dnspyBin);
+		var dec23 = Create23(dnspyBin, "CSharp");
+		var module = ModuleDefMD.Load(targetDll);
+		var allTypes = new System.Collections.Generic.List<TypeDef>();
+		void Collect(System.Collections.Generic.IEnumerable<TypeDef> list) {
+			foreach (var t in list) { allTypes.Add(t); Collect(t.NestedTypes); }
+		}
+		Collect(module.Types);
+
+		int compared = 0, agree = 0, only32 = 0, only23 = 0, both = 0;
+		foreach (var t in allTypes) {
+			foreach (var m in t.Methods) {
+				if (!m.HasBody)
+					continue;
+				var smType = t.NestedTypes.FirstOrDefault(n => n.Name?.String?.StartsWith("<" + m.Name + ">") == true &&
+					n.Interfaces.Any(i => i.Interface?.FullName == "System.Runtime.CompilerServices.IAsyncStateMachine"));
+				if (smType is null)
+					continue;
+				if (compared >= max)
+					return 0;
+				compared++;
+				var out32 = new SpCaptureOutput();
+				var out23 = new SpCaptureOutput();
+				try { dec32.Decompile(m, out32, new dnSpy.Contracts.Decompiler.DecompilationContext { CalculateILSpans = true }); } catch { }
+				try { dec23.Decompile(m, out23, new dnSpy.Contracts.Decompiler.DecompilationContext { CalculateILSpans = true }); } catch { }
+				var a32 = out32.DebugInfos.FirstOrDefault(d => d.AsyncInfo is not null)?.AsyncInfo;
+				var a23 = out23.DebugInfos.FirstOrDefault(d => d.AsyncInfo is not null)?.AsyncInfo;
+				if (a32 is null && a23 is null)
+					continue;
+				if (a32 is not null && a23 is null) {
+					only32++;
+					Console.WriteLine($"ONLY-32 {t.FullName}::{m.Name} steps={a32!.StepInfos.Length}");
+					continue;
+				}
+				if (a32 is null && a23 is not null) {
+					only23++;
+					Console.WriteLine($"ONLY-23 {t.FullName}::{m.Name} steps={a23!.StepInfos.Length}");
+					continue;
+				}
+				both++;
+				var s32 = a32!.StepInfos.Select(si => (si.YieldOffset, si.ResumeMethod.Name + "@" + (si.ResumeMethod.MDToken.Raw).ToString("X"), si.ResumeOffset)).OrderBy(p => p.Item1).ToList();
+				var s23 = a23!.StepInfos.Select(si => (si.YieldOffset, si.ResumeMethod.Name + "@" + (si.ResumeMethod.MDToken.Raw).ToString("X"), si.ResumeOffset)).OrderBy(p => p.Item1).ToList();
+				var setResultOk = a32.SetResultOffset == a23.SetResultOffset;
+				if (s32.Count == s23.Count && s32.Zip(s23, (x, y) => x.Item1 == y.Item1 && x.Item3 == y.Item3).All(ok => ok) && setResultOk) {
+					agree++;
+					continue;
+				}
+				Console.WriteLine($"DIFF {t.FullName}::{m.Name}: 32={s32.Count} steps (setResult 0x{a32.SetResultOffset:X}) 23={s23.Count} steps (setResult 0x{a23.SetResultOffset:X}) setResultOk={setResultOk}");
+				foreach (var pair in s32.Zip(s23, (x, y) => (x, y)).Where(p => p.x.Item1 != p.y.Item1 || p.x.Item3 != p.y.Item3).Take(4))
+					Console.WriteLine($"    32 yield=0x{pair.x.Item1:X} resume=0x{pair.x.Item3:X} | 23 yield=0x{pair.y.Item1:X} resume=0x{pair.y.Item3:X}");
+			}
+		}
+		Console.WriteLine($"SUMMARY compared={compared} agree={agree} only32={only32} only23={only23} both={both}");
 		return 0;
 	}
 }

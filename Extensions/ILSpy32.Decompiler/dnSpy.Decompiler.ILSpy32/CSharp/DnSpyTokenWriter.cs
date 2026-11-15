@@ -223,6 +223,27 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				}
 			}
 
+			// Namespace segments of qualified type names ('dnSpy.Bookmarks.X'): the 2.3 engine
+			// emitted a NamespaceReference on every segment - including the module's own
+			// namespaces, which have no TypeRef entries (their types are TypeDefs) and fall
+			// back to the module's own assembly as the scope.
+			if (identifier.Parent is CS.SimpleType nsSimple && nsSimple.Role == CS.MemberType.TargetRole) {
+				var nsRef1 = NamespaceReferenceForSegment(nsSimple.ToString());
+				if (nsRef1 is not null) {
+					lastColorPath = "ref-ns-segment";
+					EmitText(text, nsRef1, DecompilerReferenceFlags.None, BoxedTextColor.Namespace);
+					return;
+				}
+			}
+			if (identifier.Parent is CS.MemberType nsMemberType && nsMemberType.MemberNameToken != identifier) {
+				var nsRef2 = NamespaceReferenceForSegment(nsMemberType.ToString());
+				if (nsRef2 is not null) {
+					lastColorPath = "ref-ns-segment";
+					EmitText(text, nsRef2, DecompilerReferenceFlags.None, BoxedTextColor.Namespace);
+					return;
+				}
+			}
+
 			// Preserve the ref-* diagnostic tag ResolveReference may have left (which sub-path
 			// failed); only plain identifiers get the generic fallback tag.
 			if (!lastColorPath.StartsWith("ref-", StringComparison.Ordinal))
@@ -454,6 +475,37 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		/// ILVariable.Index matches dnlib MethodDef.Parameters including the implicit this);
 		/// locals map by IL slot into the method body's variable table.
 		/// </summary>
+		/// <summary>
+		/// The dnlib Parameter of the compiled lambda method for a lambda's parameter
+		// declaration - via the engine's ILVariableResolveResult (MakeParameters), then the
+		// LambdaExpression's ILFunction for lambdas in field initializers. dnlib Parameters
+		// include the hidden this; the engine's index counts only the explicit ones.
+		/// </summary>
+		dnlib.DotNet.Parameter? ResolveLambdaParameterReference(CS.ParameterDeclaration parameterDeclaration) {
+			var ilv = parameterDeclaration.Annotation<ILVariable>()
+				?? (parameterDeclaration.Annotation<ResolveResult>() as ICSharpCode.Decompiler.CSharp.ILVariableResolveResult)?.Variable;
+			if (ilv is { Kind: VariableKind.Parameter, Index: >= 0 } && ilv.Function?.CecilMethod is { } cecilLambda &&
+					module.ResolveToken(new MDToken(cecilLambda.MetadataToken.ToInt32())) is MethodDef lambdaDef) {
+				var paramIndex = ilv.Index + (lambdaDef.HasThis ? 1 : 0);
+				if (paramIndex < lambdaDef.Parameters.Count)
+					return lambdaDef.Parameters[paramIndex];
+			}
+			if (parameterDeclaration.Parent is CS.LambdaExpression lambdaExpr &&
+					lambdaExpr.Annotation<ILFunction>() is { } lambdaFn && lambdaFn.CecilMethod is { } cecilLambda2 &&
+					module.ResolveToken(new MDToken(cecilLambda2.MetadataToken.ToInt32())) is MethodDef lambdaDef2) {
+				var position = 0;
+				foreach (var pd in lambdaExpr.Parameters) {
+					if (pd == parameterDeclaration)
+						break;
+					position++;
+				}
+				position += lambdaDef2.HasThis ? 1 : 0;
+				if (position < lambdaDef2.Parameters.Count)
+					return lambdaDef2.Parameters[position];
+			}
+			return null;
+		}
+
 		(object reference, DecompilerReferenceFlags flags)? TryGetVariableReference(Identifier identifier, object color) {
 			var parent = identifier.Parent;
 			if (parent is null)
@@ -469,10 +521,18 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					Console.Error.WriteLine("LINE2 var kind=" + v2.Kind + " idx=" + v2.Index + " bodyVars=" + (FindEnclosingMethod()?.Body?.Variables.Count ?? -1) + " fnKind=" + v2.Function?.Method?.Name);
 			}
 			if (parent is ParameterDeclaration parameterDeclaration) {
+				// Lambda parameters: no enclosing method match - they belong to the compiled
+				// lambda method (<M>b__N), the same reference the 2.3 engine attached.
+				if (FindEnclosingMethod() is null) {
+					var lambdaParam = ResolveLambdaParameterReference(parameterDeclaration);
+					if (lambdaParam is not null) {
+						lastColorPath = "ref-lambdaparam";
+						return (lambdaParam, DecompilerReferenceFlags.Local | DecompilerReferenceFlags.Definition);
+					}
+					return null;
+				}
 				// Declaration name: resolve the enclosing method's parameter by name.
 				var methodDef = FindEnclosingMethod();
-				if (methodDef is null)
-					return null;
 				var parameter = methodDef.Parameters.FirstOrDefault(p => p.Name == parameterDeclaration.Name);
 				if (parameter is null && parameterDeclaration.Parent is MethodDeclaration md2) {
 					// Parameter names can be missing or synthesized; fall back to position
@@ -486,8 +546,14 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					if (position < md2.Parameters.Count)
 						parameter = methodDef.Parameters.Skip(1).Skip(position).FirstOrDefault();
 				}
-				if (parameter is null)
+				if (parameter is null) {
+					var lambdaParam = ResolveLambdaParameterReference(parameterDeclaration);
+					if (lambdaParam is not null) {
+						lastColorPath = "ref-lambdaparam";
+						return (lambdaParam, DecompilerReferenceFlags.Local | DecompilerReferenceFlags.Definition);
+					}
 					return null;
+				}
 				lastColorPath = "ref-paramdecl";
 				return (parameter, DecompilerReferenceFlags.Local | DecompilerReferenceFlags.Definition);
 			}
@@ -579,6 +645,24 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		/// The assembly is resolved by finding any TypeRef of that namespace in the module's
 		/// reference table (its scope is the assembly the namespace is imported from).
 		/// </summary>
+		/// <summary>
+		/// NamespaceReference for a dotted namespace prefix: the assembly scope comes from any
+		/// TypeRef of that namespace in the module's reference table (any deeper namespace of
+		/// the same root resolves to the same owning assembly); the module's own namespaces
+		// have no TypeRef entries and use the module's own assembly.
+		/// </summary>
+		object? NamespaceReferenceForSegment(string fullNamespace) {
+			if (string.IsNullOrEmpty(fullNamespace))
+				return null;
+			var typeRef = module.GetTypeRefs().FirstOrDefault(tr => tr.Namespace == fullNamespace)
+				?? module.GetTypeRefs().FirstOrDefault(tr => tr.Namespace.StartsWith(fullNamespace + ".", StringComparison.Ordinal));
+			if (typeRef?.ResolutionScope is dnlib.DotNet.IAssembly scope)
+				return new NamespaceReference(scope, fullNamespace);
+			if (module.Types.Any(t => t.Namespace == fullNamespace || t.Namespace.StartsWith(fullNamespace + ".", StringComparison.Ordinal)))
+				return new NamespaceReference(module.Assembly, fullNamespace);
+			return null;
+		}
+
 		object? TryGetUsingNamespaceReference(Identifier identifier, object color) {
 			if (identifier.Parent is not SimpleType && identifier.Parent is not MemberType)
 				return null;

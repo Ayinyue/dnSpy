@@ -80,6 +80,7 @@ namespace EngineBaseline {
 		// a type that produced nothing but a failure note still counts as ok.
 		static readonly string[] FailureMarkers = {
 			"// ILSpy 3.2 decompilation failed:",
+			"// ILSpy 3.2 disassembly failed:",
 			"' ILSpy 3.2 VB decompilation failed:",
 			"' ILSpy 3.2 VB conversion failed:",
 			"// ILSpy 3.2: cannot bridge",
@@ -118,8 +119,8 @@ namespace EngineBaseline {
 		static void PrintUsage() {
 			Console.WriteLine(@"Engine baseline harness — compares two dnSpy decompiler engines.
 
-  baseline dump --asm <assembly.dll> --impl core|ilspy32 --lang cs|vb --out <dir>
-                [--all] [--max N] [--dnspy-dir <dir>]
+  baseline dump --asm <assembly.dll> --impl core|ilspy32 --lang cs|vb|il --out <dir>
+                [--all] [--max N] [--dnspy-dir <dir>] [--members] [--assembly] [--module]
 
       core     = existing 2.3 engine (dnSpy.Decompiler.ILSpy.Core.dll)
       ilspy32  = new 3.2 engine    (dnSpy.Decompiler.ILSpy32.x.dll)
@@ -147,7 +148,7 @@ namespace EngineBaseline {
 
 		static int RunDump(string[] args) {
 			string asmPath = null, impl = null, lang = null, outDir = null, dnspyDir = null, onlyType = null;
-			bool all = false;
+			bool all = false, members = false, dumpAssembly = false, dumpModule = false;
 			int max = int.MaxValue;
 
 			for (int i = 0; i < args.Length; i++) {
@@ -160,6 +161,10 @@ namespace EngineBaseline {
 				case "--max": max = int.Parse(Next(args, ref i)); break;
 				case "--all": all = true; break;
 				case "--type": onlyType = Next(args, ref i); break;
+				// Smoke-run the non-type entry points of a language (used by --lang il).
+				case "--members": members = true; break;
+				case "--assembly": dumpAssembly = true; break;
+				case "--module": dumpModule = true; break;
 				default: throw new ArgumentException("Unknown option: " + args[i]);
 				}
 			}
@@ -174,7 +179,7 @@ namespace EngineBaseline {
 			InstallAssemblyResolver(dnspyDir);
 
 			var decompilers = LoadDecompilers(impl, dnspyDir);
-			var ext = lang == "vb" ? ".vb" : ".cs";
+			var ext = lang == "vb" ? ".vb" : lang == "il" ? ".il" : ".cs";
 			var decompiler = decompilers.FirstOrDefault(d => d.FileExtension == ext);
 			if (decompiler is null) {
 				Console.WriteLine("[FAIL] No " + ext + " decompiler. Available: " +
@@ -195,15 +200,34 @@ namespace EngineBaseline {
 				.ToList();
 			Console.WriteLine("[..] " + candidates.Count + " types (all=" + all + ")");
 
-			var entries = new List<DumpEntry>(candidates.Count);
-			int index = 0;
+			var work = new List<(string FullName, Action<IDecompilerOutput, DecompilationContext> Run)>();
+			if (dumpAssembly && mod.Assembly is not null)
+				work.Add(("(assembly)", (o, ctx) => decompiler.Decompile(mod.Assembly, o, ctx)));
+			if (dumpModule)
+				work.Add(("(module)", (o, ctx) => decompiler.Decompile(mod, o, ctx)));
 			foreach (var t in candidates) {
+				work.Add((t.FullName, (o, ctx) => decompiler.Decompile(t, o, ctx)));
+				if (members) {
+					foreach (var m in t.Methods)
+						work.Add((t.FullName + "::" + m.Name, (o, ctx) => decompiler.Decompile(m, o, ctx)));
+					foreach (var f in t.Fields)
+						work.Add((t.FullName + "::" + f.Name, (o, ctx) => decompiler.Decompile(f, o, ctx)));
+					foreach (var p in t.Properties)
+						work.Add((t.FullName + "::" + p.Name, (o, ctx) => decompiler.Decompile(p, o, ctx)));
+					foreach (var e in t.Events)
+						work.Add((t.FullName + "::" + e.Name, (o, ctx) => decompiler.Decompile(e, o, ctx)));
+				}
+			}
+
+			var entries = new List<DumpEntry>(work.Count);
+			int index = 0;
+			foreach (var w in work) {
 				index++;
-				var entry = new DumpEntry { FullName = t.FullName, FileName = EntryFileName(index, t.FullName) };
+				var entry = new DumpEntry { FullName = w.FullName, FileName = EntryFileName(index, w.FullName) };
 				string text;
 				try {
 					var o = new StringDecompilerOutput();
-					decompiler.Decompile(t, o, new DecompilationContext());
+					w.Run(o, new DecompilationContext());
 					text = o.ToString();
 					var marker = FailureMarkers.FirstOrDefault(m => text.IndexOf(m, StringComparison.Ordinal) >= 0);
 					if (marker is null) {

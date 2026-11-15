@@ -20,6 +20,7 @@
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using dnSpy.Contracts.Decompiler;
+using dnSpy.Decompiler.ILSpy32.IL;
 using dnSpy.Decompiler.ILSpy32.Settings;
 using dnSpy.Decompiler.ILSpy32.VisualBasic;
 
@@ -43,6 +44,9 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		public IEnumerable<IDecompiler> Create() {
 			yield return new CSharpDecompiler32(csharpSettings ?? new DecompilerSettings32(), "C# (ILSpy 3.2)");
 			yield return new VBDecompiler32(vbSettings ?? new DecompilerSettings32(vbCompatibility: true), "Visual Basic (ILSpy 3.2)");
+			// The IL view has no decompiler options (the 3.2 engine exposes no IL-view switches),
+			// so it carries its own empty settings instance instead of a persisted MEF singleton.
+			yield return new ILDecompiler32("IL (ILSpy 3.2)");
 		}
 	}
 }

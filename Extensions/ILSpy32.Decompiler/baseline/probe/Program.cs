@@ -74,6 +74,14 @@ class Probe {
 			InstallBinResolver(new[] { args[2] });
 			return TextDump(args[1], args[2], args[3], args[4], args[5]);
 		}
+		if (args.Length > 0 && args[0] == "bench") {
+			InstallBinResolver(new[] { args[2] });
+			return Bench(args[1], args[2], int.Parse(args[3]));
+		}
+		if (args.Length > 0 && args[0] == "ilprobe") {
+			InstallBinResolver(new[] { args[2] });
+			return ILProbe(args[1], args[2], args[3]);
+		}
 		if (args.Length > 0 && args[0] == "asyncprobe") {
 			InstallBinResolver(new[] { args[2] });
 			return AsyncProbe(args[1], args[2], args[3]);
@@ -381,11 +389,20 @@ class Probe {
 		// Only one creator class exists in the extension (CSharp ns); it yields every language.
 		var creatorType = asm.GetType("dnSpy.Decompiler.ILSpy32.CSharp.DecompilerCreator", throwOnError: true)!;
 		var list = CreateVia(creatorType).ToList();
+		if (kindNs == "IL") {
+			foreach (var d in list) {
+				var name = d.GenericNameUI ?? d.UniqueNameUI ?? "";
+				if (name.StartsWith("IL") && !name.Contains("C#"))
+					return d;
+			}
+			throw new InvalidOperationException($"no IL decompiler found in [{string.Join(", ", list.Select(d => d.GenericNameUI))}]");
+		}
 		return Pick(list, wantCs: kindNs == "CSharp");
 	}
 
 	static dnSpy.Contracts.Decompiler.IDecompiler Create32CSharp(string dnspyBin) => Create32(dnspyBin, "CSharp");
 	static dnSpy.Contracts.Decompiler.IDecompiler Create32VB(string dnspyBin) => Create32(dnspyBin, "VisualBasic");
+	static dnSpy.Contracts.Decompiler.IDecompiler Create32IL(string dnspyBin) => Create32(dnspyBin, "IL");
 
 	// ==== spdump: decompile with the 3.2 C# engine and dump the statement-level debug
 	// info (SourceStatement = ILSpan + TextSpan) that the engine attaches, with a text
@@ -1251,6 +1268,88 @@ class Probe {
 				var last = mdi.Statements[mdi.Statements.Length - 1];
 				Console.WriteLine("    stmt IL span: 0x" + first.ILSpan.Start.ToString("X") + " .. 0x" + last.ILSpan.End.ToString("X"));
 			}
+		}
+		return 0;
+	}
+
+	/// <summary>
+	/// Decompile-time comparison between the 2.3 and 3.2 engines over the same sampled types:
+	/// total and median wall clock per engine, type-level decompiles with CalculateILSpans off
+	/// (the display path).
+	/// </summary>
+	static int Bench(string targetDll, string dnspyBin, int sampleCount) {
+		var module = ModuleDefMD.Load(targetDll);
+		var allTypes = new System.Collections.Generic.List<TypeDef>();
+		void Collect(System.Collections.Generic.IEnumerable<TypeDef> list) {
+			foreach (var t in list) { allTypes.Add(t); Collect(t.NestedTypes); }
+		}
+		Collect(module.Types);
+		// Skip the compiler-generated noise types; deterministic stride sample.
+		var types = allTypes.Where(t => !t.Name!.String!.StartsWith("<") && !t.FullName.Contains("PrivateImplementationDetails"))
+			.OrderBy(t => t.FullName, StringComparer.Ordinal).ToList();
+		var stride = Math.Max(1, types.Count / sampleCount);
+		var sample = new System.Collections.Generic.List<TypeDef>();
+		for (int i = 0; i < types.Count && sample.Count < sampleCount; i += stride)
+			sample.Add(types[i]);
+
+		var engines = new (string tag, dnSpy.Contracts.Decompiler.IDecompiler dec)[] {
+			("3.2-CSharp", Create32CSharp(dnspyBin)),
+			("2.3-CSharp", Create23(dnspyBin, "CSharp")),
+			("3.2-VB", Create32VB(dnspyBin)),
+			("2.3-VB", Create23(dnspyBin, "VisualBasic")),
+		};
+		foreach (var (tag, dec) in engines) {
+			// Warm-up pass (engine init, assembly load) then a timed pass.
+			foreach (var t in sample.Take(10)) {
+				var w = new SpCaptureOutput();
+				try { dec.Decompile(t, w, new dnSpy.Contracts.Decompiler.DecompilationContext()); } catch { }
+			}
+			var times = new System.Collections.Generic.List<long>();
+			var sw = System.Diagnostics.Stopwatch.StartNew();
+			foreach (var t in sample) {
+				var one = System.Diagnostics.Stopwatch.StartNew();
+				var w = new SpCaptureOutput();
+				try { dec.Decompile(t, w, new dnSpy.Contracts.Decompiler.DecompilationContext()); } catch { }
+				one.Stop();
+				times.Add(one.ElapsedMilliseconds);
+			}
+			sw.Stop();
+			times.Sort();
+			var median = times.Count > 0 ? times[times.Count / 2] : 0;
+			Console.WriteLine($"{tag}: total {sw.ElapsedMilliseconds} ms for {times.Count} types, median {median} ms/type, max {times.LastOrDefault()} ms");
+		}
+		return 0;
+	}
+
+	/// <summary>
+	/// Verifies the IL view's debug-info chain: decompile one method with the 3.2 IL language
+	/// and dump the statement-level mapping (one statement per instruction, the 2.3 shape).
+	/// </summary>
+	static int ILProbe(string targetDll, string dnspyBin, string methodName) {
+		var dec = Create32IL(dnspyBin);
+		Console.WriteLine("engine: " + (dec.UniqueNameUI ?? "?"));
+		var module = ModuleDefMD.Load(targetDll);
+		var allTypes = new System.Collections.Generic.List<TypeDef>();
+		void Collect(System.Collections.Generic.IEnumerable<TypeDef> list) {
+			foreach (var t in list) { allTypes.Add(t); Collect(t.NestedTypes); }
+		}
+		Collect(module.Types);
+		MethodDef? target = null;
+		foreach (var t in allTypes) {
+			foreach (var m in t.Methods) {
+				if (m.Name == methodName && m.HasBody) { target = m; break; }
+			}
+			if (target is not null) break;
+		}
+		if (target is null) { Console.WriteLine("method not found: " + methodName); return 1; }
+		var output = new SpCaptureOutput();
+		dec.Decompile(target, output, new dnSpy.Contracts.Decompiler.DecompilationContext { CalculateILSpans = true });
+		Console.WriteLine("debugInfos=" + output.DebugInfos.Count + " textLen=" + output.Length);
+		foreach (var mdi in output.DebugInfos) {
+			Console.WriteLine("  mdi.Method=" + mdi.Method.FullName + " stmts=" + mdi.Statements.Length);
+			var first = mdi.Statements[0];
+			var last = mdi.Statements[mdi.Statements.Length - 1];
+			Console.WriteLine("    IL span: 0x" + first.ILSpan.Start.ToString("X") + " .. 0x" + last.ILSpan.End.ToString("X") + " (body " + mdi.Method.Body!.Instructions.Count + " ins, 0x" + mdi.Method.Body.Instructions.Last().Offset.ToString("X") + ")");
 		}
 		return 0;
 	}

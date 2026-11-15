@@ -181,8 +181,9 @@ Members.Count 为空判定的代码都要防 using 占位**。修复一个缺陷
 | 局限 | 类别 | 说明 |
 |---|---|---|
 | VB 属性访问器/构造器的方法级 span | C | 非 MethodDeclaration 节点，2.3 集成版同形 |
-| 外部属性/事件引用不合成 | 设计取舍 | 站点已被句法 fallback 正确着色；合成需 property/event 色 |
-| 调试 locals 的 hoistedField 聚合 | E | 两引擎集成版均不产（yield/async 重建未跑），行为一致 |
+| ~~外部属性/事件引用不合成~~ | ✅ 已关闭 | VB 批量修复（05c800475）为外部成员补 MemberRef 表回退+合成，tokstat 聚合归零证实 |
+| ~~调试 locals 的 hoistedField 聚合~~ | ✅ 已关闭 | 状态机重建修复后两引擎集成版均产 locals（2.3 39 方法/91 slots vs 3.2 28/74，差异全为输出形态：3.2 的 ?. 与表达式体消除拷贝局部）——spdump 23/23vb 引擎选择器（218d30523）实测 |
+| 调试 locals 的 hoistedField 聚合（余项） | E | 提升变量的 hoistedField 字段定位两引擎集成版均未填，行为一致 |
 | 3 项选项传导链路正确但引擎不响应 | E | AlwaysGenerateExceptionVariable/UseDebugSymbols/ObjectOrCollectionInitializers |
 | MemberOrder/十六进制/字符串长度上限选项 | 设计取舍 | 3.2 引擎无等价能力，避免死开关 |
 | 4 项 VB 不可表达构造 | 语言限制 | goto case 外部、unsafe、fixed 字段、多行注释内部处理 |
@@ -201,4 +202,5 @@ Members.Count 为空判定的代码都要防 using 占位**。修复一个缺陷
 | spdump | `m3probe spdump <目标> <bin> <过滤> [vb]` | 语句级 SP + locals 明细 |
 | state-diag | `m3probe state-diag <目标> <N>` | 状态机拒绝点直方图 |
 | colordump / text | `m3probe colordump/text ...` | 双引擎逐 token / 全文本对拍 |
+| tokalign / tokstat | python 脚本（tokalign.py 模板入 docs） | token 流级 difflib 对齐（equal 块逐位比 hasRef，查聚合盲区）+ (text,color) 聚合引用率 |
 | settings-tests | `m3probe settings-tests` | 2.3 选项值迁移 |

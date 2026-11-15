@@ -100,6 +100,40 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 				RegisterMethodNames(typeDef, typeDeclaration, methodNames);
 			}
 
+			// Single-member decompilations (DecompileMember) have a top-level
+			// MethodDeclaration/PropertyDeclaration/EventDeclaration instead of a type
+			// declaration - the known type IS their declaring type. Without this the declared
+			// name never got its MethodDef and the member-level debug info was never built
+			// (member-level views render zero debug infos; the debugger's single-method
+			// decompilation path consumes exactly this).
+			if (knownType is not null && tree.Members.Count > 0 &&
+					!tree.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration>().Any()) {
+				foreach (var member in tree.Members) {
+					switch (member) {
+					case ICSharpCode.Decompiler.CSharp.Syntax.MethodDeclaration method:
+						var methodDef = MatchMethod(knownType, method);
+						if (methodDef is not null)
+							method.AddAnnotation(methodDef);
+						break;
+					case ICSharpCode.Decompiler.CSharp.Syntax.ConstructorDeclaration constructor:
+						var ctorDef = MatchConstructor(knownType, constructor);
+						if (ctorDef is not null)
+							constructor.AddAnnotation(ctorDef);
+						break;
+					case ICSharpCode.Decompiler.CSharp.Syntax.PropertyDeclaration property:
+						var propertyDef = MatchProperty(knownType, property.Name, 0, property.PrivateImplementationType);
+						if (propertyDef is not null)
+							property.AddAnnotation(propertyDef);
+						break;
+					case ICSharpCode.Decompiler.CSharp.Syntax.EventDeclaration eventDecl:
+						var eventDef = MatchEvent(knownType, eventDecl.Name, wantsQualified: false);
+						if (eventDef is not null)
+							eventDecl.AddAnnotation(eventDef);
+						break;
+					}
+				}
+			}
+
 			if (renames.Count > 0)
 				tree.AddAnnotation(renames);
 			if (methodNames.Count > 0)

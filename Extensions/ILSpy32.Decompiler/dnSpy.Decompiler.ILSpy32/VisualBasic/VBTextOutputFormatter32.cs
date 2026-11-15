@@ -55,14 +55,16 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			if (node is MethodDeclaration method) {
 				var methodDef = node.Annotation<MethodDef>();
 				if (collectDebugInfo && methodDef?.Body is not null) {
-					var builder = new MethodDebugInfoBuilder(settingsVersion, StateMachineKind.None,
-						methodDef, null, Array.Empty<SourceLocal>(), null, null);
+					var smInfo = Common.StateMachineDebugInfoDetector.TryDetect(methodDef);
+					var builder = new MethodDebugInfoBuilder(settingsVersion, smInfo?.Kind ?? StateMachineKind.None,
+						smInfo?.BodyMethod ?? methodDef, smInfo?.KickoffMethod,
+						Array.Empty<SourceLocal>(), null, smInfo?.AsyncInfo);
 					// Debug locals collected from the C# tree's engine variables (the converted
 					// VB nodes carry no variable annotations) - see VBDecompiler32.
 					if (pendingLocals.TryGetValue(methodDef, out var locals))
 						builder.Scope.Locals.AddRange(locals);
 					builder.StartPosition = output.NextPosition;
-					methodBuilders.Push((builder, methodDef));
+					methodBuilders.Push((builder, smInfo?.BodyMethod ?? methodDef));
 					mappedInstructions = new HashSet<EngineIL.ILInstruction>();
 				}
 			}

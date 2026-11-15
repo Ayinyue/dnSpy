@@ -74,6 +74,10 @@ class Probe {
 			InstallBinResolver(new[] { args[2] });
 			return TextDump(args[1], args[2], args[3], args[4], args[5]);
 		}
+		if (args.Length > 0 && args[0] == "asyncprobe") {
+			InstallBinResolver(new[] { args[2] });
+			return AsyncProbe(args[1], args[2], args[3]);
+		}
 		if (args.Length > 0 && args[0] == "colordump") {
 			// Install the resolver BEFORE dispatching: the JIT of ColorDump needs dnlib and the
 			// contracts, and with Private=false references those come only from this handler.
@@ -1194,6 +1198,60 @@ class Probe {
 		Console.WriteLine($"CS debug infos: {output.customData.Count}");
 		Console.WriteLine($"VB reference count: {vbOutput.referenceCount} (last: {vbOutput.lastReference?.ToString() ?? "NULL"})");
 		Console.WriteLine($"VB debug infos: {vbOutput.customData.Count}");
+		return 0;
+	}
+
+	static int AsyncProbe(string targetDll, string dnspyBin, string methodName) {
+		var dec = Create32CSharp(dnspyBin);
+		var module = ModuleDefMD.Load(targetDll);
+		var allTypes = new System.Collections.Generic.List<TypeDef>();
+		void Collect(System.Collections.Generic.IEnumerable<TypeDef> list) {
+			foreach (var t in list) { allTypes.Add(t); Collect(t.NestedTypes); }
+		}
+		Collect(module.Types);
+		MethodDef? target = null;
+		foreach (var t in allTypes) {
+			foreach (var m in t.Methods) {
+				if (m.Name == methodName && m.HasBody) { target = m; break; }
+			}
+			if (target is not null) break;
+		}
+		if (target is null) { Console.WriteLine("method not found: " + methodName); return 1; }
+		Console.WriteLine("kickoff: " + target.FullName + " body=" + target.Body.Instructions.Count + " ins, ilrange=[0x" + target.Body.Instructions.First().Offset.ToString("X") + "-0x" + target.Body.Instructions.Last().Offset.ToString("X") + "]");
+		var smType = target.DeclaringType.NestedTypes.FirstOrDefault(t => t.Name?.String?.StartsWith("<" + target.Name + ">") == true);
+		MethodDef? moveNext = smType?.FindMethod("MoveNext");
+		if (moveNext is not null)
+			Console.WriteLine("moveNext: " + smType!.FullName + " body=" + moveNext.Body!.Instructions.Count + " ins, ilrange=[0x" + moveNext.Body.Instructions.First().Offset.ToString("X") + "-0x" + moveNext.Body.Instructions.Last().Offset.ToString("X") + "]");
+		var output = new SpCaptureOutput();
+		dec.Decompile(target, output, new dnSpy.Contracts.Decompiler.DecompilationContext { CalculateILSpans = true });
+		Console.WriteLine("member-level: debugInfos=" + output.DebugInfos.Count + " textLen=" + output.Length);
+		var typeOutput = new SpCaptureOutput();
+		dec.Decompile(target.DeclaringType, typeOutput, new dnSpy.Contracts.Decompiler.DecompilationContext { CalculateILSpans = true });
+		Console.WriteLine("type-level:   debugInfos=" + typeOutput.DebugInfos.Count + " textLen=" + typeOutput.Length);
+		var head = output.ToString();
+		foreach (var l in head.Split('\n').Where(l => l.Contains("failed") || l.Contains("Exception")).Take(3))
+			Console.WriteLine("  !! " + l.TrimEnd());
+		Console.WriteLine("  | tail3: " + string.Join(" || ", head.Split('\n').Where(l => l.Trim().Length > 0).TakeLast(3).Select(l => l.Trim())));
+		foreach (var mdi in output.DebugInfos) {
+			Console.WriteLine("  mdi.Method=" + mdi.Method.FullName + " stmts=" + mdi.Statements.Length + " kind=" + mdi.StateMachineKind + " kickoff=" + (mdi.KickoffMethod?.FullName ?? "null") + " asyncInfo=" + (mdi.AsyncInfo is not null));
+			if (mdi.Statements.Length > 0 && Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1") {
+				var mod = ModuleDefMD.Load(targetDll);
+				var smt = target.DeclaringType.NestedTypes.FirstOrDefault(t => t.Name?.String?.StartsWith("<" + target.Name + ">") == true);
+				var mn = smt?.FindMethod("MoveNext");
+				if (mn?.Body is not null) {
+					var ins2 = mn.Body.Instructions;
+					for (int i = 0; i < ins2.Count; i++) {
+						if (ins2[i].Offset >= 0x88 && ins2[i].Offset <= 0xB5)
+							Console.WriteLine("    IL " + ins2[i].Offset.ToString("X4") + " " + ins2[i].OpCode + " " + (ins2[i].Operand?.ToString() ?? ""));
+					}
+				}
+			}
+		if (mdi.Statements.Length > 0) {
+				var first = mdi.Statements[0];
+				var last = mdi.Statements[mdi.Statements.Length - 1];
+				Console.WriteLine("    stmt IL span: 0x" + first.ILSpan.Start.ToString("X") + " .. 0x" + last.ILSpan.End.ToString("X"));
+			}
+		}
 		return 0;
 	}
 }

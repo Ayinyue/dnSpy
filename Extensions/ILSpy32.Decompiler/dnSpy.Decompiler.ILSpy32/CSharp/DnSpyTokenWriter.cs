@@ -154,8 +154,16 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			if (node is MethodDeclaration method) {
 				var methodDef = node.Annotation<MethodDef>();
 				if (methodDef?.Body is not null) {
-					methodBuilders.Push((new MethodDebugInfoBuilder(settingsVersion, StateMachineKind.None,
-						methodDef, null, Array.Empty<SourceLocal>(), null, null), methodDef));
+					var smInfo = Common.StateMachineDebugInfoDetector.TryDetect(methodDef);
+					var bodyMethod = smInfo?.BodyMethod ?? methodDef;
+					// The builder's subject is the state machine's MoveNext body (the AsyncStepInfo
+					// and sequence-point IL offsets address it), while the push pairing key stays
+					// the node's own annotation (the kickoff) - EndNode matches on that.
+					methodBuilders.Push((new MethodDebugInfoBuilder(settingsVersion, smInfo?.Kind ?? StateMachineKind.None,
+						bodyMethod, smInfo?.KickoffMethod,
+						Array.Empty<SourceLocal>(), null, smInfo?.AsyncInfo), methodDef));
+					// MethodSpans keeps the pairing key (the node's own annotation, matched in
+					// EndNode); consumers re-run TryDetect on it to get the MoveNext body.
 					MethodSpans.Add((methodDef, output.NextPosition, -1));
 				}
 			}

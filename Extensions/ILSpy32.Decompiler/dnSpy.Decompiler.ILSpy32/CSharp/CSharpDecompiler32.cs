@@ -252,11 +252,18 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 						var withStatements = new HashSet<MethodDef>();
 						try {
 							var sequencePoints = engine.CreateSequencePoints(tree);
+							if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1")
+								Console.Error.WriteLine("SPDIAG sps=" + sequencePoints.Count + " spans=" + tokenWriter.MethodSpans.Count + " root=" + string.Join(",", tree.Members.Select(m => m.GetType().Name)) + " mdAnn=" + string.Join(",", tree.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.MethodDeclaration>().Select(m => (m.Annotation<MethodDef>()?.Name ?? "null") + "/" + m.Name)));
 							if (sequencePoints.Count > 0) {
 								builders = new Dictionary<MethodDef, MethodDebugInfoBuilder>();
 								foreach (var (method, start, end) in tokenWriter.MethodSpans) {
-									var builder = new MethodDebugInfoBuilder(1, StateMachineKind.None,
-										method, null, Array.Empty<SourceLocal>(), null, null);
+									// The span key is the declared (kickoff) method; its state machine's
+									// MoveNext body is what the statement IL offsets address.
+									var smInfo = Common.StateMachineDebugInfoDetector.TryDetect(method);
+									var bodyMethod = smInfo?.BodyMethod ?? method;
+									var builder = new MethodDebugInfoBuilder(1, smInfo?.Kind ?? StateMachineKind.None,
+										bodyMethod, smInfo?.KickoffMethod,
+										Array.Empty<SourceLocal>(), null, smInfo?.AsyncInfo);
 									builder.StartPosition = start;
 									builder.EndPosition = end;
 									builder.Scope.Span = ILSpan.FromBounds(0, (uint)method.Body.GetCodeSize());
@@ -268,6 +275,9 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 									// methods that are not rendered and get skipped here.
 									if (function.CecilMethod is null || !(module.ResolveToken((uint)function.CecilMethod.MetadataToken.ToInt32()) is MethodDef method))
 										continue;
+									var smKey = Common.StateMachineDebugInfoDetector.TryDetect(method);
+									if (smKey?.BodyMethod is not null && !ReferenceEquals(smKey.BodyMethod, method))
+										method = smKey.BodyMethod;
 									if (builders == null || !builders.TryGetValue(method, out var builder))
 										continue;
 								// Debug locals: the engine's variables carry the IL slot index and
@@ -323,16 +333,23 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 							// engine's sequence points did - otherwise instructions between
 							// statements have no debugger highlight.
 							builders[method].CompactILSpans((uint)method.Body.GetCodeSize());
+							if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1")
+								Console.Error.WriteLine("ADDDBG stmt path method=" + method.Name);
 							output.AddDebugInfo(builders[method].Create());
 							continue;
 						}
-						var builder = new MethodDebugInfoBuilder(1, StateMachineKind.None,
-							method, null, Array.Empty<SourceLocal>(), null, null);
+						var smInfo2 = Common.StateMachineDebugInfoDetector.TryDetect(method);
+						var bodyMethod2 = smInfo2?.BodyMethod ?? method;
+						var builder = new MethodDebugInfoBuilder(1, smInfo2?.Kind ?? StateMachineKind.None,
+							bodyMethod2, smInfo2?.KickoffMethod,
+							Array.Empty<SourceLocal>(), null, smInfo2?.AsyncInfo);
 						builder.StartPosition = start;
 						builder.EndPosition = end;
-						builder.Scope.Span = ILSpan.FromBounds(0, (uint)method.Body.GetCodeSize());
-						builder.Add(new SourceStatement(new ILSpan(0, (uint)method.Body.GetCodeSize()),
+						builder.Scope.Span = ILSpan.FromBounds(0, (uint)bodyMethod2.Body.GetCodeSize());
+						builder.Add(new SourceStatement(new ILSpan(0, (uint)bodyMethod2.Body.GetCodeSize()),
 							TextSpan.FromBounds(start, end)));
+						if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1")
+							Console.Error.WriteLine("ADDDBG whole path method=" + method.Name);
 						output.AddDebugInfo(builder.Create());
 					}
 				}
@@ -342,6 +359,8 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				throw;
 			}
 			catch (Exception ex) {
+				if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1")
+					Console.Error.WriteLine("DECFAIL " + ex.GetType().Name + ": " + ex.Message + "\n" + ex.StackTrace);
 				WriteNote(output, "// ILSpy 3.2 decompilation failed: " + DescribeException(ex));
 				return;
 			}

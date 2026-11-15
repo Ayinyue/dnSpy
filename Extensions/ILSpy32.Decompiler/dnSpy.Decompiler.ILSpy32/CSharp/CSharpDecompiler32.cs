@@ -194,6 +194,8 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			return DnlibCecilBridge.TryGetMember(cecilModule, rawToken);
 		}
 
+		internal static readonly bool ProfEnabled = Environment.GetEnvironmentVariable("DNSPY_ILSPY32_PROF") == "1";
+
 		void DecompileCore(ModuleDef module, IDecompilerOutput output, DecompilationContext ctx,
 				Func<ICSharpCode.Decompiler.CSharp.CSharpDecompiler, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree> decompile,
 				Func<ICSharpCode.Decompiler.CSharp.CSharpDecompiler, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree>? fallbackDecompile = null,
@@ -219,7 +221,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					if (fallbackDecompile != null && !tree.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration>().Any()
 							&& !tree.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.NamespaceDeclaration>().Any())
 						tree = fallbackDecompile(engine);
-					var profSw = Environment.GetEnvironmentVariable("DNSPY_ILSPY32_PROF") == "1" ? System.Diagnostics.Stopwatch.StartNew() : null;
+					var profSw = ProfEnabled ? System.Diagnostics.Stopwatch.StartNew() : null;
 					StripCommentsInsideFieldDeclarations(tree);
 					// Definitions on the tree (the resolver reads them for colors/references),
 					// then the uncompilable compiler-generated attributes, then render. A binder

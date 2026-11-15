@@ -187,8 +187,6 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				nodeStack.Pop();
 		}
 
-		internal static long ResolveReferenceTicks;
-
 		public override void WriteIdentifier(Identifier identifier) {
 			var text = IdentifierEscaper.Escape(identifier.Name);
 			if (identifier.IsVerbatim || CSharpOutputVisitor.IsKeyword(identifier.Name, identifier))
@@ -210,10 +208,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			// A member or type reference: 'foo.Bar', a base type, an attribute type...
 			// NOTE: only the identifier's own parent is probed - outer expressions carry their
 			// own resolve results, which would miscolor plain parameter/local usages.
-			var profSw = Environment.GetEnvironmentVariable("DNSPY_ILSPY32_PROF") == "1" ? System.Diagnostics.Stopwatch.StartNew() : null;
 			var reference = ResolveReference(identifier.Parent ?? (AstNode)identifier) ?? ResolveReference(identifier);
-			if (profSw is not null)
-				ResolveReferenceTicks += profSw.ElapsedTicks;
 			if (reference != null) {
 				// lastColorPath was set inside ResolveReference (which sub-path resolved it)
 				EmitText(text, reference, DecompilerReferenceFlags.None, metadataTextColorProvider.GetColor(reference));
@@ -1376,15 +1371,28 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		/// GetCecil can throw for members outside the decompiled module (e.g. references into
 		/// assemblies that failed to resolve); a token writer must never kill a decompilation.
 		/// </summary>
+		Dictionary<ICSharpCode.Decompiler.TypeSystem.IMember, Mono.Cecil.MemberReference?>? cecilCache;
+
+		/// <summary>
+		/// Cached GetCecil: the engine's entityDict lookup takes a lock every call, and the
+		/// same members are re-resolved for every token that references them. The result is
+		/// deterministic per (typeSystem, member), so a per-writer cache is safe.
+		/// </summary>
 		Mono.Cecil.MemberReference? TryGetCecil(ICSharpCode.Decompiler.TypeSystem.IMember? member) {
 			if (member is null || typeSystem is null)
 				return null;
+			if (cecilCache is null)
+				cecilCache = new Dictionary<ICSharpCode.Decompiler.TypeSystem.IMember, Mono.Cecil.MemberReference?>();
+			if (cecilCache.TryGetValue(member, out var cached))
+				return cached;
+			Mono.Cecil.MemberReference? resolved = null;
 			try {
-				return typeSystem.GetCecil(member);
+				resolved = typeSystem.GetCecil(member);
 			}
 			catch {
-				return null;
 			}
+			cecilCache[member] = resolved;
+			return resolved;
 		}
 
 		Mono.Cecil.MemberReference? TryGetCecil(ICSharpCode.Decompiler.TypeSystem.ITypeDefinition? definition) {

@@ -32,11 +32,16 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 	/// </summary>
 	static class DnlibReferenceMapper {
 		/// <summary>Validated dnlib reference for a cecil reference, or null when unmappable.</summary>
+		internal static long ResolveTokenTicks;
+
 		public static IMemberRef? ToDnlib(ModuleDefMD module, Mono.Cecil.MemberReference? cecilMember) {
 			if (cecilMember is null)
 				return null;
+			var profSw = Environment.GetEnvironmentVariable("DNSPY_ILSPY32_PROF") == "1" ? System.Diagnostics.Stopwatch.StartNew() : null;
 			try {
 				var resolved = module.ResolveToken(new MDToken(cecilMember.MetadataToken.ToInt32())) as IMemberRef;
+				if (profSw is not null)
+					ResolveTokenTicks += profSw.ElapsedTicks;
 				if (resolved is not null && SameIdentity(resolved, cecilMember))
 					return resolved;
 			}

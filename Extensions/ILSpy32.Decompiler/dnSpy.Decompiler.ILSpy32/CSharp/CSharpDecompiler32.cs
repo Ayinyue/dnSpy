@@ -219,6 +219,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					if (fallbackDecompile != null && !tree.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration>().Any()
 							&& !tree.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.NamespaceDeclaration>().Any())
 						tree = fallbackDecompile(engine);
+					var profSw = Environment.GetEnvironmentVariable("DNSPY_ILSPY32_PROF") == "1" ? System.Diagnostics.Stopwatch.StartNew() : null;
 					StripCommentsInsideFieldDeclarations(tree);
 					// Definitions on the tree (the resolver reads them for colors/references),
 					// then the uncompilable compiler-generated attributes, then render. A binder
@@ -229,6 +230,10 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					catch {
 						// annotations stay absent; rendering continues
 					}
+					profSw?.Stop();
+					if (profSw is not null)
+						Console.Error.WriteLine("PROF binder=" + profSw.ElapsedMilliseconds + " ms");
+					profSw = Environment.GetEnvironmentVariable("DNSPY_ILSPY32_PROF") == "1" ? System.Diagnostics.Stopwatch.StartNew() : null;
 					RemoveUncompilableCompilerAttributes(tree);
 					// The 2.3 engine shows a 'Token: 0x... RID: ...' comment before every member
 					// declaration when ShowTokenAndRvaComments is on (the dnSpy default).
@@ -239,6 +244,10 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					tree.AcceptVisitor(new ICSharpCode.Decompiler.CSharp.OutputVisitor.CSharpOutputVisitor(
 						ICSharpCode.Decompiler.CSharp.OutputVisitor.TokenWriter.WrapInWriterThatSetsLocationsInAST(tokenWriter),
 						settings.EngineSettings.CSharpFormattingOptions));
+					profSw?.Stop();
+					if (profSw is not null)
+						Console.Error.WriteLine("PROF render=" + profSw.ElapsedMilliseconds + " ms");
+					profSw = Environment.GetEnvironmentVariable("DNSPY_ILSPY32_PROF") == "1" ? System.Diagnostics.Stopwatch.StartNew() : null;
 					// Debug info: statement-level IL<->text mapping. The engine's
 					// CreateSequencePoints walks the annotated AST (our token writer's ILocatable
 					// implementation gave every rendered node its line/column), pairing each
@@ -252,6 +261,9 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 						var withStatements = new HashSet<MethodDef>();
 						try {
 							var sequencePoints = engine.CreateSequencePoints(tree);
+							profSw?.Stop();
+							if (profSw is not null)
+								Console.Error.WriteLine("PROF sp=" + profSw.ElapsedMilliseconds + " ms");
 							if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1")
 								Console.Error.WriteLine("SPDIAG sps=" + sequencePoints.Count + " spans=" + tokenWriter.MethodSpans.Count + " root=" + string.Join(",", tree.Members.Select(m => m.GetType().Name)) + " mdAnn=" + string.Join(",", tree.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.MethodDeclaration>().Select(m => (m.Annotation<MethodDef>()?.Name ?? "null") + "/" + m.Name)));
 							if (sequencePoints.Count > 0) {

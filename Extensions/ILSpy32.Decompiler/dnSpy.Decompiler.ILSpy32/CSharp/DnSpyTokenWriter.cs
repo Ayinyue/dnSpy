@@ -187,6 +187,8 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				nodeStack.Pop();
 		}
 
+		internal static long ResolveReferenceTicks;
+
 		public override void WriteIdentifier(Identifier identifier) {
 			var text = IdentifierEscaper.Escape(identifier.Name);
 			if (identifier.IsVerbatim || CSharpOutputVisitor.IsKeyword(identifier.Name, identifier))
@@ -208,7 +210,10 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			// A member or type reference: 'foo.Bar', a base type, an attribute type...
 			// NOTE: only the identifier's own parent is probed - outer expressions carry their
 			// own resolve results, which would miscolor plain parameter/local usages.
+			var profSw = Environment.GetEnvironmentVariable("DNSPY_ILSPY32_PROF") == "1" ? System.Diagnostics.Stopwatch.StartNew() : null;
 			var reference = ResolveReference(identifier.Parent ?? (AstNode)identifier) ?? ResolveReference(identifier);
+			if (profSw is not null)
+				ResolveReferenceTicks += profSw.ElapsedTicks;
 			if (reference != null) {
 				// lastColorPath was set inside ResolveReference (which sub-path resolved it)
 				EmitText(text, reference, DecompilerReferenceFlags.None, metadataTextColorProvider.GetColor(reference));
@@ -736,9 +741,22 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			return null;
 		}
 
+		Dictionary<TypeDef, Dictionary<string, IMemberDef?>>? memberLookupCache;
+
+		/// <summary>
+		/// Per-type member lookup cache: large types (100+ members) render hundreds of tokens
+		/// that each resolve through this, and a linear scan per token turns the whole render
+		/// into O(tokens x members) - the profiled hot spot (WpfHexViewImpl: 9.8x the 2.3 time).
+		/// </summary>
 		IMemberDef? FindEnclosingTypeMember(string name) {
 			foreach (var node in nodeStack) {
 				if (node is CS.TypeDeclaration typeDecl && typeDecl.Annotation<TypeDef>() is { } typeDef) {
+					if (memberLookupCache is null)
+						memberLookupCache = new Dictionary<TypeDef, Dictionary<string, IMemberDef?>>();
+					if (!memberLookupCache.TryGetValue(typeDef, out var nameMap))
+						memberLookupCache[typeDef] = nameMap = new Dictionary<string, IMemberDef?>(StringComparer.Ordinal);
+					if (nameMap.TryGetValue(name, out var cached))
+						return cached;
 					IMemberDef? found = typeDef.Methods.FirstOrDefault(m => m.Name == name);
 					if (found is null)
 						found = typeDef.Properties.FirstOrDefault(p => p.Name == name);
@@ -752,6 +770,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 							}
 						}
 					}
+					nameMap[name] = found;
 					return found;
 				}
 			}

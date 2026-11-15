@@ -295,6 +295,27 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			// handled: the value of a compound assignment cannot be expressed this way.
 			// Statement positions must keep the normal path, including unbraced bodies such
 			// as "if (c) x = y;": hoisting there would make the assignment unconditional.
+			// Compound assignments ('+=', '-=', ...) fold an operator call: the engine's
+			// resolve result on the assignment node carries the op_/Concat method the same
+			// way a binary expression does - attach it so the 2.3 engine's operator-token
+			// reference also renders on the compound token.
+			if (op != AssignmentOperatorType.Assign) {
+				// The operator resolve result sits first but carries no method for the folded
+				// string Concat (udom=null); the invocation resolve result behind it does.
+				ICSharpCode.Decompiler.TypeSystem.IMethod? compoundMethod =
+					assignmentExpression.Annotation<ICSharpCode.Decompiler.Semantics.OperatorResolveResult>()?.UserDefinedOperatorMethod
+					?? assignmentExpression.Annotation<ICSharpCode.Decompiler.CSharp.Resolver.CSharpInvocationResolveResult>()?.Member as ICSharpCode.Decompiler.TypeSystem.IMethod;
+				if (compoundMethod is not null) {
+					var compoundRef = ToDnlibRef(TryGetCecilRef(compoundMethod));
+					if (compoundRef is null && module is ModuleDefMD compoundMd &&
+							compoundMethod.DeclaringType is not null)
+						compoundRef = Common.DnlibReferenceMapper.FindMemberRefInTable(compoundMd,
+							compoundMethod.DeclaringType.FullName, compoundMethod.Name);
+					if (compoundRef is not null)
+						expr.AddAnnotation(compoundRef);
+				}
+			}
+
 			if (op == AssignmentOperatorType.Assign
 					&& !(assignmentExpression.Parent is CS.Statement)
 					&& CanHoistAssignment(assignmentExpression)
@@ -774,7 +795,32 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					throw new Exception("Invalid value for BinaryOperatorType: " + binaryOperatorExpression.Operator);
 			}
 
-			return EndNode(binaryOperatorExpression, new BinaryOperatorExpression(left, op, right));
+			var binOp = new BinaryOperatorExpression(left, op, right);
+			// User-defined operators (op_Inequality, op_Addition on delegates, ...): the
+			// 2.3 engine attached the operator method to the expression, and its formatter
+			// emitted it on the operator token - the same shape the C# token writer has.
+			// String concatenation binds to a synthetic operator without metadata; leave it
+			// to the formatter's delegate/string branches.
+			// User-defined operator comparisons/arithmetic: the engine tree keeps the op_
+			// call as an InvocationExpression (the C# output layer folds it back to the
+			// operator), so the resolve result is a CSharpInvocationResolveResult; a real
+			// operator expression carries OperatorResolveResult.UserDefinedOperatorMethod.
+			// The 2.3 engine attached the op_ method's MemberRef to the operator token;
+			// external declaring types (string, TimeSpan) fail the cecil bridge - the op_
+			// method lives in the module's own MemberRef table (2.3 emitted MemberRefMD).
+			ICSharpCode.Decompiler.TypeSystem.IMethod? operatorMethod =
+				binaryOperatorExpression.Annotation<ICSharpCode.Decompiler.Semantics.OperatorResolveResult>()?.UserDefinedOperatorMethod
+				?? binaryOperatorExpression.Annotation<ICSharpCode.Decompiler.CSharp.Resolver.CSharpInvocationResolveResult>()?.Member as ICSharpCode.Decompiler.TypeSystem.IMethod;
+			if (operatorMethod is not null) {
+				var operatorRef = ToDnlibRef(TryGetCecilRef(operatorMethod));
+				if (operatorRef is null && module is ModuleDefMD operatorMd &&
+						operatorMethod.DeclaringType is not null)
+					operatorRef = Common.DnlibReferenceMapper.FindMemberRefInTable(operatorMd,
+						operatorMethod.DeclaringType.FullName, operatorMethod.Name);
+				if (operatorRef is not null)
+					binOp.AddAnnotation(operatorRef);
+			}
+			return EndNode(binaryOperatorExpression, binOp);
 		}
 
 		bool IsReferentialEquality(CS.BinaryOperatorExpression binaryOperatorExpression)
@@ -914,6 +960,14 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			}
 			AppendExplicitTypeArgumentsIfNeeded(identifierExpression, qualified);
 			if (provider.IsMethodGroup(identifierExpression)) {
+				// Method group passed as an argument ('AddressOf TimerHandler...'): the 2.3
+				// engine attached the method reference to the name. The resolve chain yields
+				// nothing for these (no invocation yet); the enclosing type's member match is
+				// the same navigation reference.
+				if (!identifier.Annotations.OfType<dnlib.DotNet.IMemberDef>().Any() &&
+						FindCurrentTypeMember(identifier.Name) is { } methodGroupMember &&
+						methodGroupMember is MethodDef or PropertyDef or EventDef)
+					identifier.AddAnnotation(methodGroupMember);
 				return EndNode(identifierExpression, new UnaryOperatorExpression(UnaryOperatorType.AddressOf, qualified));
 			}
 
@@ -1084,6 +1138,12 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				// includes the implicit this, matching dnlib MethodDef.Parameters).
 				if (ilv.Index >= 0 && ilv.Index < method.Parameters.Count)
 					return method.Parameters[ilv.Index];
+				// A lambda parameter belongs to the compiled lambda method, not the host
+				// method - the 2.3 engine attached that hidden method's dnlib Param, so the
+				// declaration highlights together with its usages and navigates there.
+				var lambdaParam = ResolveLambdaParameter(ilv);
+				if (lambdaParam is not null)
+					return lambdaParam;
 				return null;
 			}
 			if ((ilv.Kind == ICSharpCode.Decompiler.IL.VariableKind.Local ||
@@ -1249,8 +1309,66 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		object? ResolveParameterAnnotation(CS.ParameterDeclaration parameterDeclaration) {
 			if (FindEnclosingMethod(parameterDeclaration)?.Parameters.FirstOrDefault(p => p.Name == parameterDeclaration.Name) is { } parameter)
 				return parameter;
+			// Lambda parameters: resolve through the compiled lambda method's dnlib Param.
+			// The engine hangs an ILVariableResolveResult on lambda parameters (MakeParameters).
+			var ilv = parameterDeclaration.Annotation<ICSharpCode.Decompiler.IL.ILVariable>()
+				?? (parameterDeclaration.Annotation<ICSharpCode.Decompiler.Semantics.ResolveResult>() as ICSharpCode.Decompiler.CSharp.ILVariableResolveResult)?.Variable;
+			if (ilv is not null) {
+				var lambdaParam = ResolveLambdaParameter(ilv);
+				if (lambdaParam is not null)
+					return lambdaParam;
+			}
+			// Lambdas inside field initializers have no enclosing method (no MethodDef in the
+			// ancestor chain), but the LambdaExpression itself carries the engine's ILFunction
+			// annotation (WithILInstruction) - the same compiled-method mapping by position.
+			if (parameterDeclaration.Parent is CS.LambdaExpression lambdaExpr &&
+					lambdaExpr.Annotation<ICSharpCode.Decompiler.IL.ILFunction>() is { } lambdaFn2 &&
+					lambdaFn2.CecilMethod is { } cecilLambda2 &&
+					module.ResolveToken(new MDToken(cecilLambda2.MetadataToken.ToInt32())) is MethodDef lambdaDef2) {
+				var position = 0;
+				var found2 = false;
+				foreach (var pd in lambdaExpr.Parameters) {
+					if (pd == parameterDeclaration) {
+						found2 = true;
+						break;
+					}
+					position++;
+				}
+				position += lambdaDef2.HasThis ? 1 : 0;
+				if (found2 && position < lambdaDef2.Parameters.Count)
+					return lambdaDef2.Parameters[position];
+			}
 			return BoxedTextColor.Parameter;
 		}
+
+		/// <summary>
+		/// The dnlib Param of the compiled lambda method for a lambda's ILVariable - cached
+		/// per variable so the declaration and every usage share one reference instance
+		/// (dnSpy matches references by identity/SigComparer for highlight grouping).
+		/// </summary>
+		dnlib.DotNet.Parameter? ResolveLambdaParameter(ICSharpCode.Decompiler.IL.ILVariable ilv) {
+			if (ilv.Kind != ICSharpCode.Decompiler.IL.VariableKind.Parameter || ilv.Index < 0)
+				return null;
+			if (lambdaParameters is null)
+				lambdaParameters = new Dictionary<ICSharpCode.Decompiler.IL.ILVariable, dnlib.DotNet.Parameter>();
+			if (lambdaParameters.TryGetValue(ilv, out var cached))
+				return cached;
+			dnlib.DotNet.Parameter? found = null;
+			// ILFunction.CecilMethod is the compiled lambda method (<M>b__N) - a real module
+			// method. dnlib's Parameters include the hidden this at index 0 for instance
+			// methods, while the engine's lambda parameter index counts only the explicit
+			// parameters - shift by one when the method is instance.
+			if (ilv.Function?.CecilMethod is { } cecilLambda &&
+					module.ResolveToken(new MDToken(cecilLambda.MetadataToken.ToInt32())) is MethodDef lambdaDef) {
+				var paramIndex = ilv.Index + (lambdaDef.HasThis ? 1 : 0);
+				if (paramIndex >= 0 && paramIndex < lambdaDef.Parameters.Count)
+					found = lambdaDef.Parameters[paramIndex];
+			}
+			lambdaParameters[ilv] = found;
+			return found;
+		}
+
+		Dictionary<ICSharpCode.Decompiler.IL.ILVariable, dnlib.DotNet.Parameter>? lambdaParameters;
 
 		/// <summary>
 		/// Metadata definition the binder attached to an entity declaration; the output stage
@@ -1418,10 +1536,61 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				expr = ConvertToSpecialChar((char)primitiveExpression.Value);
 			else if (primitiveExpression.Value is long && (long)primitiveExpression.Value == long.MinValue)
 				expr = CreateLongMinValueReference();
+			else if (primitiveExpression.Value is double infinity
+					&& (double.IsInfinity(infinity) || double.IsNaN(infinity))) {
+				// The 3.2 engine folds double.PositiveInfinity/NegativeInfinity/NaN corlib
+				// constants into primitive expressions; the VB output visitor then renders the
+				// value as Double.PositiveInfinity with no references. The 2.3 engine kept the
+				// member-access shape with the field reference - synthesize the same here.
+				expr = CreateInfinityMemberAccess(infinity);
+			}
+			else if (primitiveExpression.Value is float singleInfinity
+					&& (float.IsInfinity(singleInfinity) || float.IsNaN(singleInfinity))) {
+				expr = CreateInfinityMemberAccess(singleInfinity);
+			}
 			else
 				expr = new PrimitiveExpression(primitiveExpression.Value);
 
 			return EndNode(primitiveExpression, expr);
+		}
+
+		/// <summary>
+		/// Double.PositiveInfinity / Single.NaN shape for the folded corlib constants: a
+		/// member access whose target primitive keyword carries the corlib TypeRef and whose
+		/// field name carries a FieldRefUser - the same references the 2.3 engine emitted
+		/// (the keyword navigates to the corlib type, the name to the field).
+		/// </summary>
+		Expression CreateInfinityMemberAccess(object value) {
+			bool isDouble = value is double;
+			string keywordName = isDouble ? "Double" : "Single";
+			string fieldName;
+			if (value is double dd) {
+				if (double.IsPositiveInfinity(dd))
+					fieldName = "PositiveInfinity";
+				else if (double.IsNegativeInfinity(dd))
+					fieldName = "NegativeInfinity";
+				else
+					fieldName = "NaN";
+			}
+			else {
+				var ff = (float)value;
+				if (float.IsPositiveInfinity(ff))
+					fieldName = "PositiveInfinity";
+				else if (float.IsNegativeInfinity(ff))
+					fieldName = "NegativeInfinity";
+				else
+					fieldName = "NaN";
+			}
+			var typeRef = module.CorLibTypes.GetTypeRef("System", isDouble ? "Double" : "Single");
+			var fieldRef = new MemberRefUser(module, fieldName,
+				new FieldSig(isDouble ? module.CorLibTypes.Double : module.CorLibTypes.Single), typeRef);
+			var target = new PrimitiveType(keywordName);
+			target.AddAnnotation(typeRef);
+			target.AddAnnotation(BoxedTextColor.Keyword);
+			return new MemberAccessExpression {
+				Target = new TypeReferenceExpression(target),
+				MemberName = Identifier.Create(new object[] { fieldRef, BoxedTextColor.InstanceField }, fieldName),
+			};
 		}
 
 		Expression CreateLongMinValueReference()
@@ -3173,8 +3342,21 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 					MemberName = identifier = new Identifier(BoxedTextColor.Keyword, "New", ICSharpCode.NRefactory.TextLocation.Empty)
 				}
 			);
-			var ctor = constructorInitializer.Annotation<dnlib.DotNet.IMethod>();
-			instExpr.AddAnnotation(ctor?.DeclaringType);
+			// The engine's ConvertConstructorCallIntoInitializer copies the invocation's
+			// annotations onto the initializer, so the ctor resolves through the same chain
+			// as a call target. Fall back to the enclosing type's base type / default ctor
+			// when the resolver yields nothing - the 2.3 engine emitted the base type
+			// reference on MyBase and the ctor reference on New.
+			var ctor = constructorInitializer.Annotation<dnlib.DotNet.IMethod>()
+				?? ResolveDnlibReference(constructorInitializer) as dnlib.DotNet.IMethod;
+			var enclosingType = FindEnclosingType(constructorInitializer);
+			if (ctor is null && constructorInitializer.ConstructorInitializerType == CS.ConstructorInitializerType.Base)
+				ctor = (enclosingType?.BaseType.Resolve() as TypeDef)?.Methods
+					.FirstOrDefault(m => m.IsConstructor && m.Parameters.Count == constructorInitializer.Arguments.Count);
+			instExpr.AddAnnotation(ctor?.DeclaringType
+				?? (constructorInitializer.ConstructorInitializerType == CS.ConstructorInitializerType.Base
+					? (object?)enclosingType?.BaseType.Resolve()
+					: (object?)enclosingType));
 			identifier.AddAnnotation(ctor);
 			CopyAnnotations(constructorInitializer, instExpr);
 			ConvertNodes(constructorInitializer.Arguments, result.Arguments);
@@ -4937,8 +5119,13 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				? mappedName
 				: variableInitializer.Name;
 			object? declaratorAnnotation = null;
-			if (variableInitializer.Parent is CS.FieldDeclaration fieldDecl)
+			if (variableInitializer.Parent is CS.FieldDeclaration fieldDecl) {
 				declaratorAnnotation = ResolveDefinitionNameAnnotation(fieldDecl);
+				// Multi-declarator statements match by name: the declaration-level FieldDef
+				// only fits its first variable.
+				if (declaratorAnnotation is FieldDef namedField && namedField.Name != variableInitializer.Name)
+					declaratorAnnotation = FindCurrentTypeMember(variableInitializer.Name);
+			}
 			// Local declaration names carry the dnlib Local (or the synthesized hoisted
 			// SourceLocal) so dnSpy highlights the declaration together with its usages.
 			var localDeclRef = ResolveLocalDeclarationRef(variableInitializer);
@@ -4982,10 +5169,6 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		public AstNode VisitSimpleType(CS.SimpleType simpleType, object data)
 		{
 			var resolvedSimpleRef = ResolveDnlibReference(simpleType) ?? ResolveTypeNameFallback(simpleType);
-			if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1" && simpleType.Identifier == "TabService") {
-				var trr = simpleType.Annotation<ICSharpCode.Decompiler.Semantics.TypeResolveResult>();
-				Console.Error.WriteLine("VBSIMPLE name=TabService dnlibRef=" + (resolvedSimpleRef?.GetType().Name ?? "null") + " trr=" + (trr is not null ? trr.Type?.FullName + "/def=" + (trr.Type?.GetDefinition() != null) : "none"));
-			}
 			var type = new SimpleType(
 				ComposeAnnotations(resolvedSimpleRef, simpleType.IdentifierToken.Annotations), simpleType.Identifier);
 			// The output stage reads member references from the nodeStack's current node (the

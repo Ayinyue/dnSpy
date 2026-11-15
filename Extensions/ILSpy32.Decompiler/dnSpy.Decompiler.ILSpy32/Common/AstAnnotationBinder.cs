@@ -250,6 +250,17 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 					eventDeclaration.AddAnnotation(eventDef);
 			}
 
+			// Field declaration names: the variable initializer reads the FieldDeclaration's
+			// FieldDef for the definition reference on the declared name (2.3 emitted
+			// FieldDefMD there). Multi-declarator statements match per name in the converter.
+			foreach (var field in declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.FieldDeclaration>()) {
+				foreach (var variable in field.Variables) {
+					var fieldDef = typeDef.Fields.FirstOrDefault(f => f.Name == variable.Name);
+					if (fieldDef is not null)
+						field.AddAnnotation(fieldDef);
+				}
+			}
+
 			// Field-like events ("public event EventHandler Changed;") are EventDeclaration nodes,
 			// and the Implements clause for them needs the EventDef just as much. They have no
 			// private-implementation syntax (explicit interface events always carry accessors,

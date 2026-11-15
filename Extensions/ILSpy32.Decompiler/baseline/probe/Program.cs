@@ -790,7 +790,12 @@ class Probe {
 
 	static int SpDumpLang(string[] args) {
 		var dnspyBin = args[2];
-		var dec = args.Length > 4 && args[4] == "vb" ? Create32VB(dnspyBin) : Create32CSharp(dnspyBin);
+		// Engine selectors: vb (3.2 VB), 23 (2.3 C#), 23vb (2.3 VB), default 3.2 C# - the
+		// hoistcheck comparison needs both engines on the same sample.
+		var dec = args.Length > 4 && args[4] == "vb" ? Create32VB(dnspyBin)
+			: args.Length > 4 && args[4] == "23" ? Create23(dnspyBin, "CSharp")
+			: args.Length > 4 && args[4] == "23vb" ? Create23(dnspyBin, "VisualBasic")
+			: Create32CSharp(dnspyBin);
 		spDumpCalculateILSpans = Environment.GetEnvironmentVariable("M3PROBE_CALC_SP") != "0";
 		return SpDump(args[1], dnspyBin, args[3], dec);
 	}

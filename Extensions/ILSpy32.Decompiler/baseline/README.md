@@ -977,3 +977,16 @@ probe 的 `UseWPF=true` 是为了加载 2.3 core（它引用 WPF）。
 IL `diffLines=0`；C# 226 行、VB 110 行为**既定的 token 级对齐口径**内的差异
 （成员顺序、自动属性是否展开），不是回归；Mixed 的差异是叠加行粒度（见
 `docs/ILAst-Mixed-3.2.md` 第 5 节）。
+
+## verify-all（一条命令的验收编排）
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File Extensions\ILSpy32.Decompiler\baseline\verify-all.ps1
+```
+
+依次：重建引擎 / 扩展 / probe → 跑 `engine-tests`、`settings-wiring`、`ilast-verify`、
+`mixed-verify`（硬门）、`bench`（软门，机器相关）、`lang-diff`（软门，报告与 2.3 的差异）→
+把报告写到 `baseline/out/verify-<时间戳>.txt`，硬门失败时退出码 1。`-NoBuild` 跳过重建。
+
+`engine-tests`/`bench` 需要 2.3 对照程序集；存在时脚本会设 `PROBE_ILSPY23_DIR` 指向
+`baseline/ilspy23`，不存在则这些模式 SKIP（不影响退出码）。

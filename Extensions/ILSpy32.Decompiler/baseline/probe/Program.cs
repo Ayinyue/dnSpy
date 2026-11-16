@@ -7,7 +7,10 @@ using dnlib.DotNet.Emit;
 using dnlib.DotNet.Writer;
 
 class Probe {
+	static string? ilspy23DirOverride;
+
 	static int Main(string[] args) {
+		ilspy23DirOverride = Environment.GetEnvironmentVariable("PROBE_ILSPY23_DIR");
 		if (args.Length > 0 && args[0] == "make")
 			return MakeReproAssembly(args[1]);
 		if (args.Length > 0 && args[0] == "decompile")
@@ -691,7 +694,14 @@ class Probe {
 	}
 
 	static dnSpy.Contracts.Decompiler.IDecompiler Create23(string dnspyBin, string kindNs) {
-		var coreAsm = System.Reflection.Assembly.LoadFrom(Path.Combine(dnspyBin, "dnSpy.Decompiler.ILSpy.Core.dll"));
+		// M4 之后 2.3 不再进 dnSpy bin；可用 PROBE_ILSPY23_DIR 指向重建的 2.3 产物目录。
+		var dir = ilspy23DirOverride ?? dnspyBin;
+		var corePath = Path.Combine(dir, "dnSpy.Decompiler.ILSpy.Core.dll");
+		if (!File.Exists(corePath)) {
+			Console.WriteLine($"SKIP: {corePath} not found (the 2.3 extension is no longer built, M4).");
+			Environment.Exit(2);
+		}
+		var coreAsm = System.Reflection.Assembly.LoadFrom(corePath);
 		var providerType = coreAsm.GetType($"dnSpy.Decompiler.ILSpy.Core.{kindNs}.DecompilerProvider", throwOnError: true)!;
 		var list = CreateVia(providerType).ToList();
 		return Pick(list, wantCs: kindNs == "CSharp");
@@ -1615,6 +1625,12 @@ class Probe {
 	/// (the display path).
 	/// </summary>
 	static int Bench(string targetDll, string dnspyBin, int sampleCount) {
+		// bench 的一半是 2.3 对照；M4 后 2.3 不再进 bin，可用 PROBE_ILSPY23_DIR 指定。
+		if (!File.Exists(Path.Combine(ilspy23DirOverride ?? dnspyBin, "dnSpy.Decompiler.ILSpy.Core.dll"))) {
+			Console.WriteLine("SKIP: dnSpy.Decompiler.ILSpy.Core.dll not found (the 2.3 extension is no longer built, M4).");
+			return 2;
+		}
+		InstallBinResolver(ilspy23DirOverride is null ? new[] { dnspyBin } : new[] { dnspyBin, ilspy23DirOverride });
 		var module = ModuleDefMD.Load(targetDll);
 		var allTypes = new System.Collections.Generic.List<TypeDef>();
 		void Collect(System.Collections.Generic.IEnumerable<TypeDef> list) {

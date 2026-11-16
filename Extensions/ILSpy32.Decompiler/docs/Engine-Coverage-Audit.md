@@ -170,19 +170,25 @@
 
 | 类型（dnSpy.Contracts.Logic） | C# diff | VB diff | IL diff | token 数 2.3/3.2 |
 |---|---|---|---|---|
-| `MethodDebugInfoBuilder` | 226 行 | 110 行 | **0** | 28 / 28 |
-| `MethodDebugInfo` | 290 行 | 231 行 | 4 行 | 27 / 27 |
-| `MethodDebugScope` | 76 行 | 63 行 | **0** | 12 / 12 |
+| `MethodDebugInfoBuilder` | 168 行 | 106 行 | **0** | 28 / 28 |
+| `MethodDebugInfo` | — | — | 4 行 | 27 / 27 |
+| `MethodDebugScope` | — | — | **0** | 12 / 12 |
+
+期间又修掉两项（2026-11-17）：
+- **自动属性折叠**：2.3（NRefactory）把全空访问器列表折成一行 `{ get; set; }`；3.2 的
+  `CSharpOutputVisitor` 一直忽略 `AutoPropertyFormatting`。已实现（`ForceOneLine`，即 2.3 的
+  `SingleLine`），并把折叠属性的 `(get)`/`(set)` 注释移到声明上方（与 2.3 一致；VB 侧显式关闭，
+  因为 VB 没有自动属性语法）。C# token 注释的 RVA/File Offset 段也一并修好——dnlib 的
+  `MethodDef.RVA` 是 `dnlib.PE.RVA` 结构，`{...:X8}` 会抛异常被吞掉，导致 3.2 的 RVA 段
+  一直是空的（现在 C# 16/16 与 2.3 相同）。
+- 结论：C# 差异 226 → **168** 行，全部为成员顺序与属性/访问器注释位置。
 
 结论：
 - **token 集合与数量逐一相同**——C#/VB 的差异是**形态**而非引用缺失，符合项目既定的
   「token 级对齐」口径（见 §3），不是回归。
 - **两类系统性形态差异**：
   1. **成员顺序**：字段/属性/方法的排列与 2.3 不同（同一集合）。
-  2. **自动属性折叠**：2.3 把 `{ get; set; }` 写成一行（样本中 4/7/5 处），3.2 一律写成
-     多行（`get;`/`set;` 各占一行，访问器无函数体，语义等价）。3.2 的引擎输出访问器
-     （`CSharpOutputVisitor.VisitPropertyDeclaration`）总是 `OpenBrace` 换行；折叠需要改引擎
-     并处理访问器 token 注释的位置，风险高于收益，暂不动。
+  2. **自动属性折叠**：✅ 已修（见上）。剩余的相关差异是属性/访问器注释的位置。
 - **Mixed**：类型级已补上 C# 叠加（本轮修复），剩余差异是叠加行粒度（3.2 的语句级
   sequence point 更细），见 `docs/ILAst-Mixed-3.2.md` 第 5 节。
 - **IL 视图**：抽样中逐字一致，**唯一系统性例外**是 `ldelem.any`（0xA3）：2.3（dnlib 版）印 `ldelem`，3.2（cecil 版）印 `ldelem.any`——`MethodDebugInfo` 样本的 4 行差异全是这一处（语义相同，cecil/现代 dnSpy 的写法）。

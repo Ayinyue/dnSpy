@@ -91,6 +91,10 @@ class Probe {
 			InstallBinResolver(new[] { args[2] });
 			return AsyncProbe(args[1], args[2], args[3]);
 		}
+		if (args.Length > 0 && args[0] == "ilast-verify") {
+			InstallBinResolver(new[] { args[3] });
+			return ILAstVerify(args[1], args[2], args[3]);
+		}
 		if (args.Length > 0 && args[0] == "colordump") {
 			// Install the resolver BEFORE dispatching: the JIT of ColorDump needs dnlib and the
 			// contracts, and with Private=false references those come only from this handler.
@@ -113,6 +117,57 @@ class Probe {
 			}
 			return null;
 		};
+	}
+
+	// ==== ilast-verify: the console's output discards custom data, so the only way to see the
+	// ILAst writer's brace pairs and debug info is a recording IDecompilerOutput. The language
+	// classes are internal to the extension, so they are created through reflection.
+	static int ILAstVerify(string targetDll, string tokenHex, string dnspyBin) {
+		var module = ModuleDefMD.Load(targetDll);
+		var token = int.Parse(tokenHex, System.Globalization.NumberStyles.HexNumber);
+		var method = module.ResolveToken(token) as MethodDef;
+		if (method is null) {
+			Console.WriteLine("no method for token " + tokenHex);
+			return 1;
+		}
+		var extAsm = System.Reflection.Assembly.LoadFrom(Path.Combine(dnspyBin, "dnSpy.Decompiler.ILSpy32.x.dll"));
+		var langType = extAsm.GetType("dnSpy.Decompiler.ILSpy32.ILAst.ILAstDecompiler32", true);
+		var lang = (dnSpy.Contracts.Decompiler.IDecompiler)Activator.CreateInstance(langType, new object[] { "ILAst (ILSpy 3.2)" });
+		var output = new RecordingOutput();
+		lang.Decompile(method, output, new dnSpy.Contracts.Decompiler.DecompilationContext { CalculateILSpans = true });
+		Console.WriteLine("method=" + method.FullName);
+		Console.WriteLine("text=" + output.Text.Length + " chars, lines=" + output.Text.Split('\n').Length);
+		Console.WriteLine("braces=" + output.Braces.Count);
+		foreach (var b in output.Braces.Take(6))
+			Console.WriteLine("  " + b);
+		Console.WriteLine("debugInfo=" + (output.DebugInfo is null ? "none" : "statements=" + output.DebugInfo.Statements.Length));
+		return output.Braces.Count > 0 && output.DebugInfo is not null ? 0 : 1;
+	}
+
+	sealed class RecordingOutput : dnSpy.Contracts.Decompiler.IDecompilerOutput {
+		public readonly System.Text.StringBuilder Sb = new System.Text.StringBuilder();
+		public readonly System.Collections.Generic.List<string> Braces = new System.Collections.Generic.List<string>();
+		public dnSpy.Contracts.Decompiler.MethodDebugInfo DebugInfo;
+
+		public string Text => Sb.ToString();
+		public int Length => Sb.Length;
+		public int NextPosition => Sb.Length;
+		public bool UsesCustomData => true;
+
+		public void IncreaseIndent() { }
+		public void DecreaseIndent() { }
+		public void WriteLine() => Sb.AppendLine();
+		public void Write(string text, object color) => Sb.Append(text);
+		public void Write(string text, int index, int length, object color) => Sb.Append(text, index, length);
+		public void Write(string text, object reference, dnSpy.Contracts.Decompiler.DecompilerReferenceFlags flags, object color) => Sb.Append(text);
+		public void Write(string text, int index, int length, object reference, dnSpy.Contracts.Decompiler.DecompilerReferenceFlags flags, object color) => Sb.Append(text, index, length);
+
+		public void AddCustomData<TData>(string id, TData data) {
+			if (id == dnSpy.Contracts.Decompiler.PredefinedCustomDataIds.CodeBracesRange && data is dnSpy.Contracts.Decompiler.CodeBracesRange range)
+				Braces.Add(range.Left.Start + ".." + range.Right.Start + " " + range.Flags);
+			else if (id == dnSpy.Contracts.Decompiler.PredefinedCustomDataIds.DebugInfo && data is dnSpy.Contracts.Decompiler.MethodDebugInfo debugInfo)
+				DebugInfo = debugInfo;
+		}
 	}
 
 	// ==== text dump honoring the IDecompilerOption contract: flip ShowTokenAndRvaComments

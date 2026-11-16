@@ -43,6 +43,24 @@ dotnet build ICSharpCode.Decompiler/ICSharpCode.Decompiler.csproj -c Release
 | `Disassembler/ReflectionDisassembler.cs` | 同上 |
 | `CSharp/Transforms/IntroduceUsingDeclarations.cs` | 跳过不在 `RequiredNamespacesSuperset` 中的命名空间，避免桥接场景下 `Debug.Assert` 崩溃 |
 
+## dnSpy 视图所需的 public API（ILAst / Mixed）
+
+3.2 的 `ICSharpCode.Decompiler.IL` 已是 2.3 `ILAst` 的后继实现（`ILReader` → `ILFunction`，
+`CSharpDecompiler.GetILTransforms()` 跑优化，`ILInstruction.WriteTo(ITextOutput, ILAstWritingOptions)`
+输出 ILAst 文本），因此 ILAst/Mixed 不需要移植 2.3 的 ILAst 管线，只需补齐 dnSpy 侧消费所需的
+API（均为增量、默认无行为变化）：
+
+- `Output/CodeBracesRangeFlags.cs`：括号对标志枚举，数值与 `dnSpy.Contracts.Decompiler.CodeBracesRangeFlags` 一致；
+- `Output/ITextOutput.cs`：新增 `int NextPosition { get; }` 与
+  `void AddCodeBracesRange(int start, int end, CodeBracesRangeFlags flags)`；
+- `IL/ILAstWritingOptions.cs`：新增 `WriteCodeBracesRanges`（默认 false）与 `DebugInfoWriter`；
+- `IL/ILAstDebugInfoWriter.cs`：`WriteStatement(Interval, int textStart, int textEnd)`，
+  由 `Block.WriteTo` 逐指令回调；
+- `IL/Instructions/{Block,BlockContainer,ILFunction}.cs`：启用开关时输出括号对
+  （容器映射 Loop/Switch braces，方法体映射 MethodBraces）。
+
+详见 `docs/ILAst-Mixed-3.2.md`。
+
 ## 产物
 
 ```

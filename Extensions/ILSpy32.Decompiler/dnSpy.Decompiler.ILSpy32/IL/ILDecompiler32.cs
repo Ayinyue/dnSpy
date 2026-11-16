@@ -330,7 +330,7 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 	/// <see cref="InstructionReference"/> (method + instruction) to be clickable, so the body
 	/// disassembly is wrapped to resolve the body's method and index its instructions by offset.
 	/// </summary>
-	sealed class BodyTrackingMethodBodyDisassembler : MethodBodyDisassembler {
+	class BodyTrackingMethodBodyDisassembler : MethodBodyDisassembler {
 		readonly ModuleDef module;
 		MethodDef? currentMethod;
 		Dictionary<int, DnlibInstruction>? instructionMap;
@@ -418,6 +418,13 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 		internal BodyTrackingMethodBodyDisassembler? BodyTracker { get; set; }
 
 		/// <summary>
+		/// Whether matching delimiters at the start of a line are reported as brace pairs.
+		/// The IL view relies on this (the 3.2 disassembler writes no brace metadata); the
+		/// ILAst view turns it off because the engine's ILAst writer emits its own ranges.
+		/// </summary>
+		internal bool TrackDelimiters { get; set; } = true;
+
+		/// <summary>
 		/// Per-instruction output ranges collected during a body write, for the IL view's
 		/// debug info (the 2.3 engine built one statement per instruction, so dnSpy's
 		/// debugger highlights the executing instruction in the IL view).
@@ -470,6 +477,16 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 		// dnSpy folds via brace pairs, not ITextOutput fold markers.
 		public void MarkFoldStart(string collapsedText = "...", bool defaultCollapsed = false) { }
 		public void MarkFoldEnd() { }
+
+		/// <summary>Delegates to the dnSpy output so brace offsets share its position accounting.</summary>
+		public int NextPosition => output.NextPosition;
+
+		/// <summary>
+		/// Forwards a brace pair written by the engine's ILAst writer. The engine enum mirrors
+		/// dnSpy's numerically, so the flags can be cast directly.
+		/// </summary>
+		public void AddCodeBracesRange(int start, int end, ICSharpCode.Decompiler.CodeBracesRangeFlags flags) =>
+			output.AddBracePair(new TextSpan(start, 1), new TextSpan(end, 1), (dnSpy.Contracts.Decompiler.CodeBracesRangeFlags)(int)flags);
 
 		void WriteCore(string text, object? cecilReference, DecompilerReferenceFlags baseFlags) {
 			if (text.Length == 0)
@@ -567,11 +584,11 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 				if ((open == '(' && c == ')') || (open == '{' && c == '}') || (open == '[' && c == ']')) {
 					openDelimiters.RemoveAt(openDelimiters.Count - 1);
 					WriteWithReference(text, null, DecompilerReferenceFlags.None, BoxedTextColor.Punctuation);
-					if (output.UsesCustomData)
+					if (output.UsesCustomData && TrackDelimiters)
 						output.AddBracePair(new TextSpan(openStart, 1), new TextSpan(start, 1),
-							open == '(' ? CodeBracesRangeFlags.Parentheses :
-							open == '[' ? CodeBracesRangeFlags.SquareBrackets :
-							CodeBracesRangeFlags.OtherBlockBraces);
+						open == '(' ? dnSpy.Contracts.Decompiler.CodeBracesRangeFlags.Parentheses :
+						open == '[' ? dnSpy.Contracts.Decompiler.CodeBracesRangeFlags.SquareBrackets :
+						dnSpy.Contracts.Decompiler.CodeBracesRangeFlags.OtherBlockBraces);
 					return;
 				}
 			}

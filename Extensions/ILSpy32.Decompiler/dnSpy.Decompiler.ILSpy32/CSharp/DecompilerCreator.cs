@@ -21,6 +21,8 @@ using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using dnSpy.Contracts.Decompiler;
 using dnSpy.Decompiler.ILSpy32.IL;
+using dnSpy.Decompiler.ILSpy32.ILAst;
+using dnSpy.Decompiler.ILSpy32.Mixed;
 using dnSpy.Decompiler.ILSpy32.Settings;
 using dnSpy.Decompiler.ILSpy32.VisualBasic;
 
@@ -47,6 +49,10 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			// The IL view has no decompiler options (the 3.2 engine exposes no IL-view switches),
 			// so it carries its own empty settings instance instead of a persisted MEF singleton.
 			yield return new ILDecompiler32("IL (ILSpy 3.2)");
+			// Unlike the 2.3 ILAst language (a #if DEBUG dev tool with one entry per optimizer
+			// step), this one is always registered; its options live in its settings page.
+			yield return new ILAstDecompiler32("ILAst (ILSpy 3.2)");
+			yield return new ILWithCSharpDecompiler32("IL with C# (ILSpy 3.2)");
 		}
 	}
 }

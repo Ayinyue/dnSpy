@@ -93,9 +93,10 @@ DecompilerService(ctor)
 - [x] 打 tag / 归档 `Extensions/ILSpy.Decompiler`（2026-11-07）：
   tag `archive/ilspy-2.3-engine`（887e46cac）+ 源码备份
   `D:/Codebase/dnSpyEx/_local_backup_20261107_ilspy23.tar.gz`（含 2.3 扩展与核心引擎，3374 文件）
-- [ ] 移除 2.3 的 `IDecompilerCreator` 导出与 IL/ILAst/Mixed 视图，同步删除设置页
+- [ ] 移除 2.3 的 `IDecompilerCreator` 导出与 IL 视图，同步删除设置页
   —— **延后至 IL spans 专项落地**；注意：`dnSpy/dnSpy.Decompiler/MSBuild` 导出管线
   与 `DecompilerBase` 被 3.2 扩展继承使用，移除范围仅限 2.3 反编译器本体，需保留导出基建
+  （ILAst/Mixed 已于 2026-11-16 由 3.2 接管，不随 2.3 移除，见 `docs/ILAst-Mixed-3.2.md`）
 - [x] 移除解决方案引用，全量构建 0 错误（2026-11-08：dnSpy.sln 移除 14 条 ILSpy.Core 引用，dnSpy 主项目 + 3.2 扩展均构建 0 错误）
 - [ ] 更新 README / Action-Plan / Dev-Plan / 本文件状态
 
@@ -103,7 +104,8 @@ DecompilerService(ctor)
 
 - **回滚**：迁移代码只改 `LanguageGuid`，把 2.3 注册保留至 M4，回滚 = 还原该 commit 并重启动。
 - **兼容**：迁移只在「设置指向 2.3 UniqueGuid」时触发一次；用户手动选 2.3 后不再迁移（标记位）。
-- **IL/ILAst/Mixed**：依赖 2.3 引擎，M3 不动；M4 时若确需保留，需单独评估工作量（默认随 2.3 一并下线）。
+- **IL/ILAst/Mixed**：IL 视图已由 3.2 接管；**ILAst/Mixed 也已于 2026-11-16 迁移到 3.2**
+  （引擎补 public API + 扩展新增两语言，见 `docs/ILAst-Mixed-3.2.md`），M4 移除 2.3 时无需保留。
 
 ## 6. 风险清单
 

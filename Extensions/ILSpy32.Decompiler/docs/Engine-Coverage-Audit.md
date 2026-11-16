@@ -161,7 +161,7 @@
 - **P1（对齐）**：③ ✅ 三语言补 `WriteToolTip` / `TypeToString`；④ ✅ ILAst 的 `Decompile(TypeDef)` 已补全；⑤ ✅ IL/Mixed 的 2.3 装饰已做成开关（`ILDecompilerSettings32` 四个 bool，GUID/默认值同 2.3；IL 与 Mixed 共用该类但各自持有实例）。已用 `dnSpy.Console --dont-*` 逐个验证：XML 9→0、Token/RVA 1→0、IL 字节 73→0、PDB 12→0（Mixed 同样生效）；默认输出仍与 2.3 逐字一致。
 - **构建管线（新发现，已修）**：`dotnet build dnSpy.sln -c Release -f net10.0-windows` 会把 **Debug** 版 3.2 引擎 DLL 放进 dnSpy bin（引擎不在 sln 内，MSBuild 对引用外用默认配置）——已实测：sln 构建后 `ILSpy32.Decompiler.dll` 为 1,832,960 字节（Debug），单独构建扩展后为 1,585,152（Release）。已在 `build.ps1` 的 `Build-Net` 里显式以 Release 重建引擎与扩展（两条分支都加）；把引擎加入 sln 的替代方案与 `-f` 冲突（NETSDK1005，引擎是 netstandard2.0-only），已回退。
 - **P2（引擎能力缺口 / 清理）**：⑥ ✅ 四个引擎能力缺口已全部补齐（ShowILComments / SortMembers / MaxStringLength / HexadecimalNumbers），均 opt-in、默认同 2.3；对拍（`dnSpy.Console --comments/--hex/--max-string-length/--sort-members`）逐项 diff 0。⑦ ✅ Mixed 的 C# 叠加改用持久化 C# 设置；⑧ ✅ IL/ILAst 设置持久化 + 2.3 IL 选项迁移。
-- **IL 视图现状**：方法级与类型级（`-t`，含/不含 `--sort-members`）输出均已与 2.3 **逐字一致**（diff 0）；期间修掉三处类型级差异：参数特性缩进、访问器声明缺 `// Token:` 注释、`.locals` 名未转义。
+- **IL 视图现状**：方法级与类型级（`-t`，含/不含 `--sort-members`）在抽样中与 2.3 逐字一致，唯一系统性例外是 `ldelem.any` 的名称（详见 §8.6）；期间修掉三处类型级差异：参数特性缩进、访问器声明缺 `// Token:` 注释、`.locals` 名未转义。
 
 ### 8.6 已知残余差异（2026-11-17，用 probe `lang-diff` 对拍量化）
 
@@ -185,4 +185,4 @@
      并处理访问器 token 注释的位置，风险高于收益，暂不动。
 - **Mixed**：类型级已补上 C# 叠加（本轮修复），剩余差异是叠加行粒度（3.2 的语句级
   sequence point 更细），见 `docs/ILAst-Mixed-3.2.md` 第 5 节。
-- **IL 视图**：逐字一致（其中 `MethodDebugInfo` 有 4 行差异，属该样本的个例，需单独复核）。
+- **IL 视图**：抽样中逐字一致，**唯一系统性例外**是 `ldelem.any`（0xA3）：2.3（dnlib 版）印 `ldelem`，3.2（cecil 版）印 `ldelem.any`——`MethodDebugInfo` 样本的 4 行差异全是这一处（语义相同，cecil/现代 dnSpy 的写法）。

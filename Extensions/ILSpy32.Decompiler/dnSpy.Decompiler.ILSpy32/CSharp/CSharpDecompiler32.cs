@@ -464,6 +464,11 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				var events = new List<ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration>();
 				var fields = new List<ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration>();
 				var nestedTypes = new List<ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration>();
+				int childrenNotMembers = 0;
+				foreach (var ch in typeDecl.Children)
+					if (!typeDecl.Members.Contains(ch)) childrenNotMembers++;
+				if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1")
+					Console.Error.WriteLine($"REORDER {typeDef.FullName}: members={typeDecl.Members.Count} childrenNotMembers={childrenNotMembers} nestedTypes={nestedTypes.Count}");
 				foreach (var member in typeDecl.Members) {
 					switch (member) {
 					case ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration nested:
@@ -550,6 +555,13 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					}
 				}
 
+				// In the 3.2 AST nested types are Children of the type but not part of Members,
+				// so they have to be collected separately (and moved explicitly below).
+				foreach (var child in typeDecl.Children) {
+					if (child is ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration childType && !nestedTypes.Contains(childType))
+						nestedTypes.Add(childType);
+				}
+
 				// Re-add in the 2.3 order.
 				typeDecl.Members.Clear();
 				if (sortMembers) {
@@ -561,8 +573,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 						typeDecl.Members.Add(m);
 					foreach (var m in fields)
 						typeDecl.Members.Add(m);
-					foreach (var m in nestedTypes)
-						typeDecl.Members.Add(m);
+					AddNestedTypesLast(typeDecl, nestedTypes);
 				}
 				else {
 					// Unsorted: metadata-token order, like 2.3's GetNonSortedMethodsPropertiesEvents.
@@ -575,6 +586,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					all.Sort((a, b) => GetMemberToken(a, module).CompareTo(GetMemberToken(b, module)));
 					foreach (var m in all)
 						typeDecl.Members.Add(m);
+					AddNestedTypesLast(typeDecl, nestedTypes);
 				}
 				foreach (var m in typeDecl.Members) {
 					if (!attachedComments.TryGetValue(m, out var list))
@@ -593,6 +605,19 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			// member reordering must never break the decompilation
 			if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1")
 				Console.Error.WriteLine("REORDER-EX " + ex.GetType().Name + ": " + ex.Message + " @ " + ex.StackTrace);
+		}
+	}
+
+	/// <summary>
+	/// Moves the nested types to the end of the type. In the 3.2 AST they are Children of the
+	/// type but not part of Members, so re-adding them through Members alone leaves them where
+	/// they were (at the front).
+	/// </summary>
+	static void AddNestedTypesLast(ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration typeDecl,
+			List<ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration> nestedTypes) {
+		foreach (var m in nestedTypes) {
+			m.Remove();
+			typeDecl.Members.Add(m);
 		}
 	}
 

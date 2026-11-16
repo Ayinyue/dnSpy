@@ -77,3 +77,18 @@
 - 黄金基线入库（`baseline/out/` 目前被 gitignore）。
 - 把 `run-regression*.cmd` 接进 CI（`.github/workflows/build.yml` 目前只 build）。
 - 统一基线数字来源（`run-regression.cmd` / audit / VB-Action-Plan 三处数字漂移）。
+
+## 8. CI 验收（建议接线方式）
+
+仓库已有 `verify-all.ps1`（重建引擎/扩展/probe → 硬门 + 软门 → 归档报告）。接进 CI 时注意两点：
+
+1. **`build.ps1 net` 只构建 net10.0-windows**；`verify-all` 内部还会跑 `Build-NetFramework`（net48）。GitHub `windows-latest` 是否带 net48 引用集取决于镜像，若不可用，把 `verify-all` 里 `Build-NetFramework` 那一步在 CI 中跳过（本地仍需跑），只保留：
+   ```
+   dotnet build -c Release -f net10.0-windows <扩展 csproj>
+   dotnet build -c Release <引擎 csproj>
+   dotnet build -c Release <probe csproj>
+   probe engine-tests / ilast-verify / mixed-verify / settings-wiring
+   ```
+2. **`engine-tests`/`bench` 需要 2.3 对照程序集**（`PROBE_ILSPY23_DIR`）。CI 里要么从归档 tag 取一份放进 `baseline/ilspy23/`，要么接受这两个模式 SKIP（其余硬门仍有效）。
+
+报告归档在 `baseline/out/verify-*.txt`，适合作为升级验收产物（`upload-artifact`）。

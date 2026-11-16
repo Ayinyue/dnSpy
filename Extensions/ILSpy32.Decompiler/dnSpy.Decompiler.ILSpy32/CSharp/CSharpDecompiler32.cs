@@ -250,6 +250,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 						Console.Error.WriteLine("PROF binder=" + profSw.ElapsedMilliseconds + " ms");
 					profSw = Environment.GetEnvironmentVariable("DNSPY_ILSPY32_PROF") == "1" ? System.Diagnostics.Stopwatch.StartNew() : null;
 					RemoveUncompilableCompilerAttributes(tree);
+					ExpandExpressionBodies(tree);
 					// Reorder first: the token comments are inserted relative to their member, so
 					// inserting them before the reorder would leave them at the old positions.
 					ReorderMembers(tree, module as ModuleDefMD, sortMembers: settings.SortMembers);
@@ -443,6 +444,40 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 	/// declaration, so documentation comments (inserted earlier by the engine transform)
 	/// stay above it like in 2.3.
 	/// </summary>
+
+	/// <summary>
+	/// dnSpy's 2.3 output expands expression-bodied properties into blocks; the 3.2 visitor keeps the
+	/// expression body. In this AST version only <see cref="ICSharpCode.Decompiler.CSharp.Syntax.PropertyDeclaration"/>
+	/// carries an ExpressionBody (methods and constructors have a plain BlockStatement Body and
+	/// indexers have neither), so giving the getter a body is the whole fix.
+	/// </summary>
+	static void ExpandExpressionBodies(ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree) {
+		foreach (var p in tree.DescendantsAndSelf.OfType<ICSharpCode.Decompiler.CSharp.Syntax.PropertyDeclaration>().ToList()) {
+			if (p.ExpressionBody.IsNull)
+				continue;
+			var expr = p.ExpressionBody;
+			p.ExpressionBody = null;
+			var body = new ICSharpCode.Decompiler.CSharp.Syntax.BlockStatement {
+				new ICSharpCode.Decompiler.CSharp.Syntax.ReturnStatement(expr),
+			};
+			if (p.Getter.IsNull)
+				p.Getter = new GetterAccessor(body);
+			else
+				p.Getter.Body = body;
+		}
+	}
+
+	/// <summary>Accessor with an explicit 'get' keyword; the keyword is read-only on Accessor.</summary>
+	sealed class GetterAccessor : ICSharpCode.Decompiler.CSharp.Syntax.Accessor {
+		public GetterAccessor(ICSharpCode.Decompiler.CSharp.Syntax.BlockStatement body) {
+			Body = body;
+			SetChildByRole(
+				ICSharpCode.Decompiler.CSharp.Syntax.PropertyDeclaration.GetKeywordRole,
+				new ICSharpCode.Decompiler.CSharp.Syntax.CSharpTokenNode(
+					ICSharpCode.Decompiler.CSharp.Syntax.TextLocation.Empty,
+					ICSharpCode.Decompiler.CSharp.Syntax.PropertyDeclaration.GetKeywordRole));
+		}
+	}
 
 	/// <summary>
 	/// Reorders the members of every type declaration to match the 2.3 engine's default

@@ -194,3 +194,34 @@
 - **Mixed**：类型级已补上 C# 叠加（本轮修复），剩余差异是叠加行粒度（3.2 的语句级
   sequence point 更细），见 `docs/ILAst-Mixed-3.2.md` 第 5 节。
 - **IL 视图**：抽样中逐字一致，**唯一系统性例外**是 `ldelem.any`（0xA3）：2.3（dnlib 版）印 `ldelem`，3.2（cecil 版）印 `ldelem.any`——`MethodDebugInfo` 样本的 4 行差异全是这一处（语义相同，cecil/现代 dnSpy 的写法）。
+
+### 8.7 整程序集对拍（2026-11-17，probe `lang-diff-all`）
+
+`m3probe.dll lang-diff-all <asm> <dnspyBin> <2.3目录> [langFilter]`：对程序集内**每个类型**逐语言对拍，
+报告 identical / diffLines / errors。相比 3 个手工样本，这个口径暴露了两处系统性差异：
+
+| 程序集 | 语言 | 类型数 | 逐字一致 | diffLines |
+|---|---|---|---|---|
+| dnSpy.Contracts.Logic | IL | 114 | **85** | 2968 |
+| dnSpy.Contracts.Logic | C# | 114 | 28 | 11379 |
+| dnSpy.Contracts.Logic | VB | 114 | 10 | 11828 |
+| dnSpy.Contracts.Logic | Mixed | 114 | 26 | 74637 |
+| dnSpy.Contracts.Debugger | IL | 303 | **256** | 1400 |
+| dnSpy.Contracts.Debugger | C# | 303 | 97 | 8496 |
+| dnSpy.Contracts.Debugger | VB | 303 | 36 | 12115 |
+
+（Mixed 的 diffLines 含 C# 叠加行，口径不可比，仅作参考。）
+
+本轮据此修掉的 IL 系统性缺口：
+- **标志名表**：`export`→`unmanagedexp`、补 `nativevararg`/`unmanaged`、补
+  `aggressiveinlining`/`aggressiveoptimization`/`securitymitigations`、补 `rtspecialname`、
+  `auto`→`autochar`（后者两者都用）。
+- **泛型参数特性**：2.3 输出 `.param type <name>` / `.param constraint ...`（泛型参数上的
+  可空注解就挂在这里），3.2 完全没有——已补。
+
+剩余（未修，均需逐条裁决）：
+- **using 顺序**：3.2 为 ordinal 升序（`Microsoft.Win32` 在最前），2.3 把 `Microsoft.*` 排在
+  `System.*` 之后——不是简单字典序，疑似按引入顺序，需单独对齐。
+- **嵌套类型位置**：2.3 把嵌套类型放在**最后**，3.2 的 `ReorderMembers` 似乎没有移动它
+  （仍排在最前），需要查清它是否不在 `TypeDeclaration.Members` 里。
+- C# 零散形态（大类型里 560/447 行级的差异主要来自上面两条）。

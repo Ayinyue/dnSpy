@@ -443,6 +443,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 	/// declaration, so documentation comments (inserted earlier by the engine transform)
 	/// stay above it like in 2.3.
 	/// </summary>
+
 	/// <summary>
 	/// Reorders the members of every type declaration to match the 2.3 engine's default
 	/// grouping (methods, properties, events, fields, nested types - the order of its

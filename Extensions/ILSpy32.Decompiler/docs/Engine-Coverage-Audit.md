@@ -247,3 +247,5 @@ System / System.*  → 排最前；两组内部均 OrdinalIgnoreCase 降序（�
 未实现的原因：`UsingDeclaration` 在 3.2 AST 里是 `AstNode`（位于 `Children`，不在
 `Members`），重排需要在 `Children` 上带 role 插入（`InsertChildBefore`），比
 `ReorderMembers` 更容易出错，留作专项。
+
+**已实现（2026-11-17）**：引擎新增 `SortSystemUsingStatementsFirst`（默认关，`DecompilerSettings32` 开启，C#/VB 同时生效，提交 `245ca8c`）。三例 using 块现与 2.3 完全一致。

@@ -31,6 +31,8 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 	sealed class DecompilerCreator : IDecompilerCreator {
 		readonly DecompilerSettings32? csharpSettings;
 		readonly VbDecompilerSettings32Impl? vbSettings;
+		readonly ILDecompilerSettings32Impl? ilSettings;
+		readonly ILAstDecompilerSettings32Impl? ilastSettings;
 
 		/// <summary>Reflection-based loaders (dnSpy.Console, baseline) have no MEF
 		/// composition; they get default settings with no persistence.</summary>
@@ -38,22 +40,26 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		}
 
 		[ImportingConstructor]
-		public DecompilerCreator(DecompilerSettings32Impl csharpSettings, VbDecompilerSettings32Impl vbSettings) {
+		public DecompilerCreator(DecompilerSettings32Impl csharpSettings, VbDecompilerSettings32Impl vbSettings,
+				ILDecompilerSettings32Impl ilSettings, ILAstDecompilerSettings32Impl ilastSettings) {
 			this.csharpSettings = csharpSettings;
 			this.vbSettings = vbSettings;
+			this.ilSettings = ilSettings;
+			this.ilastSettings = ilastSettings;
 		}
 
 		public IEnumerable<IDecompiler> Create() {
 			yield return new CSharpDecompiler32(csharpSettings ?? new DecompilerSettings32(), "C# (ILSpy 3.2)");
 			yield return new VBDecompiler32(vbSettings ?? new DecompilerSettings32(vbCompatibility: true), "Visual Basic (ILSpy 3.2)");
-			// The IL view has no decompiler options (the 3.2 engine exposes no IL-view switches),
-			// so it carries its own empty settings instance instead of a persisted MEF singleton.
-			yield return new ILDecompiler32("IL (ILSpy 3.2)");
+			// The IL/ILAst settings are persisted singletons; the reflection-based loaders fall
+			// back to default instances.
+			yield return new ILDecompiler32(ilSettings ?? new ILDecompilerSettings32(), "IL (ILSpy 3.2)");
 			// Unlike the 2.3 ILAst language (a #if DEBUG dev tool with one entry per optimizer
 			// step), this one is always registered; its options live in its settings page.
-			// Mixed's C# overlay uses the persisted C# settings (same instance as the C# view).
-			yield return new ILAstDecompiler32("ILAst (ILSpy 3.2)");
-			yield return new ILWithCSharpDecompiler32(csharpSettings ?? new DecompilerSettings32(), "IL with C# (ILSpy 3.2)");
+			yield return new ILAstDecompiler32(ilastSettings ?? new ILAstDecompilerSettings32(), "ILAst (ILSpy 3.2)");
+			// Mixed's C# overlay uses the persisted C# settings (same instance as the C# view);
+			// its decorations use the persisted IL settings (shared with the IL view, as in 2.3).
+			yield return new ILWithCSharpDecompiler32(csharpSettings ?? new DecompilerSettings32(), ilSettings ?? new ILDecompilerSettings32(), "IL with C# (ILSpy 3.2)");
 		}
 	}
 }

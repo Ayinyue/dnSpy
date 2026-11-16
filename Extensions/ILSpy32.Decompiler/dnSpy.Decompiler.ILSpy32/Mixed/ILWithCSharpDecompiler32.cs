@@ -49,22 +49,27 @@ namespace dnSpy.Decompiler.ILSpy32.Mixed {
 	sealed class ILWithCSharpDecompiler32 : DecompilerBase {
 		static readonly Guid THE_GUID = new Guid("5D2C8E47-9A31-4B68-BE05-2F7C1A9D63B8");
 
-		readonly ILDecompilerSettings32 ilLangSettings = new ILDecompilerSettings32();
+		readonly ILDecompilerSettings32 ilLangSettings;
 		readonly DecompilerSettings32 csharpLangSettings;
 		readonly string uniqueNameUI;
 
 		/// <summary>
 		/// <paramref name="csharpSettings"/> is the persisted C# (ILSpy 3.2) settings - the same
-		/// instance the C# view uses, so the overlay follows the user's C# options. Reflection-based
-		/// loaders (dnSpy.Console, baseline) have no MEF composition and get a default instance.
+		/// instance the C# view uses, so the overlay follows the user's C# options.
+		/// <paramref name="ilSettings"/> is the persisted IL settings, shared with the IL view
+		/// (2.3 did the same). Reflection-based loaders (dnSpy.Console, baseline) have no MEF
+		/// composition and get default instances.
 		/// </summary>
-		public ILWithCSharpDecompiler32(DecompilerSettings32 csharpSettings, string uniqueNameUI) {
+		public ILWithCSharpDecompiler32(DecompilerSettings32 csharpSettings, ILDecompilerSettings32 ilSettings, string uniqueNameUI) {
 			csharpLangSettings = csharpSettings ?? throw new ArgumentNullException(nameof(csharpSettings));
+			ilLangSettings = ilSettings ?? throw new ArgumentNullException(nameof(ilSettings));
 			this.uniqueNameUI = uniqueNameUI ?? throw new ArgumentNullException(nameof(uniqueNameUI));
 		}
 
+		public ILWithCSharpDecompiler32(DecompilerSettings32 csharpSettings, string uniqueNameUI) : this(csharpSettings, new ILDecompilerSettings32(), uniqueNameUI) { }
+
 		/// <summary>Used by reflection-based loaders (dnSpy.Console, baseline) that have no MEF composition.</summary>
-		public ILWithCSharpDecompiler32(string uniqueNameUI) : this(new DecompilerSettings32(), uniqueNameUI) { }
+		public ILWithCSharpDecompiler32(string uniqueNameUI) : this(new DecompilerSettings32(), new ILDecompilerSettings32(), uniqueNameUI) { }
 
 		public override DecompilerSettingsBase Settings => ilLangSettings;
 		public override string ContentTypeString => ContentTypeDefinitions.ILWithCSharpILSpy;

@@ -51,10 +51,14 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 	sealed class ILDecompiler32 : DecompilerBase {
 		static readonly Guid THE_GUID = new Guid("7A3F1C2E-8B24-4D57-9C36-1E5A0F4B92D3");
 
-		readonly ILDecompilerSettings32 settings = new ILDecompilerSettings32();
+		readonly ILDecompilerSettings32 settings;
 		readonly string uniqueNameUI;
 
-		public ILDecompiler32(string uniqueNameUI) {
+		/// <summary>Used by reflection-based loaders (dnSpy.Console, baseline) that have no MEF composition.</summary>
+		public ILDecompiler32(string uniqueNameUI) : this(new ILDecompilerSettings32(), uniqueNameUI) { }
+
+		public ILDecompiler32(ILDecompilerSettings32 settings, string uniqueNameUI) {
+			this.settings = settings ?? throw new ArgumentNullException(nameof(settings));
 			this.uniqueNameUI = uniqueNameUI ?? throw new ArgumentNullException(nameof(uniqueNameUI));
 		}
 
@@ -345,7 +349,7 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 	/// rest - IL comments, member sorting, max string length, hexadecimal numbers - have no 3.2
 	/// equivalent and stay unavailable). Defaults and GUIDs match 2.3.
 	/// </summary>
-	sealed class ILDecompilerSettings32 : DecompilerSettingsBase {
+	class ILDecompilerSettings32 : DecompilerSettingsBase {
 		int version;
 		IDecompilerOption[]? options;
 		bool showXmlDocumentation = true;

@@ -145,8 +145,8 @@
 
 - **内容类型 100% 依赖 2.3**：3.2 扩展**无 `ContentTypeDefinition` 导出**（`B\ContentTypeDefinitions.cs` 仅常量；全扩展只有 3 个 `[Export]`：`CSharp\DecompilerCreator.cs:30` + `Settings\DecompilerSettings32Impl.cs:31,86`）。2.3 注册 6 个（`dnSpy.Decompiler.ILSpy\ContentTypeDefinitions.cs:28,33,39,45,51,56`）。→ **M4 后 3.2 五语言的 ContentTypeString 悬空**（语法高亮 / 文本视图设置失效）。
 - **`ISimpleILPrinter` 唯一导出在 2.3**（`dnSpy.Decompiler.ILSpy\IL\SimpleILPrinter.cs:29`）→ `Extensions\dnSpy.AsmEditor\MethodBody\BodyUtils.cs:45` 回退 `DummyPrinter`（:47 输出 "Missing ISimpleILPrinter"）。3.2 无导出。
-- **设置页**：2.3 有 `IAppSettingsPageProvider` 两页（C#/IL，`Settings\DecompilerSettingsPageProvider.cs:26-40`）；3.2 扩展零设置页，且 IL/ILAst/Mixed 的 `Settings` 均为语言内 `new`（B\IL:52、B\ILAst:56、B\Mixed:52-53）→ **未持久化、无 UI**。
-- **设置迁移**：`dnSpy\dnSpy\Decompiler\DecompilerServiceSettings.cs:79-96` 只映射 2.3 C#/VB 的 UniqueGuid；2.3 IL 选项段 `DD6752B1` 无迁移方；2.3 段 `6745457F`/`DD6752B1` 会变孤儿（无清理逻辑）。
+- **设置页**：2.3 有 `IAppSettingsPageProvider` 两页（C#/IL，`Settings\DecompilerSettingsPageProvider.cs:26-40`）；3.2 扩展仍无设置页（其 `Options` 可被 `dnSpy.Console --set/--dont-*` 与 `NodeDecompiler.GetBoolean` 消费），但 **IL/ILAst 设置已持久化**（P2⑧）：`ILDecompilerSettings32Impl` / `ILAstDecompilerSettings32Impl` 两个 MEF 单例，与 2.3 的 `ILSettingsImpl` 同等地位。
+- **设置迁移**：`dnSpy\dnSpy\Decompiler\DecompilerServiceSettings.cs:79-96` 映射 2.3 C#/VB 的 UniqueGuid；2.3 IL 选项段 `DD6752B1` 已补迁移方（`ILDecompilerSettings32Impl.MigrateFrom23` → 3.2 支持的四个选项；其余 4 项 3.2 引擎无能力）。
 - **2.3 引擎子模块不可删**：`Extensions\dnSpy.BamlDecompiler\dnSpy.BamlDecompiler.csproj:27` 与 `Extensions\ILSpy32.Decompiler\ICSharpCode.NRefactory.VB32\ICSharpCode.NRefactory.VB32.csproj:24-31` 引用 2.3 的 `ICSharpCode.Decompiler` / NRefactory 源。
 
 ### 8.4 消费面（已核）
@@ -160,4 +160,4 @@
 - **P0（已修）**：① ✅ 3.2 扩展补 6 个 `ContentTypeDefinition` 导出（`ContentTypeDefinitions.cs`，五语言改用常量）；② ✅ 补 `ISimpleILPrinter` 导出（`IL/SimpleILPrinter32.cs`）+ `Common/DnlibILText32.cs`（2.3 dnlib→IL 写入器移植）+ `Common/ILDecompilerUtils32.cs`；对拍 **8565 样本 diffSamples=0**（两侧各 1,543,426 字符逐字相同）。
 - **P1（对齐）**：③ ✅ 三语言补 `WriteToolTip` / `TypeToString`；④ ✅ ILAst 的 `Decompile(TypeDef)` 已补全；⑤ ✅ IL/Mixed 的 2.3 装饰已做成开关（`ILDecompilerSettings32` 四个 bool，GUID/默认值同 2.3；IL 与 Mixed 共用该类但各自持有实例）。已用 `dnSpy.Console --dont-*` 逐个验证：XML 9→0、Token/RVA 1→0、IL 字节 73→0、PDB 12→0（Mixed 同样生效）；默认输出仍与 2.3 逐字一致。
 - **构建管线（新发现，已修）**：`dotnet build dnSpy.sln -c Release -f net10.0-windows` 会把 **Debug** 版 3.2 引擎 DLL 放进 dnSpy bin（引擎不在 sln 内，MSBuild 对引用外用默认配置）——已实测：sln 构建后 `ILSpy32.Decompiler.dll` 为 1,832,960 字节（Debug），单独构建扩展后为 1,585,152（Release）。已在 `build.ps1` 的 `Build-Net` 里显式以 Release 重建引擎与扩展（两条分支都加）；把引擎加入 sln 的替代方案与 `-f` 冲突（NETSDK1005，引擎是 netstandard2.0-only），已回退。
-- **P2（引擎能力缺口 / 清理）**：⑥ 评估在 3.2 引擎补 ShowILComments / SortMembers / MaxStringLength / HexadecimalNumbers 的 public API；⑦ ✅ Mixed 的 C# 叠加改用持久化 C# 设置（`mixed-settings-wiring` 模式验证：与 C# 视图同一实例）；⑧ 2.3 设置段清理（保留 2.3 时那些段仍是 2.3 语言的活设置，非孤儿）。
+- **P2（引擎能力缺口 / 清理）**：⑥ 评估在 3.2 引擎补 ShowILComments / SortMembers / MaxStringLength / HexadecimalNumbers 的 public API；⑦ ✅ Mixed 的 C# 叠加改用持久化 C# 设置（`settings-wiring` 模式验证）；⑧ ✅ IL/ILAst 设置持久化 + 2.3 IL 选项迁移（`settings-wiring` 模式验证：五语言均用持久化实例、Mixed 与 IL 视图共享 IL 设置、2.3 的 ShowILBytes/ShowXmlDocumentation/ShowPdbInfo 正确带入）。

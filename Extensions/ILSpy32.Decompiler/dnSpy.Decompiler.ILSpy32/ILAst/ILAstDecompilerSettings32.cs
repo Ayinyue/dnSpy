@@ -32,7 +32,7 @@ namespace dnSpy.Decompiler.ILSpy32.ILAst {
 	/// language whose transform pipeline can be switched off to inspect the raw ILReader
 	/// output.
 	/// </summary>
-	sealed class ILAstDecompilerSettings32 : DecompilerSettingsBase {
+	class ILAstDecompilerSettings32 : DecompilerSettingsBase {
 		internal static readonly Guid RunTransforms_GUID = new Guid("4E7A1C93-2B6D-4F81-9C35-7D2A8E1B60F4");
 		internal static readonly Guid ShowILRanges_GUID = new Guid("6B0D5F28-9A47-4E13-B6C2-58F1D9A3E770");
 		internal static readonly Guid UseLogicOperationSugar_GUID = new Guid("8C3E7A15-4D92-4B60-A1F8-2E6B9C4D5A11");

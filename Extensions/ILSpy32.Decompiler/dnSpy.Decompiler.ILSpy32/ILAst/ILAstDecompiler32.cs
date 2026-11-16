@@ -54,10 +54,14 @@ namespace dnSpy.Decompiler.ILSpy32.ILAst {
 	sealed class ILAstDecompiler32 : DecompilerBase {
 		static readonly Guid THE_GUID = new Guid("3F8B2E71-6C4A-4D95-A2B7-9E1F0C5D8A34");
 
-		readonly ILAstDecompilerSettings32 settings = new ILAstDecompilerSettings32();
+		readonly ILAstDecompilerSettings32 settings;
 		readonly string uniqueNameUI;
 
-		public ILAstDecompiler32(string uniqueNameUI) {
+		/// <summary>Used by reflection-based loaders (dnSpy.Console, baseline) that have no MEF composition.</summary>
+		public ILAstDecompiler32(string uniqueNameUI) : this(new ILAstDecompilerSettings32(), uniqueNameUI) { }
+
+		public ILAstDecompiler32(ILAstDecompilerSettings32 settings, string uniqueNameUI) {
+			this.settings = settings ?? throw new ArgumentNullException(nameof(settings));
 			this.uniqueNameUI = uniqueNameUI ?? throw new ArgumentNullException(nameof(uniqueNameUI));
 		}
 

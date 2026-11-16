@@ -95,9 +95,9 @@ class Probe {
 			InstallBinResolver(new[] { args[3] });
 			return MixedVerify(args[1], args[2], args[3]);
 		}
-		if (args.Length > 0 && args[0] == "mixed-settings-wiring") {
+		if (args.Length > 0 && args[0] == "settings-wiring") {
 			InstallBinResolver(new[] { args[1] });
-			return MixedSettingsWiring(args[1]);
+			return SettingsWiring(args[1]);
 		}
 		if (args.Length > 0 && args[0] == "ilast-verify") {
 			InstallBinResolver(new[] { args[3] });
@@ -131,30 +131,66 @@ class Probe {
 		};
 	}
 
-	// ==== mixed-settings-wiring: walk the MEF composition path (DecompilerCreator with the
-	// persisted settings singletons) and assert the Mixed language received the same C#
-	// settings instance as the C# view. This is the P2-② wiring check.
-	static int MixedSettingsWiring(string dnspyBin) {
+	// ==== settings-wiring: walk the MEF composition path (DecompilerCreator with the persisted
+	// settings singletons) and assert the languages got the persisted instances, that the Mixed
+	// view shares the IL settings with the IL view (as in 2.3), and that the 2.3 IL options were
+	// carried over into the persisted 3.2 IL settings.
+	static int SettingsWiring(string dnspyBin) {
+		const string legacy23ILGuid = "DD6752B1-5336-4601-A9B2-0879E18AE9F3";
 		var extAsm = System.Reflection.Assembly.LoadFrom(Path.Combine(dnspyBin, "dnSpy.Decompiler.ILSpy32.x.dll"));
 		var csImplType = extAsm.GetType("dnSpy.Decompiler.ILSpy32.Settings.DecompilerSettings32Impl", true);
 		var vbImplType = extAsm.GetType("dnSpy.Decompiler.ILSpy32.Settings.VbDecompilerSettings32Impl", true);
+		var ilImplType = extAsm.GetType("dnSpy.Decompiler.ILSpy32.Settings.ILDecompilerSettings32Impl", true);
+		var ilastImplType = extAsm.GetType("dnSpy.Decompiler.ILSpy32.Settings.ILAstDecompilerSettings32Impl", true);
 		var creatorType = extAsm.GetType("dnSpy.Decompiler.ILSpy32.CSharp.DecompilerCreator", true);
+
 		var fake = new FakeSettingsService();
+		// Pretend the user customized the 2.3 IL options: ShowILBytes=false, ShowXmlDocumentation=false.
+		fake.Seed(Guid.Parse(legacy23ILGuid), new Dictionary<string, string> {
+			{ "ShowILBytes", "False" },
+			{ "ShowXmlDocumentation", "False" },
+			{ "ShowPdbInfo", "True" },
+		});
 
 		var csImpl = NewInstance(csImplType, fake);
 		var vbImpl = NewInstance(vbImplType, fake);
-		var creator = creatorType.GetConstructors().First(c => c.GetParameters().Length == 2).Invoke(new object[] { csImpl, vbImpl });
+		var ilImpl = NewInstance(ilImplType, fake);
+		var ilastImpl = NewInstance(ilastImplType, fake);
+		var creator = creatorType.GetConstructors().First(c => c.GetParameters().Length == 4)
+			.Invoke(new object[] { csImpl, vbImpl, ilImpl, ilastImpl });
 		var langs = ((System.Collections.IEnumerable)creatorType.GetMethod("Create").Invoke(creator, null)).Cast<object>().ToList();
 
+		var il = langs.First(l => l.GetType().Name == "ILDecompiler32");
+		var ilast = langs.First(l => l.GetType().Name == "ILAstDecompiler32");
 		var mixed = langs.First(l => l.GetType().Name == "ILWithCSharpDecompiler32");
 		var csharp = langs.First(l => l.GetType().Name == "CSharpDecompiler32");
-		var mixedField = mixed.GetType().GetField("csharpLangSettings", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+		var ilSettingsField = il.GetType().GetField("settings", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+		var ilastSettingsField = ilast.GetType().GetField("settings", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+		var mixedCsharpField = mixed.GetType().GetField("csharpLangSettings", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+		var mixedIlField = mixed.GetType().GetField("ilLangSettings", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
 		var csharpField = csharp.GetType().GetField("settings", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-		var mixedSettings = mixedField.GetValue(mixed);
-		var csharpSettings = csharpField.GetValue(csharp);
-		Console.WriteLine("mixedCsharpSettingsIsPersistedInstance=" + ReferenceEquals(mixedSettings, csImpl));
-		Console.WriteLine("csharpViewUsesSameInstance=" + ReferenceEquals(csharpSettings, csImpl));
-		return ReferenceEquals(mixedSettings, csImpl) && ReferenceEquals(csharpSettings, csImpl) ? 0 : 1;
+
+		var ilSettings = ilSettingsField.GetValue(il);
+		var mixedIlSettings = mixedIlField.GetValue(mixed);
+		var ilType = ilImpl.GetType().BaseType!;
+		bool ok = true;
+		void Check(string name, bool value) {
+			Console.WriteLine(name + "=" + value);
+			ok &= value;
+		}
+
+		Check("ilViewUsesPersistedInstance", ReferenceEquals(ilSettings, ilImpl));
+		Check("ilastViewUsesPersistedInstance", ReferenceEquals(ilastSettingsField.GetValue(ilast), ilastImpl));
+		Check("mixedSharesILSettingsWithILView", ReferenceEquals(mixedIlSettings, ilImpl));
+		Check("mixedCsharpSettingsIsPersistedInstance", ReferenceEquals(mixedCsharpField.GetValue(mixed), csImpl));
+		Check("csharpViewUsesSameInstance", ReferenceEquals(csharpField.GetValue(csharp), csImpl));
+		Check("migrated23ShowILBytes", Equals(ilType.GetProperty("ShowILBytes")!.GetValue(ilSettings), false));
+		Check("migrated23ShowXmlDocumentation", Equals(ilType.GetProperty("ShowXmlDocumentation")!.GetValue(ilSettings), false));
+		Check("migrated23ShowPdbInfo", Equals(ilType.GetProperty("ShowPdbInfo")!.GetValue(ilSettings), true));
+		// The carried-over values were persisted under the 3.2 section (created on migration).
+		Console.WriteLine("persistedSections=" + fake.Sections.Length);
+		return ok ? 0 : 1;
 	}
 
 	static object NewInstance(Type type, object arg) {
@@ -190,6 +226,9 @@ class Probe {
 
 	sealed class FakeSettingsService : dnSpy.Contracts.Settings.ISettingsService {
 		readonly Dictionary<Guid, FakeSection> sections = new Dictionary<Guid, FakeSection>();
+		public void Seed(Guid guid, Dictionary<string, string> attributes) {
+			sections[guid] = new FakeSection { Name = guid.ToString(), Values = new Dictionary<string, string>(attributes, StringComparer.Ordinal) };
+		}
 		public dnSpy.Contracts.Settings.ISettingsSection[] Sections => sections.Values.Cast<dnSpy.Contracts.Settings.ISettingsSection>().ToArray();
 		public dnSpy.Contracts.Settings.ISettingsSection GetOrCreateSection(Guid guid) {
 			if (!sections.TryGetValue(guid, out var sect)) {

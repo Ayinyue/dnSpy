@@ -82,6 +82,9 @@ namespace dnSpy.Decompiler.ILSpy32.Settings {
 		/// </param>
 		public DecompilerSettings32(bool vbCompatibility) {
 			EngineSettings = new ICSharpCode.Decompiler.DecompilerSettings();
+			// dnSpy's 2.3 engine put System.* usings first (SortSystemUsingStatementsFirst);
+			// the 3.2 engine sorts all namespaces ordinal-ascending instead.
+			EngineSettings.SortSystemUsingStatementsFirst = true;
 			// dnSpy's 2.3 formatting policy collapsed an all-empty accessor list onto the
 			// declaration line ({ get; set; }); the 3.2 engine exposes the switch but its
 			// output visitor never applied it. ForceOneLine is 2.3's PropertyFormatting.SingleLine.

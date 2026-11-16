@@ -641,13 +641,29 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		return ta ?? tb;
 	}
 
+	/// <summary>
+	/// Per-type field-name index. Both the token comments and the member order look up a field
+	/// declaration's definition by name; without the index that was a full field-list scan per
+	/// member. Duplicate names keep the first field, matching the previous FirstOrDefault.
+	/// </summary>
+	static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TypeDef, Dictionary<string, dnlib.DotNet.FieldDef>> fieldIndexes = new System.Runtime.CompilerServices.ConditionalWeakTable<TypeDef, Dictionary<string, dnlib.DotNet.FieldDef>>();
+
 	static dnlib.DotNet.FieldDef? GetFieldFor(ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration member, ModuleDefMD module) {
 		var ownerType = member.Ancestors.OfType<ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration>().FirstOrDefault();
 		var typeDef = ownerType?.Annotation<TypeDef>();
 		if (typeDef is null)
 			return null;
 		var variableName = (member as ICSharpCode.Decompiler.CSharp.Syntax.FieldDeclaration)?.Variables.FirstOrDefault()?.Name;
-		return variableName is null ? null : typeDef.Fields.FirstOrDefault(f => f.Name == variableName);
+		if (variableName is null)
+			return null;
+		var index = fieldIndexes.GetValue(typeDef, t => {
+			var d = new Dictionary<string, dnlib.DotNet.FieldDef>(StringComparer.Ordinal);
+			foreach (var f in t.Fields)
+				if (!d.ContainsKey(f.Name))
+					d.Add(f.Name, f);
+			return d;
+		});
+		return index.TryGetValue(variableName, out var f) ? f : null;
 	}
 
 	internal static void InsertTokenComments(ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree, ModuleDefMD module, bool showTokens) {

@@ -229,9 +229,14 @@ namespace dnSpy.Decompiler.ILSpy32.Mixed {
 			bridge = new DecompilerOutputTextOutput(output, module);
 			var bodyDisassembler = new MixedMethodBodyDisassembler(bridge, ctx.CancellationToken, module, createProvider);
 			bridge.BodyTracker = bodyDisassembler;
-			return new ReflectionDisassembler(bridge, bodyDisassembler, ctx.CancellationToken) {
+			var disassembler = new ReflectionDisassembler(bridge, bodyDisassembler, ctx.CancellationToken) {
 				DetectControlStructure = true,
 			};
+			// XML documentation above each member header, like the 2.3 Mixed view (its
+			// ShowXmlDocumentation option defaulted to on).
+			var sb = new StringBuilder();
+			disassembler.GetXmlDocComments = m => XmlDocComments32.GetXmlDocComments(module, m, sb);
+			return disassembler;
 		}
 
 		/// <summary>

@@ -413,6 +413,7 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 		bool atLineStart;
 		bool lineIsComment;
 		bool inStringLiteral;
+		bool xmlDocLinePending;
 
 		/// <summary>Set by the language class once the body tracker exists (circular init).</summary>
 		internal BodyTrackingMethodBodyDisassembler? BodyTracker { get; set; }
@@ -491,6 +492,20 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 		void WriteCore(string text, object? cecilReference, DecompilerReferenceFlags baseFlags) {
 			if (text.Length == 0)
 				return;
+
+			// XML documentation body: the engine writes "///" followed by the doc text. dnSpy
+			// has dedicated colors for the delimiter and the parsed XML, so route the text through
+			// IDecompilerOutput.WriteXmlDoc, exactly like the 2.3 view did.
+			if (xmlDocLinePending) {
+				xmlDocLinePending = false;
+				output.WriteXmlDoc(text);
+				return;
+			}
+			if (atLineStart && text == "///") {
+				xmlDocLinePending = true;
+				WriteWithReference("///", null, DecompilerReferenceFlags.None, BoxedTextColor.XmlDocCommentDelimiter);
+				return;
+			}
 
 			// ldstr operand content between the '"' writes keeps the string color.
 			if (inStringLiteral) {

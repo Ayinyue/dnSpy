@@ -91,6 +91,10 @@ class Probe {
 			InstallBinResolver(new[] { args[2] });
 			return AsyncProbe(args[1], args[2], args[3]);
 		}
+		if (args.Length > 0 && args[0] == "mixed-verify") {
+			InstallBinResolver(new[] { args[3] });
+			return MixedVerify(args[1], args[2], args[3]);
+		}
 		if (args.Length > 0 && args[0] == "ilast-verify") {
 			InstallBinResolver(new[] { args[3] });
 			return ILAstVerify(args[1], args[2], args[3]);
@@ -144,9 +148,34 @@ class Probe {
 		return output.Braces.Count > 0 && output.DebugInfo is not null ? 0 : 1;
 	}
 
+	// ==== mixed-verify: same idea as ilast-verify, for the Mixed language. Also dumps the
+	// first colored writes so the XML doc comment coloring can be checked.
+	static int MixedVerify(string targetDll, string tokenHex, string dnspyBin) {
+		var module = ModuleDefMD.Load(targetDll);
+		var token = int.Parse(tokenHex, System.Globalization.NumberStyles.HexNumber);
+		var method = module.ResolveToken(token) as MethodDef;
+		if (method is null) {
+			Console.WriteLine("no method for token " + tokenHex);
+			return 1;
+		}
+		var extAsm = System.Reflection.Assembly.LoadFrom(Path.Combine(dnspyBin, "dnSpy.Decompiler.ILSpy32.x.dll"));
+		var langType = extAsm.GetType("dnSpy.Decompiler.ILSpy32.Mixed.ILWithCSharpDecompiler32", true);
+		var lang = (dnSpy.Contracts.Decompiler.IDecompiler)Activator.CreateInstance(langType, new object[] { "IL with C# (ILSpy 3.2)" });
+		var output = new RecordingOutput();
+		lang.Decompile(method, output, new dnSpy.Contracts.Decompiler.DecompilationContext { CalculateILSpans = true });
+		Console.WriteLine("method=" + method.FullName);
+		Console.WriteLine("text=" + output.Text.Length + " chars");
+		Console.WriteLine("xmldoc lines=" + output.Text.Split('\n').Count(l => l.StartsWith("///")));
+		Console.WriteLine("first colored writes:");
+		foreach (var (text, color) in output.Colors.Take(14))
+			Console.WriteLine("  [" + color + "] " + text.Replace("\n", "\\n"));
+		return output.Text.Split('\n').Any(l => l.StartsWith("///")) ? 0 : 1;
+	}
+
 	sealed class RecordingOutput : dnSpy.Contracts.Decompiler.IDecompilerOutput {
 		public readonly System.Text.StringBuilder Sb = new System.Text.StringBuilder();
 		public readonly System.Collections.Generic.List<string> Braces = new System.Collections.Generic.List<string>();
+		public readonly System.Collections.Generic.List<(string text, object color)> Colors = new System.Collections.Generic.List<(string, object)>();
 		public dnSpy.Contracts.Decompiler.MethodDebugInfo DebugInfo;
 
 		public string Text => Sb.ToString();
@@ -157,8 +186,8 @@ class Probe {
 		public void IncreaseIndent() { }
 		public void DecreaseIndent() { }
 		public void WriteLine() => Sb.AppendLine();
-		public void Write(string text, object color) => Sb.Append(text);
-		public void Write(string text, int index, int length, object color) => Sb.Append(text, index, length);
+		public void Write(string text, object color) { Sb.Append(text); Colors.Add((text, color)); }
+		public void Write(string text, int index, int length, object color) { Sb.Append(text, index, length); Colors.Add((text.Substring(index, length), color)); }
 		public void Write(string text, object reference, dnSpy.Contracts.Decompiler.DecompilerReferenceFlags flags, object color) => Sb.Append(text);
 		public void Write(string text, int index, int length, object reference, dnSpy.Contracts.Decompiler.DecompilerReferenceFlags flags, object color) => Sb.Append(text, index, length);
 

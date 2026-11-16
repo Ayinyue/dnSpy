@@ -128,44 +128,47 @@ namespace dnSpy.Decompiler.ILSpy32.ILAst {
 
 			// The engine's ILReader needs an IDecompilerTypeSystem. The C# decompiler instance
 			// (cached per module and settings) already owns one, so reuse it instead of building
-			// a second type system for the same module.
-			var engine = CSharpDecompiler32.GetOrCreateEngine(cecilModule, settings.DecompilerSettings);
-			var typeSystem = DnlibCecilBridge.TryGetTypeSystem(engine) ?? new DecompilerTypeSystem(cecilModule);
-			var reader = new ILReader(typeSystem) {
-				UseDebugSymbols = settings.DecompilerSettings.EngineSettings.UseDebugSymbols,
-			};
-			var function = reader.ReadIL(cecilMethod.Body, ctx.CancellationToken);
+			// a second type system for the same module. The engine is not thread-safe, so it is
+			// used under the same per-instance gate as the C#/VB views.
+			var engineEntry = CSharpDecompiler32.GetOrCreateEngineEntry(cecilModule, settings.DecompilerSettings);
+			lock (engineEntry.Gate) {
+				var typeSystem = DnlibCecilBridge.TryGetTypeSystem(engineEntry.Engine) ?? new DecompilerTypeSystem(cecilModule);
+				var reader = new ILReader(typeSystem) {
+					UseDebugSymbols = settings.DecompilerSettings.EngineSettings.UseDebugSymbols,
+				};
+				var function = reader.ReadIL(cecilMethod.Body, ctx.CancellationToken);
 
-			if (settings.RunTransforms) {
-				var context = engine.CreateILTransformContext(function);
-				context.CancellationToken = ctx.CancellationToken;
-				function.RunTransforms(ICSharpCode.Decompiler.CSharp.CSharpDecompiler.GetILTransforms(), context);
-			}
+				if (settings.RunTransforms) {
+					var context = engineEntry.Engine.CreateILTransformContext(function);
+					context.CancellationToken = ctx.CancellationToken;
+					function.RunTransforms(ICSharpCode.Decompiler.CSharp.CSharpDecompiler.GetILTransforms(), context);
+				}
 
-			foreach (var warning in reader.Warnings)
-				output.WriteLine("// " + warning, BoxedTextColor.Comment);
+				foreach (var warning in reader.Warnings)
+					output.WriteLine("// " + warning, BoxedTextColor.Comment);
 
-			var bridge = new DecompilerOutputTextOutput(output, method.Module) {
-				// The ILAst writer reports its own brace pairs; the bridge's delimiter-based
-				// reconstruction (used by the IL view) would add duplicates.
-				TrackDelimiters = false,
-			};
-			var builder = new MethodDebugInfoBuilder(1, StateMachineKind.None, method, null,
-				CreateLocals(method), CreateParameters(method), null);
-			builder.Scope.Span = ILSpan.FromBounds(0, (uint)method.Body.GetCodeSize());
+				var bridge = new DecompilerOutputTextOutput(output, method.Module) {
+					// The ILAst writer reports its own brace pairs; the bridge's delimiter-based
+					// reconstruction (used by the IL view) would add duplicates.
+					TrackDelimiters = false,
+				};
+				var builder = new MethodDebugInfoBuilder(1, StateMachineKind.None, method, null,
+					CreateLocals(method), CreateParameters(method), null);
+				builder.Scope.Span = ILSpan.FromBounds(0, (uint)method.Body.GetCodeSize());
 
-			var options = new ILAstWritingOptions {
-				ShowILRanges = settings.ShowILRanges,
-				UseLogicOperationSugar = settings.UseLogicOperationSugar,
-				UseFieldSugar = settings.UseFieldSugar,
-				WriteCodeBracesRanges = true,
-				DebugInfoWriter = new StatementCollector(builder),
-			};
-			function.WriteTo(bridge, options);
+				var options = new ILAstWritingOptions {
+					ShowILRanges = settings.ShowILRanges,
+					UseLogicOperationSugar = settings.UseLogicOperationSugar,
+					UseFieldSugar = settings.UseFieldSugar,
+					WriteCodeBracesRanges = true,
+					DebugInfoWriter = new StatementCollector(builder),
+				};
+				function.WriteTo(bridge, options);
 
-			if (ctx.CalculateILSpans) {
-				builder.CompactILSpans((uint)method.Body.GetCodeSize());
-				output.AddDebugInfo(builder.Create());
+				if (ctx.CalculateILSpans) {
+					builder.CompactILSpans((uint)method.Body.GetCodeSize());
+					output.AddDebugInfo(builder.Create());
+				}
 			}
 		}
 

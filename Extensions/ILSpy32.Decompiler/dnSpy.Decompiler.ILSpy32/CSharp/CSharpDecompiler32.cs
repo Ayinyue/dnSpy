@@ -42,16 +42,28 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		// instances are cached per bridged module and per engine settings. The C# and VB
 		// decompilers configure the engine differently (VB disables null-propagation), and
 		// the engine reads its settings when it is constructed, so they cannot share one.
-		static readonly ConditionalWeakTable<ModuleDefinition, Dictionary<DecompilerSettings32, ICSharpCode.Decompiler.CSharp.CSharpDecompiler>> engineCache = new ConditionalWeakTable<ModuleDefinition, Dictionary<DecompilerSettings32, ICSharpCode.Decompiler.CSharp.CSharpDecompiler>>();
-		internal static readonly object engineLock = new object();
+		internal sealed class EngineEntry {
+			public readonly ICSharpCode.Decompiler.CSharp.CSharpDecompiler Engine;
+			/// <summary>Guards the non-thread-safe <see cref="Engine"/>; one gate per engine, so
+			/// different modules/settings can still decompile in parallel.</summary>
+			public readonly object Gate = new object();
 
-		internal static ICSharpCode.Decompiler.CSharp.CSharpDecompiler GetOrCreateEngine(ModuleDefinition cecilModule, DecompilerSettings32 settings) {
+			public EngineEntry(ICSharpCode.Decompiler.CSharp.CSharpDecompiler engine) => Engine = engine;
+		}
+
+		static readonly ConditionalWeakTable<ModuleDefinition, Dictionary<DecompilerSettings32, EngineEntry>> engineCache = new ConditionalWeakTable<ModuleDefinition, Dictionary<DecompilerSettings32, EngineEntry>>();
+		/// <summary>Only guards the cache dictionary itself (short critical section).</summary>
+		internal static readonly object engineCacheLock = new object();
+
+		internal static EngineEntry GetOrCreateEngineEntry(ModuleDefinition cecilModule, DecompilerSettings32 settings) {
 			var engines = engineCache.GetOrCreateValue(cecilModule);
-			if (!engines.TryGetValue(settings, out var engine)) {
-				engine = new ICSharpCode.Decompiler.CSharp.CSharpDecompiler(cecilModule, settings.EngineSettings);
-				engines.Add(settings, engine);
+			lock (engineCacheLock) {
+				if (!engines.TryGetValue(settings, out var entry)) {
+					entry = new EngineEntry(new ICSharpCode.Decompiler.CSharp.CSharpDecompiler(cecilModule, settings.EngineSettings));
+					engines.Add(settings, entry);
+				}
+				return entry;
 			}
-			return engine;
 		}
 
 		/// <summary>
@@ -207,8 +219,9 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				return;
 			}
 			try {
-				lock (engineLock) {
-					var engine = GetOrCreateEngine(cecilModule, settings);
+				var engineEntry = GetOrCreateEngineEntry(cecilModule, settings);
+				lock (engineEntry.Gate) {
+					var engine = engineEntry.Engine;
 					var tree = decompile(engine);
 					// The engine hides compiler-generated implementation-detail types entirely
 					// (<PrivateImplementationDetails> renders empty via MemberIsHidden); the 2.3

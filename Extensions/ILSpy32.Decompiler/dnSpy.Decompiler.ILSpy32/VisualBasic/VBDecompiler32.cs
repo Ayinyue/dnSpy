@@ -186,8 +186,9 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree csharpUnit;
 			ICSharpCode.Decompiler.TypeSystem.DecompilerTypeSystem? engineTypeSystem = null;
 			try {
-				lock (CSharpDecompiler32.engineLock) {
-					var engine = CSharpDecompiler32.GetOrCreateEngine(cecilModule, settings);
+				var engineEntry = CSharpDecompiler32.GetOrCreateEngineEntry(cecilModule, settings);
+				lock (engineEntry.Gate) {
+					var engine = engineEntry.Engine;
 					csharpUnit = decompile(engine);
 					// The engine hides compiler-generated implementation-detail types entirely
 					// (<PrivateImplementationDetails> renders empty via MemberIsHidden); the 2.3

@@ -705,6 +705,19 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 			if (text.Length == 0)
 				return;
 
+			// Fast path: the classification only looks at line starts, comments, string
+			// literals and delimiters, so a single plain character can go straight to the
+			// dnSpy output (Write(char) used to allocate a string for every character).
+			if (text.Length == 1 && cecilReference is null && !xmlDocLinePending) {
+				char c = text[0];
+				if (c != '\n' && c != '\r' && c != '\t' && c != '/' && c != '{' && c != '}' &&
+					c != '(' && c != ')' && c != '[' && c != ']' && c != '"' && c != '\'') {
+					output.Write(text, null, DecompilerReferenceFlags.None, BoxedTextColor.Text);
+					atLineStart = false;
+					return;
+				}
+			}
+
 			// XML documentation body: the engine writes "///" followed by the doc text. dnSpy
 			// has dedicated colors for the delimiter and the parsed XML, so route the text through
 			// IDecompilerOutput.WriteXmlDoc, exactly like the 2.3 view did.

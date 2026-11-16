@@ -107,6 +107,12 @@ Invoke-Probe @('mixed-verify', $logic, '0600024D', $dnspyBin) 'mixed-verify'
 Invoke-Probe @('bench', $logic, $dnspyBin, '20') 'bench' -Soft -AllowSkip
 # 需要 2.3 比较资产（见 baseline/README.md）；没有则跳过。
 Invoke-Probe @('lang-diff', $logic, 'dnSpy.Contracts.Decompiler.MethodDebugInfoBuilder', $dnspyBin, $path23) 'lang-diff (vs 2.3)' -Soft
+# Whole-assembly IL baselines. Three hand-picked samples hid a 90% line difference, so the
+# corpus numbers are part of the acceptance gate: identical= / diffLines per assembly.
+# 2026-11-17 baseline: DnSpy.dll 1226/2058, Debugger 296/286, Logic 86/2967.
+foreach ($corpusAsm in @('dnSpy.Contracts.DnSpy.dll', 'dnSpy.Contracts.Debugger.dll', 'dnSpy.Contracts.Logic.dll')) {
+	Invoke-Probe @('lang-diff-all', "$dnspyBin/$corpusAsm", $dnspyBin, $path23, 'IL (') "corpus IL: $corpusAsm" -Soft
+}
 
 Write-Report "=== summary: hardFail=$script:hard softFail=$script:soft skip=$script:skip ==="
 Write-Report "report: $report"

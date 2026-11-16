@@ -98,6 +98,9 @@ class Probe {
 			InstallBinResolver(new[] { args[3] });
 			return MixedVerify(args[1], args[2], args[3]);
 		}
+		if (args.Length > 0 && args[0] == "lang-diff-all") {
+			return LangDiffAll(args[1], args[2], args[3], args.Length >= 5 ? args[4] : null);
+		}
 		if (args.Length > 0 && args[0] == "lang-diff") {
 			return LangDiff(args[1], args[2], args[3], args[4], args.Length >= 7 ? args[5] : null, args.Length >= 7 ? args[6] : null, args.Length >= 8 ? args[7] : null);
 		}
@@ -250,6 +253,48 @@ class Probe {
 			sections[guid] = sect;
 			return sect;
 		}
+	}
+
+	// ==== lang-diff-all: the same comparison over every type of an assembly, so the residual
+	// difference rate is not a 3-sample artefact.
+	//   lang-diff-all <targetDll> <dnspyBin> <path23> [langFilter]
+	static int LangDiffAll(string targetDll, string dnspyBin, string path23, string? langFilter = null) {
+		InstallBinResolver(new[] { dnspyBin, path23 });
+		var module = ModuleDefMD.Load(targetDll);
+		var languages23 = LoadProviders(Path.Combine(path23, "dnSpy.Decompiler.ILSpy.Core.dll"));
+		var languages32 = LoadProviders(Path.Combine(dnspyBin, "dnSpy.Decompiler.ILSpy32.x.dll"));
+		foreach (var kv32 in languages32) {
+			var suffix = kv32.Key.Replace(" (ILSpy 3.2)", string.Empty);
+			if (!languages23.TryGetValue(suffix, out var l23))
+				continue;
+			if (!string.IsNullOrEmpty(langFilter) && !kv32.Key.StartsWith(langFilter, StringComparison.Ordinal))
+				continue;
+			int types = 0, identical = 0, diffLines = 0, errors = 0;
+			var samples = new List<string>();
+			foreach (var type in module.Types) {
+				if (type.Name!.StartsWith("<"))
+					continue;
+				types++;
+				string? a = null, b = null;
+				try { a = DecompileLanguage(l23.Item2, module, type.FullName); }
+				catch { errors++; }
+				try { b = DecompileLanguage(kv32.Value.Item2, module, type.FullName); }
+				catch { errors++; }
+				if (a is null || b is null)
+					continue;
+				if (a == b)
+					identical++;
+				else {
+					diffLines += DiffLineCount(a, b);
+					if (samples.Count < 5)
+						samples.Add(type.FullName + " (" + DiffLineCount(a, b) + ")");
+				}
+			}
+			Console.WriteLine($"{kv32.Key,-24} types={types} identical={identical} diffLines={diffLines} errors={errors}");
+			foreach (var s in samples)
+				Console.WriteLine("    " + s);
+		}
+		return 0;
 	}
 
 	// ==== lang-diff: M4 removed the 2.3 extension from the build, so the console can no longer

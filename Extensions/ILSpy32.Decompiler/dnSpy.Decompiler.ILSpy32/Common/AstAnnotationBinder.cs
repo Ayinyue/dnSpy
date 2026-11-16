@@ -31,12 +31,27 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 	/// This binder walks the tree once and attaches the dnlib definitions by name.
 	/// </summary>
 	static class AstAnnotationBinder {
-		public static void Attach(ModuleDef module, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree) =>
-			Attach(module, tree, null);
+		/// <summary>
+		/// Per-module name index. Building it walks the module three times, so it is cached with the
+		/// module's lifetime; decompiling a type's members repeatedly used to rebuild it every time.
+		/// </summary>
+		sealed class ModuleIndex {
+			public readonly Dictionary<string, TypeDef> Types;
+			public readonly Dictionary<string, TypeDef> BySimpleName;
+			public readonly HashSet<string> AmbiguousNames;
 
-		public static void Attach(ModuleDef module, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree, TypeDef? knownType) {
-			if (module is null || tree is null)
-				return;
+			public ModuleIndex(Dictionary<string, TypeDef> types, Dictionary<string, TypeDef> bySimpleName, HashSet<string> ambiguousNames) {
+				Types = types;
+				BySimpleName = bySimpleName;
+				AmbiguousNames = ambiguousNames;
+			}
+		}
+
+		static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ModuleDef, ModuleIndex> moduleIndexes = new System.Runtime.CompilerServices.ConditionalWeakTable<ModuleDef, ModuleIndex>();
+
+		static ModuleIndex GetIndex(ModuleDef module) => moduleIndexes.GetValue(module, m => BuildIndex(m));
+
+		static ModuleIndex BuildIndex(ModuleDef module) {
 			var types = new Dictionary<string, TypeDef>(StringComparer.Ordinal);
 			foreach (var type in module.GetTypes())
 				types[type.FullName] = type;
@@ -64,6 +79,19 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 				else
 					bySimpleName[simpleName] = type;
 			}
+			return new ModuleIndex(types, bySimpleName, ambiguousNames);
+		}
+
+		public static void Attach(ModuleDef module, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree) =>
+			Attach(module, tree, null);
+
+		public static void Attach(ModuleDef module, ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree, TypeDef? knownType) {
+			if (module is null || tree is null)
+				return;
+			var index = GetIndex(module);
+			var types = index.Types;
+			var bySimpleName = index.BySimpleName;
+			var ambiguousNames = index.AmbiguousNames;
 
 			// The caller knows exactly which type is being decompiled (dnSpy passes the TypeDef);
 			// bind it and its nested types directly by name, bypassing the simple-name ambiguity

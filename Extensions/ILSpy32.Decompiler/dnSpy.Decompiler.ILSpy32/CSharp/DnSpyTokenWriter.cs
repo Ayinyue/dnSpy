@@ -1511,8 +1511,19 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			return null;
 		}
 
+		Dictionary<Mono.Cecil.MemberReference, object?>? toDnlibCache;
+
 		object? ToDnlib(Mono.Cecil.MemberReference? cecilMember) {
+			if (cecilMember is null)
+				return null;
+			// cecil hands out the same instance for a given metadata token, so reference
+			// equality is a valid cache key. ResolveToken + SameIdentity dominate the render
+			// of large types (the same member is resolved from hundreds of tokens).
+			var cache = toDnlibCache ??= new Dictionary<Mono.Cecil.MemberReference, object?>();
+			if (cache.TryGetValue(cecilMember, out var cached))
+				return cached;
 			var mapped = Common.DnlibReferenceMapper.ToDnlib(module, cecilMember);
+			cache[cecilMember] = mapped;
 			if (mapped is null)
 				lastColorPath = "ref-external-unmapped";
 			return mapped;

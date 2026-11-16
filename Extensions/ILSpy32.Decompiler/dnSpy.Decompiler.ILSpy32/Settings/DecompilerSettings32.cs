@@ -110,6 +110,7 @@ namespace dnSpy.Decompiler.ILSpy32.Settings {
 			// (dnSpy clones before editing, and the decompiler cache keys on the instance).
 			EngineSettings = other.EngineSettings.Clone();
 			showTokenAndRvaComments = other.showTokenAndRvaComments;
+			sortMembers = other.sortMembers;
 			version = other.version;
 		}
 

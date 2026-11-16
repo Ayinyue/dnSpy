@@ -60,10 +60,28 @@ namespace dnSpy.Decompiler.ILSpy32.Mixed {
 		/// (2.3 did the same). Reflection-based loaders (dnSpy.Console, baseline) have no MEF
 		/// composition and get default instances.
 		/// </summary>
+		// The overlay settings only depend on the persisted C# settings, so clone them once.
+		// Cloning per method made the decompiler cache miss every time and rebuild the whole
+		// cecil type system (measured: ~5x slower than the C# view at member level).
+		readonly DecompilerSettings32 overlaySettings;
+		readonly DecompilerSettings32 overlaySettingsNoStateMachine;
+
 		public ILWithCSharpDecompiler32(DecompilerSettings32 csharpSettings, ILDecompilerSettings32 ilSettings, string uniqueNameUI) {
 			csharpLangSettings = csharpSettings ?? throw new ArgumentNullException(nameof(csharpSettings));
 			ilLangSettings = ilSettings ?? throw new ArgumentNullException(nameof(ilSettings));
 			this.uniqueNameUI = uniqueNameUI ?? throw new ArgumentNullException(nameof(uniqueNameUI));
+			overlaySettings = CreateOverlaySettings(csharpSettings, disableStateMachineDecompilation: false);
+			overlaySettingsNoStateMachine = CreateOverlaySettings(csharpSettings, disableStateMachineDecompilation: true);
+		}
+
+		static DecompilerSettings32 CreateOverlaySettings(DecompilerSettings32 csharpSettings, bool disableStateMachineDecompilation) {
+			var settings = (DecompilerSettings32)csharpSettings.Clone();
+			settings.EngineSettings.UsingDeclarations = false;
+			if (disableStateMachineDecompilation) {
+				settings.EngineSettings.AsyncAwait = false;
+				settings.EngineSettings.YieldReturn = false;
+			}
+			return settings;
 		}
 
 		public ILWithCSharpDecompiler32(DecompilerSettings32 csharpSettings, string uniqueNameUI) : this(csharpSettings, new ILDecompilerSettings32(), uniqueNameUI) { }
@@ -343,12 +361,7 @@ namespace dnSpy.Decompiler.ILSpy32.Mixed {
 
 		(MethodDebugInfo debugInfo, MethodDebugInfo? stateMachineDebugInfo) TryDecompileCode(MethodDef method, DecompilationContext ctx, DecompilerOutputImpl32 output, bool disableStateMachineDecompilation) {
 			output.Initialize(method);
-			var settings = (DecompilerSettings32)csharpLangSettings.Clone();
-			settings.EngineSettings.UsingDeclarations = false;
-			if (disableStateMachineDecompilation) {
-				settings.EngineSettings.AsyncAwait = false;
-				settings.EngineSettings.YieldReturn = false;
-			}
+			var settings = disableStateMachineDecompilation ? overlaySettingsNoStateMachine : overlaySettings;
 			var csharp = new CSharpDecompiler32(settings, "C# (ILSpy 3.2)");
 			// The statement table is the whole point here, so force CalculateILSpans on a copy
 			// of the caller's context instead of flipping the shared instance.

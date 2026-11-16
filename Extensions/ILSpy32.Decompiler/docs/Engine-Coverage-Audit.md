@@ -170,18 +170,20 @@
 
 | 类型（dnSpy.Contracts.Logic） | C# diff | VB diff | IL diff | token 数 2.3/3.2 |
 |---|---|---|---|---|
-| `MethodDebugInfoBuilder` | 168 行 | 106 行 | **0** | 28 / 28 |
+| `MethodDebugInfoBuilder` | 142 行 | 107 行 | **0** | 28 / 28 |
 | `MethodDebugInfo` | — | — | 4 行 | 27 / 27 |
 | `MethodDebugScope` | — | — | **0** | 12 / 12 |
 
-期间又修掉两项（2026-11-17）：
+期间又修掉三项（2026-11-17）：
 - **自动属性折叠**：2.3（NRefactory）把全空访问器列表折成一行 `{ get; set; }`；3.2 的
   `CSharpOutputVisitor` 一直忽略 `AutoPropertyFormatting`。已实现（`ForceOneLine`，即 2.3 的
-  `SingleLine`），并把折叠属性的 `(get)`/`(set)` 注释移到声明上方（与 2.3 一致；VB 侧显式关闭，
-  因为 VB 没有自动属性语法）。C# token 注释的 RVA/File Offset 段也一并修好——dnlib 的
-  `MethodDef.RVA` 是 `dnlib.PE.RVA` 结构，`{...:X8}` 会抛异常被吞掉，导致 3.2 的 RVA 段
-  一直是空的（现在 C# 16/16 与 2.3 相同）。
-- 结论：C# 差异 226 → **168** 行，全部为成员顺序与属性/访问器注释位置。
+  `SingleLine`）。
+- **成员顺序**：2.3 默认（SortMembers 关）是**元数据 token 顺序**（属性/索引器按访问器、
+  事件按 add/remove 计），3.2 引擎把字段放最前。`ReorderMembers` 现在默认也跑（token 序），
+  并且必须带着每个成员的注释一起搬、且排在 `InsertTokenComments` 之前。VB 同路径。
+- **RVA 段缺失（真 bug）**：dnlib `MethodDef.RVA` 是 `dnlib.PE.RVA` 结构，`{...:X8}` 会抛
+  异常被吞掉 → 3.2 的 C# token 注释一直没有 `RVA:/File Offset:`（现 16/16）。
+- 结论：C# 差异 226 → **142** 行、VB 110 → **107** 行，剩余为属性/访问器注释位置等零散形态。
 
 结论：
 - **token 集合与数量逐一相同**——C#/VB 的差异是**形态**而非引用缺失，符合项目既定的

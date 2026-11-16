@@ -249,3 +249,21 @@ System / System.*  → 排最前；两组内部均 OrdinalIgnoreCase 降序（�
 `ReorderMembers` 更容易出错，留作专项。
 
 **已实现（2026-11-17）**：引擎新增 `SortSystemUsingStatementsFirst`（默认关，`DecompilerSettings32` 开启，C#/VB 同时生效，提交 `245ca8c`）。三例 using 块现与 2.3 完全一致。
+
+### 8.9 整程序集对拍收敛后的残余（2026-11-17）
+
+`lang-diff-all` 固化为验收基线（`verify-all` 软门）后，逐轮修掉系统性差异，DnSpy.dll 的
+diffLines 从 20937 → 2058 → **116**：
+
+| 修掉的系统性差异 | 效果 |
+|---|---|
+| Events 段后多一个空行 | DnSpy.dll -30 行级 |
+| 接口实现特性内联在 `implements` 子句（应作类体内 `.interfaceimpl`） | DnSpy.dll identical +122 |
+| 方法自身泛型参数不发 `.param type T` | DnSpy.dll diffLines 2058 → 116；IScriptGlobals 300 → 0 |
+
+残余（最大 38 行/类型，均为可解释的形态差异）：
+- **`ldelem.any` vs `ldelem`**：0xA3 的名称。3.2（cecil）印全名，2.3（dnlib）印 `ldelem`。3.2 更准确，**不改**。
+- **局部名引号**：2.3 对与 IL 关键字同名的局部名加单引号（`'field'`、`'property'`），3.2 不转义。规则明确但需改引擎 operand 写入，留作专项。
+- C#/VB 的 `this.` 省略 / 局部名（PDB）/ 嵌套类型限定：既定风格或需读符号，见 §3、§8.7。
+
+当前整程序集 identical 类型数：IL **DnSpy.dll 1246/1310、Debugger 296/303、Logic 107/114**。

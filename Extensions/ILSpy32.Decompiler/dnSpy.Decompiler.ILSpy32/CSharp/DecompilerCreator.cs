@@ -51,8 +51,9 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			yield return new ILDecompiler32("IL (ILSpy 3.2)");
 			// Unlike the 2.3 ILAst language (a #if DEBUG dev tool with one entry per optimizer
 			// step), this one is always registered; its options live in its settings page.
+			// Mixed's C# overlay uses the persisted C# settings (same instance as the C# view).
 			yield return new ILAstDecompiler32("ILAst (ILSpy 3.2)");
-			yield return new ILWithCSharpDecompiler32("IL with C# (ILSpy 3.2)");
+			yield return new ILWithCSharpDecompiler32(csharpSettings ?? new DecompilerSettings32(), "IL with C# (ILSpy 3.2)");
 		}
 	}
 }

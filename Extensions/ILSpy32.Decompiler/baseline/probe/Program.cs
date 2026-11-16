@@ -1,7 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.IO;
-using System.Linq;
 using dnlib.DotNet;
 using dnlib.DotNet.Emit;
 using dnlib.DotNet.Writer;
@@ -95,6 +95,10 @@ class Probe {
 			InstallBinResolver(new[] { args[3] });
 			return MixedVerify(args[1], args[2], args[3]);
 		}
+		if (args.Length > 0 && args[0] == "mixed-settings-wiring") {
+			InstallBinResolver(new[] { args[1] });
+			return MixedSettingsWiring(args[1]);
+		}
 		if (args.Length > 0 && args[0] == "ilast-verify") {
 			InstallBinResolver(new[] { args[3] });
 			return ILAstVerify(args[1], args[2], args[3]);
@@ -125,6 +129,82 @@ class Probe {
 			}
 			return null;
 		};
+	}
+
+	// ==== mixed-settings-wiring: walk the MEF composition path (DecompilerCreator with the
+	// persisted settings singletons) and assert the Mixed language received the same C#
+	// settings instance as the C# view. This is the P2-② wiring check.
+	static int MixedSettingsWiring(string dnspyBin) {
+		var extAsm = System.Reflection.Assembly.LoadFrom(Path.Combine(dnspyBin, "dnSpy.Decompiler.ILSpy32.x.dll"));
+		var csImplType = extAsm.GetType("dnSpy.Decompiler.ILSpy32.Settings.DecompilerSettings32Impl", true);
+		var vbImplType = extAsm.GetType("dnSpy.Decompiler.ILSpy32.Settings.VbDecompilerSettings32Impl", true);
+		var creatorType = extAsm.GetType("dnSpy.Decompiler.ILSpy32.CSharp.DecompilerCreator", true);
+		var fake = new FakeSettingsService();
+
+		var csImpl = NewInstance(csImplType, fake);
+		var vbImpl = NewInstance(vbImplType, fake);
+		var creator = creatorType.GetConstructors().First(c => c.GetParameters().Length == 2).Invoke(new object[] { csImpl, vbImpl });
+		var langs = ((System.Collections.IEnumerable)creatorType.GetMethod("Create").Invoke(creator, null)).Cast<object>().ToList();
+
+		var mixed = langs.First(l => l.GetType().Name == "ILWithCSharpDecompiler32");
+		var csharp = langs.First(l => l.GetType().Name == "CSharpDecompiler32");
+		var mixedField = mixed.GetType().GetField("csharpLangSettings", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+		var csharpField = csharp.GetType().GetField("settings", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+		var mixedSettings = mixedField.GetValue(mixed);
+		var csharpSettings = csharpField.GetValue(csharp);
+		Console.WriteLine("mixedCsharpSettingsIsPersistedInstance=" + ReferenceEquals(mixedSettings, csImpl));
+		Console.WriteLine("csharpViewUsesSameInstance=" + ReferenceEquals(csharpSettings, csImpl));
+		return ReferenceEquals(mixedSettings, csImpl) && ReferenceEquals(csharpSettings, csImpl) ? 0 : 1;
+	}
+
+	static object NewInstance(Type type, object arg) {
+		var ctor = type.GetConstructors(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic)
+			.First(c => c.GetParameters().Length == 1);
+		return ctor.Invoke(new object[] { arg });
+	}
+
+	sealed class FakeSection : dnSpy.Contracts.Settings.ISettingsSection {
+		public string Name { get; set; } = string.Empty;
+		public Dictionary<string, string> Values = new Dictionary<string, string>(StringComparer.Ordinal);
+		public (string key, string value)[] Attributes => Values.Select(kv => (kv.Key, kv.Value)).ToArray();
+		public dnSpy.Contracts.Settings.ISettingsSection[] Sections => Array.Empty<dnSpy.Contracts.Settings.ISettingsSection>();
+		public dnSpy.Contracts.Settings.ISettingsSection? GetSection(Guid guid) => null;
+		public dnSpy.Contracts.Settings.ISettingsSection CreateSection(string name) => new FakeSection { Name = name };
+		public dnSpy.Contracts.Settings.ISettingsSection GetOrCreateSection(string name) => new FakeSection { Name = name };
+		public void RemoveSection(string name) { }
+		public void RemoveSection(dnSpy.Contracts.Settings.ISettingsSection section) { }
+		public dnSpy.Contracts.Settings.ISettingsSection[] SectionsWithName(string name) => Array.Empty<dnSpy.Contracts.Settings.ISettingsSection>();
+		public dnSpy.Contracts.Settings.ISettingsSection? TryGetSection(string name) => null;
+		public void Attribute<T>(string name, T value) => Values[name] = value?.ToString() ?? string.Empty;
+		public T? Attribute<T>(string name) {
+			if (Values.TryGetValue(name, out var s))
+				return (T?)Convert.ChangeType(s, typeof(T));
+			return default;
+		}
+		public void RemoveAttribute(string name) => Values.Remove(name);
+		public void CopyFrom(dnSpy.Contracts.Settings.ISettingsSection section) {
+			Name = section.Name;
+			Values = section.Attributes.ToDictionary(a => a.key, a => a.value, StringComparer.Ordinal);
+		}
+	}
+
+	sealed class FakeSettingsService : dnSpy.Contracts.Settings.ISettingsService {
+		readonly Dictionary<Guid, FakeSection> sections = new Dictionary<Guid, FakeSection>();
+		public dnSpy.Contracts.Settings.ISettingsSection[] Sections => sections.Values.Cast<dnSpy.Contracts.Settings.ISettingsSection>().ToArray();
+		public dnSpy.Contracts.Settings.ISettingsSection GetOrCreateSection(Guid guid) {
+			if (!sections.TryGetValue(guid, out var sect)) {
+				sect = new FakeSection { Name = guid.ToString() };
+				sections.Add(guid, sect);
+			}
+			return sect;
+		}
+		public void RemoveSection(Guid guid) => sections.Remove(guid);
+		public void RemoveSection(dnSpy.Contracts.Settings.ISettingsSection section) { }
+		public dnSpy.Contracts.Settings.ISettingsSection RecreateSection(Guid guid) {
+			var sect = new FakeSection { Name = guid.ToString() };
+			sections[guid] = sect;
+			return sect;
+		}
 	}
 
 	// ==== ilast-verify: the console's output discards custom data, so the only way to see the

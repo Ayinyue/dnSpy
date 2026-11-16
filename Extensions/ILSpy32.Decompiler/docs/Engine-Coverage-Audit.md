@@ -137,7 +137,7 @@
 | HexadecimalNumbers | 无 | **引擎能力缺口**：3.2 反汇编数字格式化无 hex |
 | —（3.2 新增） | ILAst 4 项：Run IL transforms / Show IL ranges / logic sugar / field sugar（B\ILAst\ILAstDecompilerSettings32.cs:94-106） | 2.3 无对应 |
 
-补充：Mixed 的 C# 叠加层使用独立 `new DecompilerSettings32()`（B\Mixed:53,313），**不读持久化的 C# 单例**——2.3 Mixed 读的是持久化 `CSharpVBDecompilerSettings`（A\Mixed:42,102）。
+补充：Mixed 的 C# 叠加层已改为使用**持久化的 C# 单例**（`DecompilerSettings32Impl`，与 C# 视图同一实例；反射加载器回退到默认实例）——与 2.3 Mixed 读持久化 `CSharpVBDecompilerSettings` 一致（P2⑦ 已修）。
 
 ### 8.3 注册面差异（M4 移除 2.3 的影响）
 
@@ -160,4 +160,4 @@
 - **P0（已修）**：① ✅ 3.2 扩展补 6 个 `ContentTypeDefinition` 导出（`ContentTypeDefinitions.cs`，五语言改用常量）；② ✅ 补 `ISimpleILPrinter` 导出（`IL/SimpleILPrinter32.cs`）+ `Common/DnlibILText32.cs`（2.3 dnlib→IL 写入器移植）+ `Common/ILDecompilerUtils32.cs`；对拍 **8565 样本 diffSamples=0**（两侧各 1,543,426 字符逐字相同）。
 - **P1（对齐）**：③ ✅ 三语言补 `WriteToolTip` / `TypeToString`；④ ✅ ILAst 的 `Decompile(TypeDef)` 已补全；⑤ ✅ IL/Mixed 的 2.3 装饰已做成开关（`ILDecompilerSettings32` 四个 bool，GUID/默认值同 2.3；IL 与 Mixed 共用该类但各自持有实例）。已用 `dnSpy.Console --dont-*` 逐个验证：XML 9→0、Token/RVA 1→0、IL 字节 73→0、PDB 12→0（Mixed 同样生效）；默认输出仍与 2.3 逐字一致。
 - **构建管线（新发现，已修）**：`dotnet build dnSpy.sln -c Release -f net10.0-windows` 会把 **Debug** 版 3.2 引擎 DLL 放进 dnSpy bin（引擎不在 sln 内，MSBuild 对引用外用默认配置）——已实测：sln 构建后 `ILSpy32.Decompiler.dll` 为 1,832,960 字节（Debug），单独构建扩展后为 1,585,152（Release）。已在 `build.ps1` 的 `Build-Net` 里显式以 Release 重建引擎与扩展（两条分支都加）；把引擎加入 sln 的替代方案与 `-f` 冲突（NETSDK1005，引擎是 netstandard2.0-only），已回退。
-- **P2（引擎能力缺口 / 清理）**：⑥ 评估在 3.2 引擎补 ShowILComments / SortMembers / MaxStringLength / HexadecimalNumbers 的 public API；⑦ Mixed 的 C# 叠加改用持久化 C# 设置；⑧ 2.3 设置段清理。
+- **P2（引擎能力缺口 / 清理）**：⑥ 评估在 3.2 引擎补 ShowILComments / SortMembers / MaxStringLength / HexadecimalNumbers 的 public API；⑦ ✅ Mixed 的 C# 叠加改用持久化 C# 设置（`mixed-settings-wiring` 模式验证：与 C# 视图同一实例）；⑧ 2.3 设置段清理（保留 2.3 时那些段仍是 2.3 语言的活设置，非孤儿）。

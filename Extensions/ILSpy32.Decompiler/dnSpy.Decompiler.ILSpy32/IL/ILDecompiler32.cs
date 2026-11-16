@@ -19,6 +19,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Text;
 using System.Threading;
 using dnlib.DotNet;
 using dnSpy.Contracts.Decompiler;
@@ -200,10 +201,32 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 			bridge = new DecompilerOutputTextOutput(output, module);
 			var bodyDisassembler = new BodyTrackingMethodBodyDisassembler(bridge, ctx.CancellationToken, module);
 			bridge.BodyTracker = bodyDisassembler;
-			return new ReflectionDisassembler(bridge, bodyDisassembler, ctx.CancellationToken) {
+			var disassembler = new ReflectionDisassembler(bridge, bodyDisassembler, ctx.CancellationToken) {
 				// The 2.3 language only ever instantiated the structured variant (flat IL was dead code).
 				DetectControlStructure = true,
 			};
+			// The 2.3 IL view's defaults: XML documentation, the '// Token: ...' comment, the
+			// Header/Code Size/LocalVarSig block, local names, IL bytes, PDB source locations and
+			// the padded operand column with upper-case IL labels.
+			var sb = new StringBuilder();
+			disassembler.GetXmlDocComments = m => XmlDocComments32.GetXmlDocComments(module, m, sb);
+			disassembler.GetTokenAndRvaComment = m => TokenComment32.GetComment(module, m);
+			bodyDisassembler.GetBodyHeaderComments = m => ToDnlib(module, m) is MethodDef dm ? MixedDisassemblyComments32.GetHeaderComments(dm) : null;
+			bodyDisassembler.GetLocalNames = m => ToDnlib(module, m) is MethodDef dm ? MixedDisassemblyComments32.GetLocalNames(dm) : null;
+			bodyDisassembler.ShowInstructionDecorations = true;
+			bodyDisassembler.IsBodyModifiedFunc = ctx.IsBodyModified;
+			bodyDisassembler.UseDnSpyLayout = true;
+			return disassembler;
+		}
+
+		/// <summary>Bridges a cecil method back to its dnlib counterpart (rids are preserved).</summary>
+		static MethodDef? ToDnlib(ModuleDef module, MethodDefinition method) {
+			try {
+				return module.ResolveToken((uint)method.MetadataToken.ToInt32()) as MethodDef;
+			}
+			catch {
+				return null;
+			}
 		}
 
 		/// <summary>
@@ -347,11 +370,31 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 		public DnlibInstruction? FindInstruction(int offset) =>
 			instructionMap is not null && instructionMap.TryGetValue(offset, out var inst) ? inst : null;
 
+		/// <summary>
+		/// Whether to write the 2.3-style per-instruction decorations: the <c>/* 0x... bytes */</c>
+		/// prefix, the PDB source-location comment and the async state machine comments. Off by
+		/// default; the IL and Mixed views turn it on.
+		/// </summary>
+		public bool ShowInstructionDecorations { get; set; }
+
+		/// <summary>Used to decide whether the original or modified instruction bytes are read.</summary>
+		public Func<MethodDef, bool>? IsBodyModifiedFunc { get; set; }
+
+		IInstructionBytesReader? byteReader;
+		long? baseFileOffset;
+
 		public override void Disassemble(MethodBody body) {
 			var prevMethod = currentMethod;
 			var prevMap = instructionMap;
 			currentMethod = TryResolveMethod(body.Method);
 			instructionMap = BuildInstructionMap(currentMethod);
+			byteReader = null;
+			baseFileOffset = null;
+			if (ShowInstructionDecorations && currentMethod is not null) {
+				byteReader = MixedDisassemblyComments32.CreateByteReader(
+					currentMethod, IsBodyModifiedFunc?.Invoke(currentMethod) == true);
+				baseFileOffset = MixedDisassemblyComments32.GetBaseFileOffset(currentMethod);
+			}
 			try {
 				base.Disassemble(body);
 			}
@@ -364,14 +407,35 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 		/// <summary>
 		/// Brackets each instruction's written span so the IL view's debug info can map every
 		/// IL offset to the output positions it occupies (the 2.3 engine's MethodBodyDisassembler
-		/// took a MethodDebugInfoBuilder and did the same).
+		/// took a MethodDebugInfoBuilder and did the same). The 2.3 decorations, when enabled, are
+		/// written before the span starts, exactly like the 2.3 engine did.
 		/// </summary>
 		protected override void WriteInstruction(ITextOutput output, Instruction instruction) {
+			if (ShowInstructionDecorations)
+				WriteDecorations(output, instruction);
 			if (output is DecompilerOutputTextOutput bridge)
 				bridge.BeginInstruction(instruction.Offset);
 			base.WriteInstruction(output, instruction);
 			if (output is DecompilerOutputTextOutput bridge2)
 				bridge2.EndInstruction();
+		}
+
+		/// <summary>The 2.3 <c>ShowILBytes</c> / <c>ShowPdbInfo</c> decorations for one instruction.</summary>
+		protected void WriteDecorations(ITextOutput output, Instruction instruction) {
+			var method = currentMethod;
+			if (method is null)
+				return;
+			var dnlibInstruction = FindInstruction(instruction.Offset);
+			if (dnlibInstruction is null)
+				return;
+			var sequencePointComment = MixedDisassemblyComments32.GetSequencePointComment(dnlibInstruction);
+			if (sequencePointComment is not null)
+				output.WriteLine(sequencePointComment);
+			foreach (var asyncComment in MixedDisassemblyComments32.GetAsyncComments(method, dnlibInstruction))
+				output.WriteLine(asyncComment);
+			var byteComment = MixedDisassemblyComments32.GetByteComment(method, byteReader, dnlibInstruction, baseFileOffset);
+			if (byteComment is not null)
+				output.Write(byteComment);
 		}
 
 		MethodDef? TryResolveMethod(MethodDefinition method) {

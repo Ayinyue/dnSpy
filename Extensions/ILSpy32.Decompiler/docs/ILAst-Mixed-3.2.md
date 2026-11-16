@@ -53,7 +53,7 @@ public API，并移植两个视图的胶水层。
 | `Mixed/ILWithCSharpDecompiler32.cs` | `IL with C# (ILSpy 3.2)` 语言：反汇编 + 逐指令 C# 源行叠加 |
 | `Mixed/DecompilerOutputImpl32.cs` | 捕获单方法 C# 文本 + `MethodDebugInfo`（端口自 2.3） |
 | `Mixed/SourceStatementProvider32.cs` | IL offset → 源行文本（端口自 2.3） |
-| `Mixed/MixedDisassemblyComments32.cs` | 2.3 的反汇编装饰：body 头注释、局部名、`/* 0x… 字节 */`、`/* (line,col) 位置 */`、async 注释——全部从 dnlib 侧取（PDB 在 dnlib 加载） |
+| `Common/MixedDisassemblyComments32.cs` | 2.3 的反汇编装饰：body 头注释、局部名、`/* 0x… 字节 */`、`/* (line,col) 位置 */`、async 注释——全部从 dnlib 侧取（PDB 在 dnlib 加载）；IL 与 Mixed 视图共用 |
 | `CSharp/DecompilerCreator.cs` | 注册两个新语言 |
 | `Common/XmlDocComments32.cs` | XML 文档行提供者（端口自 2.3 `ILDecompiler.GetXmlDocComments`）：cecil 成员按 token 回解 dnlib → `XmlDocLoader` → 按行拆分并剥公共缩进 |
 | `Common/TokenComment32.cs` | `// Token: 0x... RID: ... RVA: ... File Offset: ...` 行（端口自 2.3 `ReflectionDisassembler.AddComment`）：dnlib 侧取 RVA / 文件偏移 |
@@ -73,8 +73,9 @@ Mixed 的逐指令叠加用 `MixedMethodBodyDisassembler`（继承 `BodyTracking
   按指令产生语句（粒度更粗，但足够调试器高亮指令）。
 - **Mixed 的 XML 文档注释**：已对齐（引擎新增 `GetXmlDocComments` 钩子，Mixed 无条件启用；`///` 与正文着色经 `IDecompilerOutput.WriteXmlDoc`，与 2.3 一致）。
 - **Mixed 的 Token/RVA 注释**：已对齐（引擎 `GetTokenAndRvaComment` 钩子 + `Common/TokenComment32`，无条件启用）。
-- **Mixed 的 IL 字节与 PDB 信息**：已对齐（`/* 0x… 字节 */`、`/* (line,col)-(line,col) url */`、async `/* Catch Handler / Yield / Resume */` 均由 `MixedDisassemblyComments32` 从 dnlib 产生）。
+- **Mixed 的 IL 字节与 PDB 信息**：已对齐（`/* 0x… 字节 */`、`/* (line,col)-(line,col) url */`、async `/* Catch Handler / Yield / Resume */` 均由 `Common/MixedDisassemblyComments32` 从 dnlib 产生；Mixed 与 IL 视图共用）。
 - **C# 源行叠加的粒度**：3.2 的叠加行比 2.3 多——3.2 的 C# 反编译器产出的语句级 sequence point 更细（引擎差异，非接线缺口；其余部分已与 2.3 逐字一致）。
+- **IL 视图**：已对齐（XML 文档、Token/RVA、body 头、局部名、IL 字节、PDB 位置、2.3 操作数布局；与 2.3 IL 视图**逐字一致**）。
 - **括号对顺序**：与 2.3 一致，采用「写闭括号时登记」的后序（嵌套括号对会先登记内层）。
 
 ## 6. 验证
@@ -88,7 +89,8 @@ Mixed 的逐指令叠加用 `MixedMethodBodyDisassembler`（继承 `BodyTracking
   `CompactILSpans`：`braces=11`（含 `LoopBraces`）、`statements=30`。
 - `baseline/probe mixed-verify ...`：Mixed 专用验证模式，记录颜色；实测 XML 文档注释
   9 行，`///` 为 `XmlDocCommentDelimiter`、正文为 `XmlDocCommentText/Name/AttributeValue`。
-- 与 2.3 逐字对比：同一成员（`--md 0x0600024D`）的 Mixed 输出中，除 C# 叠加行外**全部逐字一致**——头部（XML 文档 + Token/RVA）、body 头（Header/Code Size/LocalVarSig）、`.locals` 名、每条指令的 `/* 0x… 字节 */` 前缀与操作数对齐/大写标签、`/* (line,col) 位置 */` 注释。全文件 diff 从 430 行降至 150 行，剩余全为 3.2 多出的叠加行。
+- 与 2.3 逐字对比（Mixed）：同一成员（`--md 0x0600024D`）除 C# 叠加行外**全部逐字一致**；带 `try/catch/finally` 的 `ControlFlow`（`--md 0x06000015`）同样只剩叠加行差异（异常块结构本就一致）。
+- 与 2.3 逐字对比（IL 视图）：`--md 0x0600024D`（dnSpy.Contracts.Logic）与 `--md 0x06000015`（SpTestAssembly）的 **diff 均为 0 行**。
 - `baseline/probe engine-tests ...`：24/24 全部 PASS（无回归）。
 - 构建：引擎 `netstandard2.0` 0 错 0 警；扩展 `net10.0-windows` 0 错。
 
@@ -96,5 +98,5 @@ Mixed 的逐指令叠加用 `MixedMethodBodyDisassembler`（继承 `BodyTracking
 
 - 把括号对顺序改为先序（需要 writer 在写 `{` 前登记，会改变 `AddCodeBracesRange` 语义）。
 - ILAst 的「第 N 步」语言族（若需要逐 transform 对比，可按 `GetILTransforms()` 索引生成）。
-- Mixed 的 `.try`/`.catch` 块结构（3.2 引擎写成 `.try` + `{`，2.3 写成带偏移的 `.try IL_x-IL_y`）。
-- IL 视图的 XML 文档 / Token 注释 / 2.3 布局（钩子已就绪，只需接线）。
+- Mixed 的 C# 叠加行粒度（3.2 的 sequence point 更细，属引擎差异；如需完全一致需在 C# 反编译的 SP 生成层做取舍）。
+- 给 IL / Mixed 的 2.3 装饰加设置页开关（当前无条件启用，与 2.3 默认一致）。

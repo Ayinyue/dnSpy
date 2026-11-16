@@ -341,58 +341,33 @@ namespace dnSpy.Decompiler.ILSpy32.Mixed {
 		sealed class MixedMethodBodyDisassembler : BodyTrackingMethodBodyDisassembler {
 			readonly ModuleDef module;
 			readonly Func<MethodDef, SourceStatementProvider32>? createProvider;
-			readonly Func<MethodDef, bool>? isBodyModified;
 			SourceStatementProvider32 provider;
-			IInstructionBytesReader? byteReader;
-			long? baseFileOffset;
 
 			public MixedMethodBodyDisassembler(ITextOutput output, CancellationToken cancellationToken, ModuleDef module,
 					Func<MethodDef, SourceStatementProvider32>? createProvider, Func<MethodDef, bool>? isBodyModified)
 				: base(output, cancellationToken, module) {
 				this.module = module ?? throw new ArgumentNullException(nameof(module));
 				this.createProvider = createProvider;
-				this.isBodyModified = isBodyModified;
-				// dnSpy's 2.3 IL layout: padded operand column and upper-case IL labels.
+				IsBodyModifiedFunc = isBodyModified;
+				// The 2.3 decorations and dnSpy's IL layout (padded operand column, upper-case labels).
+				ShowInstructionDecorations = true;
 				UseDnSpyLayout = true;
 			}
 
 			public override void Disassemble(MethodBody body) {
 				provider = default;
-				byteReader = null;
-				baseFileOffset = null;
-				MethodDef? method = null;
 				if (body?.Method is not null &&
-					module.ResolveToken((uint)body.Method.MetadataToken.ToInt32()) is MethodDef resolved)
-					method = resolved;
-				if (method is not null) {
-					if (createProvider is not null)
-						provider = createProvider(method);
-					byteReader = MixedDisassemblyComments32.CreateByteReader(method, isBodyModified?.Invoke(method) == true);
-					baseFileOffset = MixedDisassemblyComments32.GetBaseFileOffset(method);
-				}
+					module.ResolveToken((uint)body.Method.MetadataToken.ToInt32()) is MethodDef method &&
+					createProvider is not null)
+					provider = createProvider(method);
 				base.Disassemble(body);
 			}
 
 			protected override void WriteInstruction(ITextOutput output, Instruction instruction) {
+				// The C# overlay goes above the instruction, above the 2.3 decorations.
 				var statement = provider.GetStatement((uint)instruction.Offset);
 				if (statement.line is not null)
 					WriteStatement(output, statement.line, statement.span);
-
-				var method = CurrentMethod;
-				var dnlibInstruction = method is null ? null : FindInstruction(instruction.Offset);
-				if (method is not null && dnlibInstruction is not null) {
-					var sequencePointComment = MixedDisassemblyComments32.GetSequencePointComment(dnlibInstruction);
-					if (sequencePointComment is not null)
-						output.WriteLine(sequencePointComment);
-					foreach (var asyncComment in MixedDisassemblyComments32.GetAsyncComments(method, dnlibInstruction))
-						output.WriteLine(asyncComment);
-				}
-
-				var byteComment = dnlibInstruction is null ? null :
-					MixedDisassemblyComments32.GetByteComment(method!, byteReader, dnlibInstruction, baseFileOffset);
-				if (byteComment is not null)
-					output.Write(byteComment);
-
 				base.WriteInstruction(output, instruction);
 			}
 

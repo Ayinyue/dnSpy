@@ -8,7 +8,7 @@ using dnSpy.Contracts.Decompiler;
 using dnSpy.Decompiler.IL;
 using Mono.Cecil;
 
-namespace dnSpy.Decompiler.ILSpy32.Mixed {
+namespace dnSpy.Decompiler.ILSpy32.Common {
 	/// <summary>
 	/// The per-member and per-instruction decorations the 2.3 Mixed view showed: the body header
 	/// comments, local variable names, the IL byte comment, the PDB source-location comment and

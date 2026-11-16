@@ -279,7 +279,10 @@ class Probe {
 			}
 			var diff = DiffLineCount(text23, text32);
 			// Optional: lang-diff <dll> <token|type> <dnspyBin> <path23> <out23> <out32>
-			if (out23 is not null && out32 is not null && kv32.Key.StartsWith("C#", StringComparison.Ordinal) || kv32.Key.StartsWith("IL (", StringComparison.Ordinal) || kv32.Key.StartsWith("Visual", StringComparison.Ordinal)) {
+			if (out23 is not null && out32 is not null &&
+				(kv32.Key.StartsWith("C#", StringComparison.Ordinal) ||
+				 kv32.Key.StartsWith("IL (", StringComparison.Ordinal) ||
+				 kv32.Key.StartsWith("Visual", StringComparison.Ordinal))) {
 				File.WriteAllText(out23, text23);
 				File.WriteAllText(out32, text32);
 			}

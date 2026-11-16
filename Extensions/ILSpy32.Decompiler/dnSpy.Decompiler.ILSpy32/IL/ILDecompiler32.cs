@@ -69,6 +69,15 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 		public override Guid UniqueGuid => THE_GUID;
 		public override string FileExtension => ".il";
 
+		protected override void TypeToString(IDecompilerOutput output, ITypeDefOrRef? t, bool includeNamespace, IHasCustomAttribute? attributeProvider = null) =>
+			t.WriteTo(output, new StringBuilder(), includeNamespace ? ILNameSyntax.TypeName : ILNameSyntax.ShortTypeName);
+
+		public override void WriteToolTip(ITextColorWriter output, IMemberRef member, IHasCustomAttribute? typeAttributes) {
+			if (!(member is ITypeDefOrRef) && ILDecompilerUtils32.Write(TextColorWriterToDecompilerOutput.Create(output), member))
+				return;
+			base.WriteToolTip(output, member, typeAttributes);
+		}
+
 		public override void Decompile(MethodDef method, IDecompilerOutput output, DecompilationContext ctx) {
 			if (method is null || output is null || ctx is null)
 				throw new ArgumentNullException();

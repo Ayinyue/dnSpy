@@ -54,9 +54,21 @@ function Build-Net {
     if ($NoMsbuild) {
         dotnet build -v:m -c $configuration -f $net_tfm
         if ($LASTEXITCODE) { exit $LASTEXITCODE }
+        # The 3.2 engine is not a solution project, so the solution build compiles it with
+        # MSBuild's default configuration (Debug) and copies that into dnSpy's bin. A Debug
+        # engine keeps Debug.Asserts live in the shipped app, so build the engine and its
+        # extension explicitly in Release to put Release bits next to dnSpy.exe.
+        dotnet build -v:m -c $configuration 'Extensions\ILSpy32.Decompiler\ICSharpCode.Decompiler\ICSharpCode.Decompiler\ICSharpCode.Decompiler.csproj'
+        if ($LASTEXITCODE) { exit $LASTEXITCODE }
+        dotnet build -v:m -c $configuration -f $net_tfm 'Extensions\ILSpy32.Decompiler\dnSpy.Decompiler.ILSpy32\dnSpy.Decompiler.ILSpy32.csproj'
+        if ($LASTEXITCODE) { exit $LASTEXITCODE }
     }
     else {
         msbuild -v:m -m -restore -t:Build -p:Configuration=$configuration -p:TargetFramework=$net_tfm
+        if ($LASTEXITCODE) { exit $LASTEXITCODE }
+        msbuild -v:m -m -restore -t:Build -p:Configuration=$configuration 'Extensions\ILSpy32.Decompiler\ICSharpCode.Decompiler\ICSharpCode.Decompiler\ICSharpCode.Decompiler.csproj'
+        if ($LASTEXITCODE) { exit $LASTEXITCODE }
+        msbuild -v:m -m -restore -t:Build -p:Configuration=$configuration -p:TargetFramework=$net_tfm 'Extensions\ILSpy32.Decompiler\dnSpy.Decompiler.ILSpy32\dnSpy.Decompiler.ILSpy32.csproj'
         if ($LASTEXITCODE) { exit $LASTEXITCODE }
     }
 

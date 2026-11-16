@@ -28,6 +28,7 @@ using dnSpy.Decompiler.ILSpy32.Common;
 using dnSpy.Decompiler.ILSpy32.CSharp;
 using dnSpy.Decompiler.ILSpy32.IL;
 using ICSharpCode.Decompiler;
+using ICSharpCode.Decompiler.Disassembler;
 using ICSharpCode.Decompiler.IL;
 using ICSharpCode.Decompiler.TypeSystem;
 using ICSharpCode.Decompiler.Util;
@@ -70,6 +71,15 @@ namespace dnSpy.Decompiler.ILSpy32.ILAst {
 		public override Guid UniqueGuid => THE_GUID;
 		public override string FileExtension => ".il";
 
+		protected override void TypeToString(IDecompilerOutput output, ITypeDefOrRef? t, bool includeNamespace, IHasCustomAttribute? attributeProvider = null) =>
+			t.WriteTo(output, new StringBuilder(), includeNamespace ? ILNameSyntax.TypeName : ILNameSyntax.ShortTypeName);
+
+		public override void WriteToolTip(ITextColorWriter output, IMemberRef member, IHasCustomAttribute? typeAttributes) {
+			if (!(member is ITypeDefOrRef) && ILDecompilerUtils32.Write(TextColorWriterToDecompilerOutput.Create(output), member))
+				return;
+			base.WriteToolTip(output, member, typeAttributes);
+		}
+
 		const string NoBridgeNote = "// ILSpy 3.2: cannot bridge this module (no in-memory snapshot available).";
 		const string NoBodyNote = "// ILSpy 3.2: the member has no body.";
 
@@ -78,7 +88,7 @@ namespace dnSpy.Decompiler.ILSpy32.ILAst {
 				throw new ArgumentNullException();
 			WriteCommentBegin(output, true);
 			output.Write("Method: ", BoxedTextColor.Comment);
-			output.Write(IdentifierEscaper.Escape(method.FullName), method, DecompilerReferenceFlags.Definition, BoxedTextColor.Comment);
+			output.Write(method.FullName, method, DecompilerReferenceFlags.Definition, BoxedTextColor.Comment);
 			WriteCommentEnd(output, true);
 			output.WriteLine();
 
@@ -211,6 +221,46 @@ namespace dnSpy.Decompiler.ILSpy32.ILAst {
 		public override void Decompile(TypeDef type, IDecompilerOutput output, DecompilationContext ctx) {
 			if (type is null || output is null || ctx is null)
 				throw new ArgumentNullException();
+			WriteCommentBegin(output, true);
+			output.Write("Type: ", BoxedTextColor.Comment);
+			output.Write(IdentifierEscaper.Escape(type.FullName), type, DecompilerReferenceFlags.Definition, BoxedTextColor.Comment);
+			WriteCommentEnd(output, true);
+			output.WriteLine();
+
+			if (type.BaseType is not null) {
+				WriteCommentBegin(output, true);
+				output.Write("Base type: ", BoxedTextColor.Comment);
+				output.Write(IdentifierEscaper.Escape(type.BaseType.FullName), type.BaseType, DecompilerReferenceFlags.None, BoxedTextColor.Comment);
+				WriteCommentEnd(output, true);
+				output.WriteLine();
+			}
+
+			foreach (var nested in type.NestedTypes) {
+				Decompile(nested, output, ctx);
+				output.WriteLine();
+			}
+
+			var lastFieldPos = -1;
+			foreach (var field in type.Fields) {
+				Decompile(field, output, ctx);
+				lastFieldPos = output.NextPosition;
+				output.WriteLine();
+			}
+			if (lastFieldPos >= 0) {
+				output.AddLineSeparator(lastFieldPos);
+				output.WriteLine();
+			}
+
+			foreach (var property in type.Properties) {
+				ILDecompilerUtils32.WriteProperty(output, property, full: false);
+				output.WriteLine();
+			}
+
+			foreach (var ev in type.Events) {
+				ILDecompilerUtils32.WriteEvent(output, ev, full: false);
+				output.WriteLine();
+			}
+
 			foreach (var method in type.Methods) {
 				Decompile(method, output, ctx);
 				output.WriteLine();

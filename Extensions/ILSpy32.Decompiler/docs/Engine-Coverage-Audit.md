@@ -158,5 +158,6 @@
 ### 8.5 结论（按建议优先级）
 
 - **P0（已修）**：① ✅ 3.2 扩展补 6 个 `ContentTypeDefinition` 导出（`ContentTypeDefinitions.cs`，五语言改用常量）；② ✅ 补 `ISimpleILPrinter` 导出（`IL/SimpleILPrinter32.cs`）+ `Common/DnlibILText32.cs`（2.3 dnlib→IL 写入器移植）+ `Common/ILDecompilerUtils32.cs`；对拍 **8565 样本 diffSamples=0**（两侧各 1,543,426 字符逐字相同）。
-- **P1（对齐）**：③ 三语言补 `WriteToolTip` / `TypeToString`（写入器已就绪）；④ ILAst 的 `Decompile(TypeDef)` 补类型/基类型/字段/属性/事件；⑤ IL/ILAst/Mixed 的 2.3 装饰做成开关（至少 `Options`，理想加设置页）。
+- **P1（对齐）**：③ ✅ 三语言补 `WriteToolTip` / `TypeToString`（`Common/DnlibILText32` 写入器 + `Common/ILDecompilerUtils32`）；④ ✅ ILAst 的 `Decompile(TypeDef)` 已补 `// Type:`/`// Base type:`/嵌套类型/字段/属性/事件（属性/事件用 2.3 短式）；⑤ IL/ILAst/Mixed 的 2.3 装饰做成开关（至少 `Options`，理想加设置页）。
+- **构建管线（新发现，已修）**：`dotnet build dnSpy.sln -c Release -f net10.0-windows` 会把 **Debug** 版 3.2 引擎 DLL 放进 dnSpy bin（引擎不在 sln 内，MSBuild 对引用外用默认配置）——已实测：sln 构建后 `ILSpy32.Decompiler.dll` 为 1,832,960 字节（Debug），单独构建扩展后为 1,585,152（Release）。已在 `build.ps1` 的 `Build-Net` 里显式以 Release 重建引擎与扩展（两条分支都加）；把引擎加入 sln 的替代方案与 `-f` 冲突（NETSDK1005，引擎是 netstandard2.0-only），已回退。
 - **P2（引擎能力缺口 / 清理）**：⑥ 评估在 3.2 引擎补 ShowILComments / SortMembers / MaxStringLength / HexadecimalNumbers 的 public API；⑦ Mixed 的 C# 叠加改用持久化 C# 设置；⑧ 2.3 设置段清理。

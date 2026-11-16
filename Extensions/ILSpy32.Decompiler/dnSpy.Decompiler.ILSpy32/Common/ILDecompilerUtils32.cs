@@ -26,24 +26,11 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 				return true;
 			}
 
-			if (member is PropertyDef prop) {
-				var cecilProperty = ResolveProperty(prop);
-				if (cecilProperty is null)
-					return false;
-				var bridge = new DecompilerOutputTextOutput(output, prop.Module);
-				// 2.3 prints the short form here ({ .get; })，asm editor 在单元格里显示操作数。
-				new ReflectionDisassembler(bridge, CancellationToken.None).DisassembleProperty(cecilProperty, full: false);
-				return true;
-			}
+			if (member is PropertyDef prop)
+				return WriteProperty(output, prop, full: false);
 
-			if (member is EventDef evt) {
-				var cecilEvent = ResolveEvent(evt);
-				if (cecilEvent is null)
-					return false;
-				var bridge = new DecompilerOutputTextOutput(output, evt.Module);
-				new ReflectionDisassembler(bridge, CancellationToken.None).DisassembleEvent(cecilEvent, full: false);
-				return true;
-			}
+			if (member is EventDef evt)
+				return WriteEvent(output, evt, full: false);
 
 			if (member is ITypeDefOrRef type) {
 				type.WriteTo(output, new StringBuilder(), ILNameSyntax.TypeName);
@@ -55,6 +42,27 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 
 		// Cecil 的 ModuleDefinition.LookupToken 不解析 Property(0x17)/Event(0x14) 定义行
 		// （返回 null），与 ILDecompiler32 相同，这里通过声明类型的属性/事件列表按 rid 查找。
+		/// <summary>
+		/// 属性 → IL。<paramref name="full"/>=true 输出完整访问器块（视图用），false 输出 2.3 的短式
+		/// <c>{ .get; }</c>（asm editor 单元格与类型清单用）。
+		/// </summary>
+		public static bool WriteProperty(IDecompilerOutput output, PropertyDef property, bool full) {
+			var cecilProperty = ResolveProperty(property);
+			if (cecilProperty is null)
+				return false;
+			var bridge = new DecompilerOutputTextOutput(output, property.Module);
+			new ReflectionDisassembler(bridge, CancellationToken.None).DisassembleProperty(cecilProperty, full);
+			return true;
+		}
+
+		public static bool WriteEvent(IDecompilerOutput output, EventDef evt, bool full) {
+			var cecilEvent = ResolveEvent(evt);
+			if (cecilEvent is null)
+				return false;
+			var bridge = new DecompilerOutputTextOutput(output, evt.Module);
+			new ReflectionDisassembler(bridge, CancellationToken.None).DisassembleEvent(cecilEvent, full);
+			return true;
+		}
 		static PropertyDefinition? ResolveProperty(PropertyDef property) {
 			var cecilModule = DnlibCecilBridge.TryGetModule(property.Module);
 			if (cecilModule is null || property.DeclaringType is null)

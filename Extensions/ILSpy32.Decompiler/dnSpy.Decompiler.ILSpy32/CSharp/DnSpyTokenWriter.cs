@@ -51,6 +51,8 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		readonly List<MethodDebugInfo> debugInfos = new List<MethodDebugInfo>();
 		public readonly List<(MethodDef method, int start, int end)> MethodSpans = new List<(MethodDef, int, int)>();
 		readonly List<(int line, int column, int offset)> positionMap = new List<(int, int, int)>();
+		/// <summary>line -> indices into <see cref="positionMap"/>; rebuilt lazily after appends.</summary>
+		Dictionary<int, List<int>>? lineIndex;
 		readonly int settingsVersion;
 		bool isAtStartOfLine = true;
 		int line = 1;
@@ -103,6 +105,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		void EmitText(string text, object color) {
 			ColorPathSink?.Invoke(lastColorPath);
 			positionMap.Add((line, column, output.NextPosition));
+			lineIndex = null;
 			output.Write(text, color);
 			foreach (var ch in text) {
 				if (ch == '\n') {
@@ -117,6 +120,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		void EmitText(string text, object reference, DecompilerReferenceFlags flags, object color) {
 			ColorPathSink?.Invoke(lastColorPath);
 			positionMap.Add((line, column, output.NextPosition));
+			lineIndex = null;
 			output.Write(text, reference, flags, color);
 			foreach (var ch in text) {
 				if (ch == '\n') {
@@ -133,10 +137,23 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		/// position was written; falls back to the closest position on the same line.
 		/// </summary>
 		public int OffsetOf(int line, int column) {
+			// CreateSequencePoints asks twice per sequence point, so scanning the whole map was
+			// quadratic; the per-line index keeps the same result with a much smaller scan.
+			if (lineIndex is null) {
+				var index = new Dictionary<int, List<int>>();
+				for (int i = 0; i < positionMap.Count; i++) {
+					var l = positionMap[i].line;
+					if (!index.TryGetValue(l, out var list))
+						index[l] = list = new List<int>();
+					list.Add(i);
+				}
+				lineIndex = index;
+			}
+			if (lineIndex is null || !lineIndex.TryGetValue(line, out var indices))
+				return -1;
 			int best = -1;
-			foreach (var (l, c, o) in positionMap) {
-				if (l != line)
-					continue;
+			foreach (var i in indices) {
+				var (l, c, o) = positionMap[i];
 				if (c == column)
 					return o;
 				if (c < column)

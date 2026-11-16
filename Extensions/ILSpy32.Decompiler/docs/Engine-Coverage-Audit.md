@@ -104,3 +104,57 @@
 6. ~~嵌套类型反编译~~ ✅ 已关闭（2026-11-10：`DecompileType(FullTypeName)` 内部 `FindType(fullTypeName.TopLevelTypeName)` 把嵌套名截断到顶层类型，嵌套节点渲染出整个父类型——probe 实测 Inner 835 chars vs 2.3 的 484；C#/VB 两侧均改 `DecompileTypes(new[]{cecilType})` 后 Inner 只渲染自身。**同名歧义嵌套类型**（dnSpy.dll 两个 ScrollDirection）经 binder 简名回退绑定失败导致 Token 注释缺失——`Attach` 增加 knownType 直绑（dnSpy 传入的确切 TypeDef 及其嵌套按名直绑，绕过歧义回退），probe 实测 Token 注释与 2.3 对齐。VB 门禁基线随形态修复移位 942/526/11→1731/741/11（嵌套从"整个父类型"（可编译但错位）变为独立正确输出，门禁脚本已注记）；C# OK 875/1818）
 7. ~~调试 locals 映射~~ ✅ 已关闭（2026-11-10：C# 侧把引擎变量表（ILVariable 携带 IL slot Index 与反编译名）映射到方法 dnlib locals 产 SourceLocal——Local/UsingLocal/ForeachLocal kind 按 slot 直绑（Parameter/StackSlot/Exception 正确排除），调试器 Locals 窗口显示反编译名；probe 实测 Release 样本逐方法 locals 计数正确（LinqAndLock 3、Debug 构建 5）、提升变量（async kickoff 的 length）正确排除。**VB 侧同日补齐**：VBDecompiler32 反编译后从 C# 树收集（节点 ILInstruction 注解的祖先链得 ILFunction，同引擎序列点构建器的发现方式），经 formatter 注入 builder——实测 LinqAndLock 5、状态机类型 MoveNext 9 locals/37 条语句级 SP。**hoistedField 不适用**：2.3 的 HoistedField 只在 yield 重建成功时填充（YieldReturnDecompiler.cs:349），而 2.3 集成版的实际输出形态为 kickoff+原始状态机（重建未跑），即 2.3 集成版的 debug info 同样不含 hoistedField——3.2 行为一致，无覆盖缺口）
 | **VB 局部/参数引用覆盖**（2026-11-14 tokstat 全语料复测） | 🔧→✅ | VB formatter 的 GetCurrentLocalReference 恒 null、GetCurrentLocalDefinition 只读 dnlib Param——VB 局部/参数**从不产出引用**（C# 有完整实现）。修复三层：①formatter 读取 dnlib Param/Local/SourceLocal（nodeStack 节点 + Identifier token 双路径）；②converter 变量映射扩展 UsingLocal/ForeachLocal 按 slot、参数位置回退、提升变量合成 SourceLocal 按 ILVariable 实例缓存；③OutputVisitor 将决定性引用经 extraData 透传。全语料实测：局部/参数引用 38221/82864（46%）→ **67534+/77379（87%+）**；**引用率缺口对（(text,color) 聚合）降至 0**——VB 后端与 2.3 在聚合级别完全对齐。剩余：个别站点（transform 重建节点）±形态差异 |
+
+## 8. 新增三视图（IL / ILAst / Mixed）专项审查（2026-11-16）
+
+> 「差异项 / 未覆盖项」专项：三路并行勘察（契约面 / 注册面 / 选项面）+ 关键结论复核。路径缩写：**A** = `Extensions/ILSpy.Decompiler/dnSpy.Decompiler.ILSpy.Core`，**B** = `Extensions/ILSpy32.Decompiler/dnSpy.Decompiler.ILSpy32`。
+
+### 8.1 契约面差异（DecompilerBase / IDecompiler）
+
+| 项 | 2.3 | 3.2 | 影响 |
+|---|---|---|---|
+| `WriteToolTip` | IL/Mixed 有（A\IL\ILDecompiler.cs:193、A\Mixed\ILWithCSharpDecompiler.cs:264，走 `ILDecompilerUtils.Write`） | 三者均无（落到基类 `DecompilerBase.cs:245`） | 悬停 tooltip 是基类默认风格，非 IL 风格 |
+| `TypeToString` | 三者均有（A\IL:190、A\Mixed:261、A\ILAst:384），走 dnlib `WriteTo(…, ILNameSyntax)` | 三者均无（落到基类 `:235`） | 类型名格式化策略与 2.3 不同 |
+| `Decompile(TypeDef)`（ILAst） | 写 `// Type:`、`// Base type:`、嵌套类型、字段、属性、事件、方法（A\ILAst\ILAstDecompiler.cs:324-363） | 只遍历方法（B\ILAst\ILAstDecompiler32.cs:211-218） | 打开类型节点时输出远少于 2.3 |
+| `Decompile(AssemblyDef/ModuleDef)`（ILAst） | 未 override，走基类（仅 `// 路径` + `// FullName`） | Assembly→Module 转发 + 遍历 `mod.Types`（B\ILAst:220-230） | 3.2 输出更多（增强，非缺口） |
+| `OrderUI` | 各常量 | 常量 + 0.5（B\IL:67、B\ILAst:68、B\Mixed:64） | 2.3 在前、3.2 紧随，符合设计 |
+| 语言数量 / 注册条件 | ILAst 仅 `#if DEBUG` 且每个优化步一个实例（A\ILAst:48,56,365-380）；Mixed 单实例无条件 | ILAst 单实例、无条件注册（B\CSharp\DecompilerCreator.cs:52-54） | 设计取舍（见 `docs/ILAst-Mixed-3.2.md` 第 5 节） |
+| `FileExtension` / `ContentTypeString` | `.il` + `IL ILSpy` / `ILAst ILSpy` / `IL with C# ILSpy` | 逐字一致（B\IL:62,70、B\ILAst:65,71、B\Mixed:61,67） | 无差异 ✅ |
+
+### 8.2 选项面差异
+
+2.3 IL 视图共 8 个选项，全部映射引擎 `DisassemblerOptions`（A\Settings\ILDecompilerSettings.cs）；2.3 Mixed 复用该类并读全部 8 项（A\Mixed:40-42,63-75）；2.3 ILAst 有独立设置类但 `Options` 为空且 `#if DEBUG`（A\Settings\ILAstDecompilerSettings.cs:26-44）。
+
+| 2.3 选项 | 3.2 现状 | 定性 |
+|---|---|---|
+| ShowXmlDocumentation | 无条件启用（B\IL:212、B\Mixed:239） | 有能力、未做开关 |
+| ShowTokenAndRvaComments | 无条件启用（B\IL:213、B\Mixed:242） | 同上 |
+| ShowILBytes | 无条件启用（B\IL:216、B\IL:424-439、B\Common\MixedDisassemblyComments32.cs:93） | 同上 |
+| ShowPdbInfo | 无条件启用（B\IL:216,431-433、B\Common\MixedDisassemblyComments32.cs:61） | 同上 |
+| ShowILComments（opcode 文档） | 无 | **引擎能力缺口**：3.2 `ReflectionDisassembler` 无 `GetOpCodeDocumentation`（`ReflectionDisassembler.cs:38-63`） |
+| SortMembers | 无 | **引擎能力缺口**：3.2 无成员排序 |
+| MaxStringLength | 无 | **引擎能力缺口**：3.2 `DisassemblerHelpers` 无字符串截断 |
+| HexadecimalNumbers | 无 | **引擎能力缺口**：3.2 反汇编数字格式化无 hex |
+| —（3.2 新增） | ILAst 4 项：Run IL transforms / Show IL ranges / logic sugar / field sugar（B\ILAst\ILAstDecompilerSettings32.cs:94-106） | 2.3 无对应 |
+
+补充：Mixed 的 C# 叠加层使用独立 `new DecompilerSettings32()`（B\Mixed:53,313），**不读持久化的 C# 单例**——2.3 Mixed 读的是持久化 `CSharpVBDecompilerSettings`（A\Mixed:42,102）。
+
+### 8.3 注册面差异（M4 移除 2.3 的影响）
+
+- **内容类型 100% 依赖 2.3**：3.2 扩展**无 `ContentTypeDefinition` 导出**（`B\ContentTypeDefinitions.cs` 仅常量；全扩展只有 3 个 `[Export]`：`CSharp\DecompilerCreator.cs:30` + `Settings\DecompilerSettings32Impl.cs:31,86`）。2.3 注册 6 个（`dnSpy.Decompiler.ILSpy\ContentTypeDefinitions.cs:28,33,39,45,51,56`）。→ **M4 后 3.2 五语言的 ContentTypeString 悬空**（语法高亮 / 文本视图设置失效）。
+- **`ISimpleILPrinter` 唯一导出在 2.3**（`dnSpy.Decompiler.ILSpy\IL\SimpleILPrinter.cs:29`）→ `Extensions\dnSpy.AsmEditor\MethodBody\BodyUtils.cs:45` 回退 `DummyPrinter`（:47 输出 "Missing ISimpleILPrinter"）。3.2 无导出。
+- **设置页**：2.3 有 `IAppSettingsPageProvider` 两页（C#/IL，`Settings\DecompilerSettingsPageProvider.cs:26-40`）；3.2 扩展零设置页，且 IL/ILAst/Mixed 的 `Settings` 均为语言内 `new`（B\IL:52、B\ILAst:56、B\Mixed:52-53）→ **未持久化、无 UI**。
+- **设置迁移**：`dnSpy\dnSpy\Decompiler\DecompilerServiceSettings.cs:79-96` 只映射 2.3 C#/VB 的 UniqueGuid；2.3 IL 选项段 `DD6752B1` 无迁移方；2.3 段 `6745457F`/`DD6752B1` 会变孤儿（无清理逻辑）。
+- **2.3 引擎子模块不可删**：`Extensions\dnSpy.BamlDecompiler\dnSpy.BamlDecompiler.csproj:27` 与 `Extensions\ILSpy32.Decompiler\ICSharpCode.NRefactory.VB32\ICSharpCode.NRefactory.VB32.csproj:24-31` 引用 2.3 的 `ICSharpCode.Decompiler` / NRefactory 源。
+
+### 8.4 消费面（已核）
+
+- `Extensions\dnSpy.Analyzer\TreeNodes\AnalyzerTreeNodeData.cs:117` 已含 3.2 C# UniqueGuid；2.3 分支在 M4 后成死代码（非缺陷）。
+- Debugger 侧（`DbgDotNetLanguageServiceImpl`、`DbgMethodDebugInfoProvider` 等）走族 GUID + `IDecompilerLanguageSettings.LanguageGuid`，语言无关。
+- `dnSpy\dnSpy.Console\Program.cs:228` 硬编码 `"dnSpy.Decompiler.ILSpy.Core"`；M4 需改为只加载 3.2。
+
+### 8.5 结论（按建议优先级）
+
+- **P0（M4 前必做）**：① 3.2 扩展补 6 个 `ContentTypeDefinition` 导出；② 补 `ISimpleILPrinter` 导出（否则 AsmEditor 的 IL 打印退化）。
+- **P1（对齐）**：③ 三语言补 `WriteToolTip` / `TypeToString`；④ ILAst 的 `Decompile(TypeDef)` 补类型/基类型/字段/属性/事件；⑤ IL/ILAst/Mixed 的 2.3 装饰做成开关（至少 `Options`，理想加设置页）。
+- **P2（引擎能力缺口 / 清理）**：⑥ 评估在 3.2 引擎补 ShowILComments / SortMembers / MaxStringLength / HexadecimalNumbers 的 public API；⑦ Mixed 的 C# 叠加改用持久化 C# 设置；⑧ 2.3 设置段清理。

@@ -1669,6 +1669,12 @@ class Probe {
 	// 属性/事件/类型/各种 TypeSig/MethodSig）输出 IL 风格文本并逐字 diff，验证
 	// DnlibILText32 与 2.3 的 DisassemblerHelpers 行为一致。
 	static int ILPrintDiff(string targetDll, string dnspyBin, string out23Path, string out32Path) {
+		// M4 removed the 2.3 extension from the build; the comparison is only possible while a
+		// copy of dnSpy.Decompiler.ILSpy.x.dll is still next to the 3.2 one.
+		if (!File.Exists(Path.Combine(dnspyBin, "dnSpy.Decompiler.ILSpy.x.dll"))) {
+			Console.WriteLine("SKIP: dnSpy.Decompiler.ILSpy.x.dll not found (the 2.3 extension is no longer built, M4).");
+			return 2;
+		}
 		var printer23 = CreateSimpleILPrinter(dnspyBin, "dnSpy.Decompiler.ILSpy.x.dll", "dnSpy.Decompiler.ILSpy.IL.SimpleILPrinter");
 		var printer32 = CreateSimpleILPrinter(dnspyBin, "dnSpy.Decompiler.ILSpy32.x.dll", "dnSpy.Decompiler.ILSpy32.IL.SimpleILPrinter32");
 		var module = ModuleDefMD.Load(targetDll);

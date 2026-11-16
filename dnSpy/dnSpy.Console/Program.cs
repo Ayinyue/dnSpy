@@ -225,9 +225,7 @@ namespace dnSpy_Console {
 
 		static IEnumerable<IDecompiler> GetAllLanguages() {
 			var asmNames = new string[] {
-				"dnSpy.Decompiler.ILSpy.Core",
-				// The 3.2 extension ships its own IDecompilerProvider with a parameterless
-				// fallback constructor, so it loads the same way the GUI's MEF catalog does.
+				// The 2.3 extension is no longer built (M4); only the 3.2 extension remains.
 				"dnSpy.Decompiler.ILSpy32.x",
 			};
 			foreach (var asmName in asmNames) {

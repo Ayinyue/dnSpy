@@ -237,11 +237,12 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 						Console.Error.WriteLine("PROF binder=" + profSw.ElapsedMilliseconds + " ms");
 					profSw = Environment.GetEnvironmentVariable("DNSPY_ILSPY32_PROF") == "1" ? System.Diagnostics.Stopwatch.StartNew() : null;
 					RemoveUncompilableCompilerAttributes(tree);
+					// Reorder first: the token comments are inserted relative to their member, so
+					// inserting them before the reorder would leave them at the old positions.
+					ReorderMembers(tree, module as ModuleDefMD, sortMembers: settings.SortMembers);
 					// The 2.3 engine shows a 'Token: 0x... RID: ...' comment before every member
 					// declaration when ShowTokenAndRvaComments is on (the dnSpy default).
 					InsertTokenComments(tree, module as ModuleDefMD, settings.ShowTokenAndRvaComments);
-					if (settings.SortMembers)
-						ReorderMembers(tree, module as ModuleDefMD);
 					var tokenWriter = new DnSpyTokenWriter(output, engine, module as ModuleDefMD, VisualBasicMetadataTextColorProvider.Instance, 1);
 					tree.AcceptVisitor(new ICSharpCode.Decompiler.CSharp.OutputVisitor.CSharpOutputVisitor(
 						ICSharpCode.Decompiler.CSharp.OutputVisitor.TokenWriter.WrapInWriterThatSetsLocationsInAST(tokenWriter),
@@ -436,7 +437,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 	/// same comparers the 2.3 engine used (dnSpy.Contracts.Logic MemberComparer). Types the
 	/// binder could not bind keep their original order.
 	/// </summary>
-	static void ReorderMembers(ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree, ModuleDefMD module) {
+	internal static void ReorderMembers(ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree, ModuleDefMD module, bool sortMembers) {
 		try {
 			foreach (var typeDecl in tree.Descendants.OfType<ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration>()) {
 				if (typeDecl.ClassType == ICSharpCode.Decompiler.CSharp.Syntax.ClassType.Enum)
@@ -510,18 +511,69 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					return dnSpy.Contracts.Decompiler.TypeDefComparer.Instance.Compare(ta, tb);
 				});
 
-				// Re-add in the 2.3 grouping order.
+				// The engine attaches its XML doc comments (and the token comments are added later)
+				// as children that precede their member, so a reorder must move each member's
+				// comment run with it - otherwise the comments stay behind at the old position.
+				var attachedComments = new Dictionary<ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration, List<ICSharpCode.Decompiler.CSharp.Syntax.AstNode>>();
+				{
+					// A comment run belongs to the member that follows it (that is where the
+					// engine and InsertTokenComments put it).
+					List<ICSharpCode.Decompiler.CSharp.Syntax.AstNode>? pending = null;
+					foreach (var child in typeDecl.Children) {
+						if (child.Role == ICSharpCode.Decompiler.CSharp.Syntax.Roles.Comment) {
+							if (pending is null)
+								pending = new List<ICSharpCode.Decompiler.CSharp.Syntax.AstNode>();
+							pending.Add(child);
+							continue;
+						}
+						if (typeDecl.Members.Contains(child)) {
+							if (pending is not null) {
+								attachedComments[(ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration)child] = pending;
+								pending = null;
+							}
+						}
+						else
+							pending = null;
+					}
+				}
+
+				// Re-add in the 2.3 order.
 				typeDecl.Members.Clear();
-				foreach (var m in methods)
-					typeDecl.Members.Add(m);
-				foreach (var m in properties)
-					typeDecl.Members.Add(m);
-				foreach (var m in events)
-					typeDecl.Members.Add(m);
-				foreach (var m in fields)
-					typeDecl.Members.Add(m);
-				foreach (var m in nestedTypes)
-					typeDecl.Members.Add(m);
+				if (sortMembers) {
+					foreach (var m in methods)
+						typeDecl.Members.Add(m);
+					foreach (var m in properties)
+						typeDecl.Members.Add(m);
+					foreach (var m in events)
+						typeDecl.Members.Add(m);
+					foreach (var m in fields)
+						typeDecl.Members.Add(m);
+					foreach (var m in nestedTypes)
+						typeDecl.Members.Add(m);
+				}
+				else {
+					// Unsorted: metadata-token order, like 2.3's GetNonSortedMethodsPropertiesEvents.
+					var all = new List<ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration>();
+					all.AddRange(methods);
+					all.AddRange(properties);
+					all.AddRange(events);
+					all.AddRange(fields);
+					all.AddRange(nestedTypes);
+					all.Sort((a, b) => GetMemberToken(a, module).CompareTo(GetMemberToken(b, module)));
+					foreach (var m in all)
+						typeDecl.Members.Add(m);
+				}
+				foreach (var m in typeDecl.Members) {
+					if (!attachedComments.TryGetValue(m, out var list))
+						continue;
+					var parent = m.Parent;
+					if (parent is null)
+						continue;
+					foreach (var c in list) {
+						c.Remove();
+						parent.InsertChildBefore(m, (ICSharpCode.Decompiler.CSharp.Syntax.Comment)c, ICSharpCode.Decompiler.CSharp.Syntax.Roles.Comment);
+					}
+				}
 			}
 		}
 		catch (Exception ex) {
@@ -529,6 +581,51 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			if (Environment.GetEnvironmentVariable("DNSPY_ILSPY32_DIAG") == "1")
 				Console.Error.WriteLine("REORDER-EX " + ex.GetType().Name + ": " + ex.Message + " @ " + ex.StackTrace);
 		}
+	}
+
+	/// <summary>
+	/// Metadata token of a member declaration, used for 2.3's unsorted (token) order. 2.3's
+	/// ShowAllMethods enumerates the *accessor* methods, so a property/indexer sorts by its
+	/// get/set token and an event by its add/remove token - not by the property/event table
+	/// token (0x17/0x14), which would sort after every method.
+	/// </summary>
+	static int GetMemberToken(ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration member, ModuleDefMD module) {
+		int? token = null;
+		switch (member) {
+			case ICSharpCode.Decompiler.CSharp.Syntax.PropertyDeclaration p:
+				token = FirstAccessTokenorToken(p.Getter, p.Setter);
+				break;
+			case ICSharpCode.Decompiler.CSharp.Syntax.IndexerDeclaration idx:
+				token = FirstAccessTokenorToken(idx.Getter, idx.Setter);
+				break;
+			case ICSharpCode.Decompiler.CSharp.Syntax.EventDeclaration ev:
+				var ed = ev.Annotation<EventDef>();
+				if (ed?.AddMethod is not null)
+					token = ed.AddMethod.MDToken.ToInt32();
+				else if (ed?.RemoveMethod is not null)
+					token = ed.RemoveMethod.MDToken.ToInt32();
+				break;
+		}
+		if (token is not null)
+			return token.Value;
+		var direct = (IMDTokenProvider?)member.Annotation<MethodDef>() ?? (IMDTokenProvider?)member.Annotation<PropertyDef>() ??
+			(IMDTokenProvider?)member.Annotation<EventDef>() ?? (IMDTokenProvider?)member.Annotation<TypeDef>();
+		if (direct is not null)
+			return direct.MDToken.ToInt32();
+		if (member is ICSharpCode.Decompiler.CSharp.Syntax.FieldDeclaration fd) {
+			var f = GetFieldFor(fd, module);
+			if (f is not null)
+				return f.MDToken.ToInt32();
+		}
+		return int.MaxValue;
+	}
+
+	static int? FirstAccessTokenorToken(ICSharpCode.Decompiler.CSharp.Syntax.Accessor a, ICSharpCode.Decompiler.CSharp.Syntax.Accessor b) {
+		var ta = a.IsNull ? null : a.Annotation<MethodDef>()?.MDToken.ToInt32();
+		var tb = b.IsNull ? null : b.Annotation<MethodDef>()?.MDToken.ToInt32();
+		if (ta is not null && tb is not null)
+			return Math.Min(ta.Value, tb.Value);
+		return ta ?? tb;
 	}
 
 	static dnlib.DotNet.FieldDef? GetFieldFor(ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration member, ModuleDefMD module) {
@@ -540,21 +637,17 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		return variableName is null ? null : typeDef.Fields.FirstOrDefault(f => f.Name == variableName);
 	}
 
-	internal static void InsertTokenComments(ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree, ModuleDefMD module, bool showTokens,
-			bool collapseAutoProperties = true) {
+	internal static void InsertTokenComments(ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree, ModuleDefMD module, bool showTokens) {
 		if (module is null || !showTokens)
 			return;
 		foreach (var decl in tree.DescendantsAndSelf.OfType<ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration>().ToList()) {
-			// A collapsed auto-property prints '{ get; set; }' on the declaration line, so the
-			// per-accessor comments cannot stay above the accessors (2.3 prints them, with
-			// '(get)'/'(set)' prefixes, above the whole declaration instead).
-			if (collapseAutoProperties && decl is ICSharpCode.Decompiler.CSharp.Syntax.Accessor acc
-				&& acc.Parent is ICSharpCode.Decompiler.CSharp.Syntax.PropertyDeclaration pp
-				&& IsCollapsedAutoProperty(pp.Getter, pp.Setter))
+			// 2.3 prints the accessor comments (with '(get)'/'(set)' prefixes) above the property
+			// declaration for every property/indexer, not just collapsed auto-properties.
+			if (decl is ICSharpCode.Decompiler.CSharp.Syntax.Accessor acc
+				&& acc.Parent is ICSharpCode.Decompiler.CSharp.Syntax.PropertyDeclaration)
 				continue;
-			if (collapseAutoProperties && decl is ICSharpCode.Decompiler.CSharp.Syntax.Accessor acc2
-				&& acc2.Parent is ICSharpCode.Decompiler.CSharp.Syntax.IndexerDeclaration idx
-				&& IsCollapsedAutoProperty(idx.Getter, idx.Setter))
+			if (decl is ICSharpCode.Decompiler.CSharp.Syntax.Accessor acc2
+				&& acc2.Parent is ICSharpCode.Decompiler.CSharp.Syntax.IndexerDeclaration)
 				continue;
 			var definition = (IMDTokenProvider?)decl.Annotation<MethodDef>() ?? (IMDTokenProvider?)decl.Annotation<PropertyDef>() ??
 				(IMDTokenProvider?)decl.Annotation<EventDef>() ?? (IMDTokenProvider?)decl.Annotation<TypeDef>();
@@ -580,12 +673,12 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			try {
 				var comment = new ICSharpCode.Decompiler.CSharp.Syntax.Comment(BuildTokenCommentText(definition, module), ICSharpCode.Decompiler.CSharp.Syntax.CommentType.SingleLine);
 				decl.Parent?.InsertChildBefore(decl, comment, ICSharpCode.Decompiler.CSharp.Syntax.Roles.Comment);
-				if (collapseAutoProperties && decl is ICSharpCode.Decompiler.CSharp.Syntax.PropertyDeclaration collapsedProp
-					&& IsCollapsedAutoProperty(collapsedProp.Getter, collapsedProp.Setter)) {
+				if (decl is ICSharpCode.Decompiler.CSharp.Syntax.PropertyDeclaration collapsedProp
+					&& (!collapsedProp.Getter.IsNull || !collapsedProp.Setter.IsNull)) {
 					InsertAccessorTokenComments(collapsedProp.Getter, collapsedProp.Setter, decl, module);
 				}
-				else if (collapseAutoProperties && decl is ICSharpCode.Decompiler.CSharp.Syntax.IndexerDeclaration collapsedIdx
-					&& IsCollapsedAutoProperty(collapsedIdx.Getter, collapsedIdx.Setter)) {
+				else if (decl is ICSharpCode.Decompiler.CSharp.Syntax.IndexerDeclaration collapsedIdx
+					&& (!collapsedIdx.Getter.IsNull || !collapsedIdx.Setter.IsNull)) {
 					InsertAccessorTokenComments(collapsedIdx.Getter, collapsedIdx.Setter, decl, module);
 				}
 			}
@@ -594,11 +687,6 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			}
 		}
 	}
-
-	/// <summary>True when the accessor list is the one the engine collapses onto the declaration line.</summary>
-	static bool IsCollapsedAutoProperty(ICSharpCode.Decompiler.CSharp.Syntax.Accessor getter, ICSharpCode.Decompiler.CSharp.Syntax.Accessor setter) =>
-		(getter.IsNull || (getter.Body.IsNull && !getter.Attributes.Any()))
-		&& (setter.IsNull || (setter.Body.IsNull && !setter.Attributes.Any()));
 
 	/// <summary>
 	/// 2.3 printed the accessor comments (with '(get)'/'(set)' prefixes) above the whole

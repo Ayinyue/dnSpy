@@ -214,12 +214,12 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			try {
 				// The 3.2 tree has no dnlib annotations; the ported converter needs them.
 				AstAnnotationBinder.Attach(module, csharpUnit, knownType);
+				// Same member order as the C# view (2.3's unsorted = metadata-token order).
+				CSharpDecompiler32.ReorderMembers(csharpUnit, module as ModuleDefMD, settings.SortMembers);
 				// The 2.3 engine shows a 'Token: 0x... RID: ...' comment before every member
 				// declaration when ShowTokenAndRvaComments is on; the converter turns those
 				// comments into VB quotes.
-				// VB has no auto-property syntax, so the C# accessor list is never collapsed and
-				// the per-accessor comments must stay above the accessors.
-				CSharpDecompiler32.InsertTokenComments(csharpUnit, module as ModuleDefMD, settings.ShowTokenAndRvaComments, collapseAutoProperties: false);
+				CSharpDecompiler32.InsertTokenComments(csharpUnit, module as ModuleDefMD, settings.ShowTokenAndRvaComments);
 				// Debug locals come from the C# tree's engine variables (the converted VB nodes
 				// carry no variable annotations), so collect them before the tree is consumed.
 				// Only when the caller asked for debug info, like the sequence points.

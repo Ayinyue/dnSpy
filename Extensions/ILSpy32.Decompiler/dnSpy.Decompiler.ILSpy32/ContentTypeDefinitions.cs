@@ -17,12 +17,58 @@
     along with dnSpy.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+using System.ComponentModel.Composition;
+using dnSpy.Contracts.Text;
+using Microsoft.VisualStudio.Utilities;
+
 namespace dnSpy.Decompiler.ILSpy32 {
+	/// <summary>
+	/// Content types of the five 3.2 languages. The names are identical to the 2.3 extension's so
+	/// the editor keeps its syntax highlighting and text-view settings; they must be exported from
+	/// this assembly too, because removing the 2.3 extension (M4) would otherwise leave the 3.2
+	/// languages with dangling <see cref="IDecompiler.ContentTypeString"/> values.
+	/// </summary>
 	static class ContentTypeDefinitions {
-		/// <summary>
-		/// Same content type as the existing ILSpy C# decompiler, so the editor
-		/// reuses its syntax highlighting and text-view settings.
-		/// </summary>
+		public const string DecompilerILSpy = "Decompiler ILSpy";
 		public const string CSharpILSpy = "C# ILSpy";
+		public const string VisualBasicILSpy = "VB ILSpy";
+		public const string ILILSpy = "IL ILSpy";
+		public const string ILAstILSpy = "ILAst ILSpy";
+		public const string ILWithCSharpILSpy = "IL with C# ILSpy";
+
+#pragma warning disable CS0169
+		[Export]
+		[Name(DecompilerILSpy)]
+		[BaseDefinition(ContentTypes.DecompiledCode)]
+		static readonly ContentTypeDefinition? DecompilerILSpyContentTypeDefinition;
+
+		[Export]
+		[Name(CSharpILSpy)]
+		[BaseDefinition(DecompilerILSpy)]
+		[BaseDefinition(ContentTypes.CSharp)]
+		static readonly ContentTypeDefinition? CSharpILSpyContentTypeDefinition;
+
+		[Export]
+		[Name(VisualBasicILSpy)]
+		[BaseDefinition(DecompilerILSpy)]
+		[BaseDefinition(ContentTypes.VisualBasic)]
+		static readonly ContentTypeDefinition? VisualBasicILSpyContentTypeDefinition;
+
+		[Export]
+		[Name(ILILSpy)]
+		[BaseDefinition(DecompilerILSpy)]
+		[BaseDefinition(ContentTypes.IL)]
+		static readonly ContentTypeDefinition? ILILSpyContentTypeDefinition;
+
+		[Export]
+		[Name(ILAstILSpy)]
+		[BaseDefinition(DecompilerILSpy)]
+		static readonly ContentTypeDefinition? ILAstILSpyContentTypeDefinition;
+
+		[Export]
+		[Name(ILWithCSharpILSpy)]
+		[BaseDefinition(ILILSpy)]
+		static readonly ContentTypeDefinition? ILWithCSharpILSpyContentTypeDefinition;
+#pragma warning restore CS0169
 	}
 }

@@ -58,7 +58,7 @@ namespace dnSpy.Decompiler.ILSpy32.Mixed {
 		}
 
 		public override DecompilerSettingsBase Settings => ilLangSettings;
-		public override string ContentTypeString => "IL with C# ILSpy";
+		public override string ContentTypeString => ContentTypeDefinitions.ILWithCSharpILSpy;
 		public override string GenericNameUI => DecompilerConstants.GENERIC_NAMEUI_IL_WITH_CSHARP;
 		public override string UniqueNameUI => uniqueNameUI;
 		public override double OrderUI => DecompilerConstants.IL_WITH_CSHARP_ILSPY_ORDERUI + 0.5;

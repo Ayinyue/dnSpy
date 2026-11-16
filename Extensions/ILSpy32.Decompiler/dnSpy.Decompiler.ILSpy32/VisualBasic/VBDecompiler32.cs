@@ -33,7 +33,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		}
 
 		public override DecompilerSettingsBase Settings => settings;
-		public override string ContentTypeString => "VB ILSpy";
+		public override string ContentTypeString => ContentTypeDefinitions.VisualBasicILSpy;
 		public override string GenericNameUI => DecompilerConstants.GENERIC_NAMEUI_VISUALBASIC;
 		public override string UniqueNameUI => uniqueNameUI;
 		public override double OrderUI => DecompilerConstants.VISUALBASIC_ILSPY_ORDERUI + 0.5;

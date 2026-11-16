@@ -62,7 +62,7 @@ namespace dnSpy.Decompiler.ILSpy32.ILAst {
 
 		public override DecompilerSettingsBase Settings => settings;
 		// Same content type as the 2.3 ILAst language so the editor reuses its text-view settings.
-		public override string ContentTypeString => "ILAst ILSpy";
+		public override string ContentTypeString => ContentTypeDefinitions.ILAstILSpy;
 		public override string GenericNameUI => "ILAst";
 		public override string UniqueNameUI => uniqueNameUI;
 		public override double OrderUI => DecompilerConstants.ILAST_ILSPY_DEBUG_ORDERUI + 0.5;

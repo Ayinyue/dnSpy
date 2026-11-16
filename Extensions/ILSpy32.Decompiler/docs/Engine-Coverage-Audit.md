@@ -141,6 +141,8 @@
 
 ### 8.3 注册面差异（M4 移除 2.3 的影响）
 
+> ✅ **P0 已修（2026-11-16）**：① 3.2 扩展已补 6 个 `ContentTypeDefinition` 导出（`B\ContentTypeDefinitions.cs`，名称与父链同 2.3）；② 已补 `ISimpleILPrinter` 导出（`B\IL\SimpleILPrinter32.cs`，与 2.3 逐字一致）。下文保留原始影响分析作为记录。
+
 - **内容类型 100% 依赖 2.3**：3.2 扩展**无 `ContentTypeDefinition` 导出**（`B\ContentTypeDefinitions.cs` 仅常量；全扩展只有 3 个 `[Export]`：`CSharp\DecompilerCreator.cs:30` + `Settings\DecompilerSettings32Impl.cs:31,86`）。2.3 注册 6 个（`dnSpy.Decompiler.ILSpy\ContentTypeDefinitions.cs:28,33,39,45,51,56`）。→ **M4 后 3.2 五语言的 ContentTypeString 悬空**（语法高亮 / 文本视图设置失效）。
 - **`ISimpleILPrinter` 唯一导出在 2.3**（`dnSpy.Decompiler.ILSpy\IL\SimpleILPrinter.cs:29`）→ `Extensions\dnSpy.AsmEditor\MethodBody\BodyUtils.cs:45` 回退 `DummyPrinter`（:47 输出 "Missing ISimpleILPrinter"）。3.2 无导出。
 - **设置页**：2.3 有 `IAppSettingsPageProvider` 两页（C#/IL，`Settings\DecompilerSettingsPageProvider.cs:26-40`）；3.2 扩展零设置页，且 IL/ILAst/Mixed 的 `Settings` 均为语言内 `new`（B\IL:52、B\ILAst:56、B\Mixed:52-53）→ **未持久化、无 UI**。
@@ -155,6 +157,6 @@
 
 ### 8.5 结论（按建议优先级）
 
-- **P0（M4 前必做）**：① 3.2 扩展补 6 个 `ContentTypeDefinition` 导出；② 补 `ISimpleILPrinter` 导出（否则 AsmEditor 的 IL 打印退化）。
-- **P1（对齐）**：③ 三语言补 `WriteToolTip` / `TypeToString`；④ ILAst 的 `Decompile(TypeDef)` 补类型/基类型/字段/属性/事件；⑤ IL/ILAst/Mixed 的 2.3 装饰做成开关（至少 `Options`，理想加设置页）。
+- **P0（已修）**：① ✅ 3.2 扩展补 6 个 `ContentTypeDefinition` 导出（`ContentTypeDefinitions.cs`，五语言改用常量）；② ✅ 补 `ISimpleILPrinter` 导出（`IL/SimpleILPrinter32.cs`）+ `Common/DnlibILText32.cs`（2.3 dnlib→IL 写入器移植）+ `Common/ILDecompilerUtils32.cs`；对拍 **8565 样本 diffSamples=0**（两侧各 1,543,426 字符逐字相同）。
+- **P1（对齐）**：③ 三语言补 `WriteToolTip` / `TypeToString`（写入器已就绪）；④ ILAst 的 `Decompile(TypeDef)` 补类型/基类型/字段/属性/事件；⑤ IL/ILAst/Mixed 的 2.3 装饰做成开关（至少 `Options`，理想加设置页）。
 - **P2（引擎能力缺口 / 清理）**：⑥ 评估在 3.2 引擎补 ShowILComments / SortMembers / MaxStringLength / HexadecimalNumbers 的 public API；⑦ Mixed 的 C# 叠加改用持久化 C# 设置；⑧ 2.3 设置段清理。

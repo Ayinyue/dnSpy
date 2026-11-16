@@ -59,7 +59,7 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 		public override DecompilerSettingsBase Settings => settings;
 		// Same content type as the 2.3 IL language (ContentTypesInternal.ILILSpy), so the editor
 		// reuses its IL text-view settings (the VB language uses the same literal style).
-		public override string ContentTypeString => "IL ILSpy";
+		public override string ContentTypeString => ContentTypeDefinitions.ILILSpy;
 		public override string GenericNameUI => DecompilerConstants.GENERIC_NAMEUI_IL;
 		public override string UniqueNameUI => uniqueNameUI;
 		// 3.2 convention: the 2.3 sibling's OrderUI + 0.5, so the language sorts after C# and

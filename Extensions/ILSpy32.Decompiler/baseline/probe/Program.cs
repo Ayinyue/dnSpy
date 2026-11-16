@@ -99,13 +99,17 @@ class Probe {
 			InstallBinResolver(new[] { args[3] });
 			return ILAstVerify(args[1], args[2], args[3]);
 		}
+		if (args.Length > 0 && args[0] == "ilprint-diff") {
+			InstallBinResolver(new[] { args[2] });
+			return ILPrintDiff(args[1], args[2], args[3], args[4]);
+		}
 		if (args.Length > 0 && args[0] == "colordump") {
 			// Install the resolver BEFORE dispatching: the JIT of ColorDump needs dnlib and the
 			// contracts, and with Private=false references those come only from this handler.
 			InstallBinResolver(new[] { args[2] });
 			return ColorDump(args[1], args[2], args[3], int.Parse(args[4]), args.Length > 5 ? args[5] : "", args.Length > 6 ? args[6] : ".");
 		}
-		Console.WriteLine("usage: make <path> | decompile <engineDll> <reproDll> <dnspyBin> | colordump <targetDll> <dnspyBin> <cs|vb> <maxTypes> [typeFilter] <outDir>");
+		Console.WriteLine("usage: make <path> | decompile <engineDll> <reproDll> <dnspyBin> | colordump <targetDll> <dnspyBin> <cs|vb> <maxTypes> [typeFilter] <outDir> | ilprint-diff <targetDll> <dnspyBin> <out23.txt> <out32.txt>");
 		return 1;
 	}
 
@@ -1539,5 +1543,154 @@ class Probe {
 		}
 		Console.WriteLine($"SUMMARY compared={compared} agree={agree} only32={only32} only23={only23} both={both}");
 		return 0;
+	}
+
+	// ==== ilprint-diff: 用反射分别实例化 2.3 的 dnSpy.Decompiler.ILSpy.IL.SimpleILPrinter 与
+	// 3.2 的 dnSpy.Decompiler.ILSpy32.IL.SimpleILPrinter32，对同一批 dnlib 对象（方法/字段/
+	// 属性/事件/类型/各种 TypeSig/MethodSig）输出 IL 风格文本并逐字 diff，验证
+	// DnlibILText32 与 2.3 的 DisassemblerHelpers 行为一致。
+	static int ILPrintDiff(string targetDll, string dnspyBin, string out23Path, string out32Path) {
+		var printer23 = CreateSimpleILPrinter(dnspyBin, "dnSpy.Decompiler.ILSpy.x.dll", "dnSpy.Decompiler.ILSpy.IL.SimpleILPrinter");
+		var printer32 = CreateSimpleILPrinter(dnspyBin, "dnSpy.Decompiler.ILSpy32.x.dll", "dnSpy.Decompiler.ILSpy32.IL.SimpleILPrinter32");
+		var module = ModuleDefMD.Load(targetDll);
+		var samples = CollectILSamples(module);
+		var texts23 = RenderILSamples(printer23, samples);
+		var texts32 = RenderILSamples(printer32, samples);
+		File.WriteAllText(out23Path, RenderILSamplesText(samples, texts23));
+		File.WriteAllText(out32Path, RenderILSamplesText(samples, texts32));
+		// 逐样本比较：属性/事件是多行文本，逐行比较会因结构差异错位，掩盖真正的写入器差异。
+		int diffSamples = 0;
+		for (int i = 0; i < samples.Count; i++) {
+			if (texts23[i] != texts32[i]) {
+				diffSamples++;
+				if (diffSamples <= 30) {
+					Console.WriteLine($"DIFF sample {i} [{samples[i].Label}]");
+					Console.WriteLine("  23: " + texts23[i].Replace("\n", "\\n"));
+					Console.WriteLine("  32: " + texts32[i].Replace("\n", "\\n"));
+				}
+			}
+		}
+		var byKind = new System.Collections.Generic.SortedDictionary<string, int>();
+		var totalByKind = new System.Collections.Generic.SortedDictionary<string, int>();
+		for (int i = 0; i < samples.Count; i++) {
+			var kind = samples[i].Label.Split(' ')[0];
+			totalByKind[kind] = totalByKind.TryGetValue(kind, out var c) ? c + 1 : 1;
+			if (texts23[i] != texts32[i])
+				byKind[kind] = byKind.TryGetValue(kind, out var c2) ? c2 + 1 : 1;
+		}
+		Console.WriteLine($"samples={samples.Count} diffSamples={diffSamples} text23={RenderILSamplesText(samples, texts23).Length} text32={RenderILSamplesText(samples, texts32).Length}");
+		foreach (var kv in totalByKind)
+			Console.WriteLine($"  {kv.Key}: {kv.Value} samples, {(byKind.TryGetValue(kv.Key, out var d) ? d : 0)} diff");
+		return diffSamples == 0 ? 0 : 1;
+	}
+
+	static dnSpy.Contracts.Decompiler.ISimpleILPrinter CreateSimpleILPrinter(string dnspyBin, string assemblyFileName, string typeName) {
+		var asm = System.Reflection.Assembly.LoadFrom(Path.Combine(dnspyBin, assemblyFileName));
+		var type = asm.GetType(typeName, throwOnError: true)!;
+		return (dnSpy.Contracts.Decompiler.ISimpleILPrinter)Activator.CreateInstance(type, nonPublic: true)!;
+	}
+
+	static System.Collections.Generic.List<string> RenderILSamples(dnSpy.Contracts.Decompiler.ISimpleILPrinter printer, System.Collections.Generic.List<ILSample> samples) {
+		var list = new System.Collections.Generic.List<string>(samples.Count);
+		foreach (var s in samples) {
+			var output = new StringDecompilerOutput();
+			s.Write(printer, output);
+			list.Add(output.ToString());
+		}
+		return list;
+	}
+
+	static string RenderILSamplesText(System.Collections.Generic.List<ILSample> samples, System.Collections.Generic.List<string> texts) {
+		var sb = new System.Text.StringBuilder();
+		for (int i = 0; i < samples.Count; i++) {
+			sb.AppendLine("### " + samples[i].Label);
+			sb.Append(texts[i]);
+			sb.AppendLine();
+		}
+		return sb.ToString();
+	}
+
+	sealed class ILSample {
+		public readonly string Label;
+		public readonly Action<dnSpy.Contracts.Decompiler.ISimpleILPrinter, dnSpy.Contracts.Decompiler.IDecompilerOutput> Write;
+		public ILSample(string label, Action<dnSpy.Contracts.Decompiler.ISimpleILPrinter, dnSpy.Contracts.Decompiler.IDecompilerOutput> write) {
+			Label = label;
+			Write = write;
+		}
+	}
+
+	static void AddILSampleTypeSig(System.Collections.Generic.List<ILSample> list, string label, TypeSig type) {
+		if (type == null)
+			return;
+		list.Add(new ILSample(label, (p, o) => p.Write(o, type)));
+	}
+
+	static System.Collections.Generic.List<ILSample> CollectILSamples(ModuleDefMD module) {
+		var list = new System.Collections.Generic.List<ILSample>();
+		var allTypes = new System.Collections.Generic.List<TypeDef>();
+		void Collect(System.Collections.Generic.IEnumerable<TypeDef> types) {
+			foreach (var t in types) { allTypes.Add(t); Collect(t.NestedTypes); }
+		}
+		Collect(module.Types);
+
+		foreach (var t in allTypes) {
+			list.Add(new ILSample("type " + t.FullName, (p, o) => p.Write(o, t)));
+			if (t.BaseType != null)
+				list.Add(new ILSample("base " + t.FullName, (p, o) => p.Write(o, t.BaseType)));
+			foreach (var i in t.Interfaces)
+				if (i.Interface != null)
+					list.Add(new ILSample("iface " + t.FullName, (p, o) => p.Write(o, i.Interface)));
+			foreach (var m in t.Methods) {
+				list.Add(new ILSample("method " + m.FullName, (p, o) => p.Write(o, m)));
+				if (m.MethodSig != null) {
+					list.Add(new ILSample("methodsig " + m.FullName, (p, o) => p.Write(o, m.MethodSig)));
+					AddILSampleTypeSig(list, "ret " + m.FullName, m.MethodSig.RetType);
+					foreach (var pt in m.MethodSig.Params)
+						AddILSampleTypeSig(list, "param " + m.FullName, pt);
+				}
+			}
+			foreach (var f in t.Fields) {
+				list.Add(new ILSample("field " + f.FullName, (p, o) => p.Write(o, f)));
+				if (f.FieldSig != null)
+					AddILSampleTypeSig(list, "fieldtype " + f.FullName, f.FieldSig.Type);
+			}
+			foreach (var prop in t.Properties)
+				list.Add(new ILSample("prop " + prop.FullName, (p, o) => p.Write(o, prop)));
+			foreach (var ev in t.Events)
+				list.Add(new ILSample("event " + ev.FullName, (p, o) => p.Write(o, ev)));
+		}
+
+		// 合成 TypeSig，覆盖指针/byref/数组(含 sizes)/泛型实例/modopt/modreq/fnptr/sentinel/
+		// pinned/泛型参数等分支。
+		var corlib = module.CorLibTypes;
+		var int32 = corlib.Int32;
+		var obj = corlib.Object;
+		var genericClass = allTypes.FirstOrDefault(t => t.GenericParameters.Count > 0 && !t.IsValueType);
+		var genericStruct = allTypes.FirstOrDefault(t => t.GenericParameters.Count > 0 && t.IsValueType);
+		AddILSampleTypeSig(list, "ptr", new PtrSig(int32));
+		AddILSampleTypeSig(list, "byref", new ByRefSig(int32));
+		AddILSampleTypeSig(list, "szarray", new SZArraySig(int32));
+		AddILSampleTypeSig(list, "array1", new ArraySig(int32, 1));
+		AddILSampleTypeSig(list, "array2", new ArraySig(int32, 2));
+		AddILSampleTypeSig(list, "array-sizes", new ArraySig(int32, 2, new uint[] { 3, 4 }, new int[] { 1, 0 }));
+		AddILSampleTypeSig(list, "pinned", new PinnedSig(int32));
+		AddILSampleTypeSig(list, "sentinel", new SentinelSig());
+		AddILSampleTypeSig(list, "modopt", new CModOptSig(obj.ToTypeDefOrRef(), int32));
+		AddILSampleTypeSig(list, "modreq", new CModReqdSig(obj.ToTypeDefOrRef(), int32));
+		AddILSampleTypeSig(list, "fnptr", new FnPtrSig(new MethodSig(CallingConvention.Default, 0, corlib.Void, new TypeSig[] { int32 })));
+		AddILSampleTypeSig(list, "genericvar", new GenericVar(0));
+		AddILSampleTypeSig(list, "genericmvar", new GenericMVar(0));
+		if (genericClass != null)
+			AddILSampleTypeSig(list, "genericinst-class", new GenericInstSig(new ClassSig(genericClass), new TypeSig[] { int32, obj }));
+		if (genericStruct != null)
+			AddILSampleTypeSig(list, "genericinst-struct", new GenericInstSig(new ValueTypeSig(genericStruct), new TypeSig[] { int32 }));
+
+		// 泛型方法实例（MethodSpec），覆盖 WriteTo(IMethod) 的 <...> 分支。
+		var genericMethod = allTypes.SelectMany(t => t.Methods).FirstOrDefault(m => m.GenericParameters.Count > 0);
+		if (genericMethod != null) {
+			var spec = new MethodSpecUser(genericMethod, new GenericInstMethodSig(new TypeSig[] { int32 }));
+			list.Add(new ILSample("methodspec " + genericMethod.FullName, (p, o) => p.Write(o, spec)));
+		}
+		return list;
 	}
 }

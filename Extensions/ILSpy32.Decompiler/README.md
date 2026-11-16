@@ -11,7 +11,11 @@
 - 现代 cecil 把泛型约束改成 `GenericParameterConstraint` 包装
 - 产物程序集名与 dnSpy 现有引擎 `ICSharpCode.Decompiler` 冲突（强命名）
 
-`engine.patch` 记录了全部改动（6 个文件）。
+`engine.patch` 只承载**构建配置**改动（`NuGet.config`、csproj 目标框架/程序集名/依赖版本、
+cecil API 适配），用于在** pristine v3.2.0** 上快速重建可构建状态。
+引擎逻辑补丁（async/yield 双布局、using/属性顺序、token 引用、测试环境等）已**提交进本子模块的
+git 历史**（`git log` 可见），主仓库通过 submodule 指针 pin 住，`git submodule update`
+即可拿到完整补丁状态；`apply-engine-patch.ps1` 仅在 HEAD 恰为 `v3.2.0` 标签时才打 patch。
 
 ## 应用补丁
 
@@ -50,7 +54,8 @@ ICSharpCode.Decompiler/ICSharpCode.Decompiler/bin/Release/netstandard2.0/ILSpy32
 - 本机 `api.nuget.org` 不可达，依赖来自 `~/.nuget/packages` 缓存。若缓存缺失，需先补齐。
 - cecil 使用本地 `D:\Codebase\ILSPY\...\Mono.Cecil.dll`（现代版本）。若要回到 cecil 0.10.0，
   需重新评估那 4 处 API 适配是否仍需要。
-- 补丁是**可重复应用**的；升级 submodule 到其他标签时需重新生成。
+- 补丁只在 submodule 处于 pristine `v3.2.0` 时应用（脚本按 HEAD 判断）；已打补丁的状态由
+  submodule 自身的提交承载，升级标签后如需重建补丁请重新生成。
 - `IntroduceUsingDeclarations` 的健壮性修复是 **dnSpy 桥接场景必需的**：
   经 dnlib→cecil 桥接后，部分方法体引用的外部命名空间可能不在
   `RequiredNamespacesSuperset` 中，原 `Debug.Assert` 会直接终止进程。

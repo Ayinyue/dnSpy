@@ -1258,7 +1258,17 @@ class Probe {
 		var mapperT = engineAsm.GetTypes().FirstOrDefault(t => t.Name == "DnlibReferenceMapper");
 		if (mapperT is null)
 			Console.WriteLine("  mapper type not found");
-		foreach (var (label, type, field) in new[] { ("resolveRef", twT, "ResolveReferenceTicks"), ("resolveToken", mapperT, "ResolveTokenTicks") }) {
+		var fields = new[] {
+			("resolveRef", twT, "ResolveReferenceTicks"),
+			("resolveToken", mapperT, "ResolveTokenTicks"),
+			("profAnn", twT, "ProfAnnTicks"),
+			("profTrr", twT, "ProfTrrTicks"),
+			("profIType", twT, "ProfITypeTicks"),
+			("profInvoc", twT, "ProfInvocTicks"),
+			("profSymbol", twT, "ProfSymbolTicks"),
+			("profFallback", twT, "ProfFallbackTicks"),
+		};
+		foreach (var (label, type, field) in fields) {
 			var f = type?.GetField(field, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
 			var ticks = f?.GetValue(null);
 			Console.WriteLine($"  PROF[{label}] ticks=" + ticks + " ms~=" + (ticks is long t ? t / 10000.0 : -1));

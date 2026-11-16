@@ -15,17 +15,17 @@ if (-not (Test-Path $sub))   { throw "submodule not initialized: run 'git submod
 
 Push-Location $sub
 try {
-    $head = (& git rev-parse --short HEAD).Trim()
-    Write-Host "submodule HEAD: $head"
+    $head = (& git rev-parse HEAD).Trim()
+    $pristine = (& git rev-parse v3.2.0 2>$null).Trim()
+    Write-Host "submodule HEAD: $($head.Substring(0, [Math]::Min(7, $head.Length)))"
 
-    & git diff --quiet
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "applying engine.patch ..."
+    if ($head -eq $pristine) {
+        Write-Host "pristine v3.2.0 - applying engine.patch ..."
         & git apply --verbose $patch
         if ($LASTEXITCODE -ne 0) { throw 'git apply failed' }
     }
     else {
-        Write-Host "submodule already has local changes - skipping patch"
+        Write-Host "submodule already carries the dnSpy patches - skipping engine.patch"
     }
 
     if ($Build) {

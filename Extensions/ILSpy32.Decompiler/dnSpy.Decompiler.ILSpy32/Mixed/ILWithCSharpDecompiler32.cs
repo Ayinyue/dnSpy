@@ -236,6 +236,9 @@ namespace dnSpy.Decompiler.ILSpy32.Mixed {
 			// ShowXmlDocumentation option defaulted to on).
 			var sb = new StringBuilder();
 			disassembler.GetXmlDocComments = m => XmlDocComments32.GetXmlDocComments(module, m, sb);
+			// '// Token: 0x... RID: ... RVA: ... File Offset: ...' above the header, like the
+			// 2.3 view's ShowTokenAndRvaComments (also on by default there).
+			disassembler.GetTokenAndRvaComment = m => TokenComment32.GetComment(module, m);
 			return disassembler;
 		}
 

@@ -225,3 +225,25 @@
 - **嵌套类型位置**：2.3 把嵌套类型放在**最后**，3.2 的 `ReorderMembers` 似乎没有移动它
   （仍排在最前），需要查清它是否不在 `TypeDeclaration.Members` 里。
 - C# 零散形态（大类型里 560/447 行级的差异主要来自上面两条）。
+
+### 8.8 using 顺序：2.3 的确切规则（已确证，未实现）
+
+2.3 的 `IntroduceUsingDeclarations` 读取设置 `SortSystemUsingStatementsFirst`
+（`DecompilerSettings.cs:436`，默认 true），用专用比较器排序后再**反序插入**：
+
+```
+System / System.*  → 排最前；两组内部均 OrdinalIgnoreCase 降序（反序插入后 = 升序）
+其余命名空间        → 之后，OrdinalIgnoreCase 升序
+```
+
+实测三例全部吻合：`…System.Text.RegularExpressions, Microsoft.Win32`、
+`…System.Runtime.CompilerServices, dnlib.DotNet`、`…System.Linq, System.Runtime.CompilerServices`。
+
+3.2 引擎**没有这个设置**：`CSharp/Transforms/IntroduceUsingDeclarations.cs:60` 只会
+`OrderByDescending(n => n, StringComparer.Ordinal)`（即最终 ordinal 升序），于是
+`Microsoft.*` / `dnlib.*` 会被排到 `System.*` 之前——这是 3.2 与 2.3 在**每个文件**上
+都可见的差异。
+
+未实现的原因：`UsingDeclaration` 在 3.2 AST 里是 `AstNode`（位于 `Children`，不在
+`Members`），重排需要在 `Children` 上带 role 插入（`InsertChildBefore`），比
+`ReorderMembers` 更容易出错，留作专项。

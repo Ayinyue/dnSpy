@@ -18,6 +18,7 @@
 */
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -227,7 +228,7 @@ namespace dnSpy.Decompiler.ILSpy32.Mixed {
 		ReflectionDisassembler CreateReflectionDisassembler(IDecompilerOutput output, DecompilationContext ctx, ModuleDef module,
 				Func<MethodDef, SourceStatementProvider32>? createProvider, out DecompilerOutputTextOutput bridge) {
 			bridge = new DecompilerOutputTextOutput(output, module);
-			var bodyDisassembler = new MixedMethodBodyDisassembler(bridge, ctx.CancellationToken, module, createProvider);
+			var bodyDisassembler = new MixedMethodBodyDisassembler(bridge, ctx.CancellationToken, module, createProvider, ctx.IsBodyModified);
 			bridge.BodyTracker = bodyDisassembler;
 			var disassembler = new ReflectionDisassembler(bridge, bodyDisassembler, ctx.CancellationToken) {
 				DetectControlStructure = true,
@@ -239,7 +240,22 @@ namespace dnSpy.Decompiler.ILSpy32.Mixed {
 			// '// Token: 0x... RID: ... RVA: ... File Offset: ...' above the header, like the
 			// 2.3 view's ShowTokenAndRvaComments (also on by default there).
 			disassembler.GetTokenAndRvaComment = m => TokenComment32.GetComment(module, m);
+			// Body header block, local names, IL bytes and PDB info: the 2.3 disassembler
+			// options that the Mixed view showed by default. These are the inherited engine fields
+			// (declaring same-named members here would hide them).
+			bodyDisassembler.GetBodyHeaderComments = m => ToDnlib(module, m) is MethodDef dm ? MixedDisassemblyComments32.GetHeaderComments(dm) : null;
+			bodyDisassembler.GetLocalNames = m => ToDnlib(module, m) is MethodDef dm ? MixedDisassemblyComments32.GetLocalNames(dm) : null;
 			return disassembler;
+		}
+
+		/// <summary>Bridges a cecil method back to its dnlib counterpart (rids are preserved).</summary>
+		static MethodDef? ToDnlib(ModuleDef module, MethodDefinition method) {
+			try {
+				return module.ResolveToken((uint)method.MetadataToken.ToInt32()) as MethodDef;
+			}
+			catch {
+				return null;
+			}
 		}
 
 		/// <summary>
@@ -325,20 +341,35 @@ namespace dnSpy.Decompiler.ILSpy32.Mixed {
 		sealed class MixedMethodBodyDisassembler : BodyTrackingMethodBodyDisassembler {
 			readonly ModuleDef module;
 			readonly Func<MethodDef, SourceStatementProvider32>? createProvider;
+			readonly Func<MethodDef, bool>? isBodyModified;
 			SourceStatementProvider32 provider;
+			IInstructionBytesReader? byteReader;
+			long? baseFileOffset;
 
 			public MixedMethodBodyDisassembler(ITextOutput output, CancellationToken cancellationToken, ModuleDef module,
-					Func<MethodDef, SourceStatementProvider32>? createProvider)
+					Func<MethodDef, SourceStatementProvider32>? createProvider, Func<MethodDef, bool>? isBodyModified)
 				: base(output, cancellationToken, module) {
 				this.module = module ?? throw new ArgumentNullException(nameof(module));
 				this.createProvider = createProvider;
+				this.isBodyModified = isBodyModified;
+				// dnSpy's 2.3 IL layout: padded operand column and upper-case IL labels.
+				UseDnSpyLayout = true;
 			}
 
 			public override void Disassemble(MethodBody body) {
 				provider = default;
-				if (createProvider is not null && body?.Method is not null &&
-					module.ResolveToken((uint)body.Method.MetadataToken.ToInt32()) is MethodDef method)
-					provider = createProvider(method);
+				byteReader = null;
+				baseFileOffset = null;
+				MethodDef? method = null;
+				if (body?.Method is not null &&
+					module.ResolveToken((uint)body.Method.MetadataToken.ToInt32()) is MethodDef resolved)
+					method = resolved;
+				if (method is not null) {
+					if (createProvider is not null)
+						provider = createProvider(method);
+					byteReader = MixedDisassemblyComments32.CreateByteReader(method, isBodyModified?.Invoke(method) == true);
+					baseFileOffset = MixedDisassemblyComments32.GetBaseFileOffset(method);
+				}
 				base.Disassemble(body);
 			}
 
@@ -346,6 +377,22 @@ namespace dnSpy.Decompiler.ILSpy32.Mixed {
 				var statement = provider.GetStatement((uint)instruction.Offset);
 				if (statement.line is not null)
 					WriteStatement(output, statement.line, statement.span);
+
+				var method = CurrentMethod;
+				var dnlibInstruction = method is null ? null : FindInstruction(instruction.Offset);
+				if (method is not null && dnlibInstruction is not null) {
+					var sequencePointComment = MixedDisassemblyComments32.GetSequencePointComment(dnlibInstruction);
+					if (sequencePointComment is not null)
+						output.WriteLine(sequencePointComment);
+					foreach (var asyncComment in MixedDisassemblyComments32.GetAsyncComments(method, dnlibInstruction))
+						output.WriteLine(asyncComment);
+				}
+
+				var byteComment = dnlibInstruction is null ? null :
+					MixedDisassemblyComments32.GetByteComment(method!, byteReader, dnlibInstruction, baseFileOffset);
+				if (byteComment is not null)
+					output.Write(byteComment);
+
 				base.WriteInstruction(output, instruction);
 			}
 

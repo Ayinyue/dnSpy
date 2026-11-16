@@ -38,6 +38,7 @@ public API，并移植两个视图的胶水层。
 | `IL/Instructions/BlockContainer.cs` | 对容器发括号对（Loop/While/DoWhile/For→LoopBraces，Switch→SwitchBraces） |
 | `IL/Instructions/ILFunction.cs` | 对方法体发 `MethodBraces` |
 | `Disassembler/ReflectionDisassembler.cs` | `Func<IMemberDefinition, IEnumerable<string>> GetXmlDocComments`（成员头前写 `///` 行）与 `Func<IMemberDefinition, string> GetTokenAndRvaComment`（写 `// Token/RVA/File Offset` 行），均对齐 2.3 的 `DisassemblerOptions`；在 `DisassembleMethod/Field/Property/Event/Type` 调用 |
+| `Disassembler/MethodBodyDisassembler.cs` | `Func<MethodDefinition, IEnumerable<string>> GetBodyHeaderComments`（替换默认的 `// Method begins at RVA` / `// Code size` 两行）、`Func<MethodDefinition, string[]> GetLocalNames`（`.locals` 名 + 指令操作数中的局部名）、`UseDnSpyLayout`/`OperandAlignment`（2.3 的操作数对齐列宽 10 + 大写 IL 标签）——均默认关闭 |
 | `ILSpy/TextView/AvalonEditTextOutput.cs` | 实现新接口成员（ILSpy 应用工程，当前不在 dnSpy 构建集内） |
 
 `NextPosition`/`AddCodeBracesRange` 是接口新增成员，因此所有 `ITextOutput` 实现都要实现
@@ -52,6 +53,7 @@ public API，并移植两个视图的胶水层。
 | `Mixed/ILWithCSharpDecompiler32.cs` | `IL with C# (ILSpy 3.2)` 语言：反汇编 + 逐指令 C# 源行叠加 |
 | `Mixed/DecompilerOutputImpl32.cs` | 捕获单方法 C# 文本 + `MethodDebugInfo`（端口自 2.3） |
 | `Mixed/SourceStatementProvider32.cs` | IL offset → 源行文本（端口自 2.3） |
+| `Mixed/MixedDisassemblyComments32.cs` | 2.3 的反汇编装饰：body 头注释、局部名、`/* 0x… 字节 */`、`/* (line,col) 位置 */`、async 注释——全部从 dnlib 侧取（PDB 在 dnlib 加载） |
 | `CSharp/DecompilerCreator.cs` | 注册两个新语言 |
 | `Common/XmlDocComments32.cs` | XML 文档行提供者（端口自 2.3 `ILDecompiler.GetXmlDocComments`）：cecil 成员按 token 回解 dnlib → `XmlDocLoader` → 按行拆分并剥公共缩进 |
 | `Common/TokenComment32.cs` | `// Token: 0x... RID: ... RVA: ... File Offset: ...` 行（端口自 2.3 `ReflectionDisassembler.AddComment`）：dnlib 侧取 RVA / 文件偏移 |
@@ -71,7 +73,8 @@ Mixed 的逐指令叠加用 `MixedMethodBodyDisassembler`（继承 `BodyTracking
   按指令产生语句（粒度更粗，但足够调试器高亮指令）。
 - **Mixed 的 XML 文档注释**：已对齐（引擎新增 `GetXmlDocComments` 钩子，Mixed 无条件启用；`///` 与正文着色经 `IDecompilerOutput.WriteXmlDoc`，与 2.3 一致）。
 - **Mixed 的 Token/RVA 注释**：已对齐（引擎 `GetTokenAndRvaComment` 钩子 + `Common/TokenComment32`，无条件启用）。
-- **Mixed 的 IL 字节与 PDB 信息**：2.3 默认还显示每条指令的 `/* 0x... 字节 */` 与 `/* (line,col)-(line,col) 文件 */` 注释（`ShowILBytes`/`ShowPdbInfo`），3.2 未实现。
+- **Mixed 的 IL 字节与 PDB 信息**：已对齐（`/* 0x… 字节 */`、`/* (line,col)-(line,col) url */`、async `/* Catch Handler / Yield / Resume */` 均由 `MixedDisassemblyComments32` 从 dnlib 产生）。
+- **C# 源行叠加的粒度**：3.2 的叠加行比 2.3 多——3.2 的 C# 反编译器产出的语句级 sequence point 更细（引擎差异，非接线缺口；其余部分已与 2.3 逐字一致）。
 - **括号对顺序**：与 2.3 一致，采用「写闭括号时登记」的后序（嵌套括号对会先登记内层）。
 
 ## 6. 验证
@@ -85,8 +88,7 @@ Mixed 的逐指令叠加用 `MixedMethodBodyDisassembler`（继承 `BodyTracking
   `CompactILSpans`：`braces=11`（含 `LoopBraces`）、`statements=30`。
 - `baseline/probe mixed-verify ...`：Mixed 专用验证模式，记录颜色；实测 XML 文档注释
   9 行，`///` 为 `XmlDocCommentDelimiter`、正文为 `XmlDocCommentText/Name/AttributeValue`。
-- 与 2.3 逐字对比：同一成员（`--md 0x0600024D`）的 Mixed 输出中，XML 文档块与 Token/RVA 行与 2.3 完全一致
-  （其余差异来自 2.3 的 IL 字节/PDB 注释与 locals 名，见第 5 节）。
+- 与 2.3 逐字对比：同一成员（`--md 0x0600024D`）的 Mixed 输出中，除 C# 叠加行外**全部逐字一致**——头部（XML 文档 + Token/RVA）、body 头（Header/Code Size/LocalVarSig）、`.locals` 名、每条指令的 `/* 0x… 字节 */` 前缀与操作数对齐/大写标签、`/* (line,col) 位置 */` 注释。全文件 diff 从 430 行降至 150 行，剩余全为 3.2 多出的叠加行。
 - `baseline/probe engine-tests ...`：24/24 全部 PASS（无回归）。
 - 构建：引擎 `netstandard2.0` 0 错 0 警；扩展 `net10.0-windows` 0 错。
 
@@ -94,5 +96,5 @@ Mixed 的逐指令叠加用 `MixedMethodBodyDisassembler`（继承 `BodyTracking
 
 - 把括号对顺序改为先序（需要 writer 在写 `{` 前登记，会改变 `AddCodeBracesRange` 语义）。
 - ILAst 的「第 N 步」语言族（若需要逐 transform 对比，可按 `GetILTransforms()` 索引生成）。
-- Mixed 的 IL 字节与 PDB 信息注释（需 3.2 反汇编器暴露相应钩子）。
-- IL 视图的 XML 文档 / Token 注释（钩子已就绪，只需接线）。
+- Mixed 的 `.try`/`.catch` 块结构（3.2 引擎写成 `.try` + `{`，2.3 写成带偏移的 `.try IL_x-IL_y`）。
+- IL 视图的 XML 文档 / Token 注释 / 2.3 布局（钩子已就绪，只需接线）。

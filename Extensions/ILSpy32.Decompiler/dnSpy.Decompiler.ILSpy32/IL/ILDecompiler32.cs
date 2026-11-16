@@ -537,6 +537,12 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 
 			bool atStartOfLine = atLineStart;
 
+			// C-style comment blocks: the Mixed view's /* 0x... bytes */ and /* (line,col) */ decorators.
+			if (text.StartsWith("/*", StringComparison.Ordinal)) {
+				WriteWithReference(text, null, DecompilerReferenceFlags.None, BoxedTextColor.Comment);
+				return;
+			}
+
 			// Comments can start mid-line: "} // end of method ...", ".hash ... // SHA1".
 			int commentIndex = text.IndexOf("//", StringComparison.Ordinal);
 			if (commentIndex >= 0) {

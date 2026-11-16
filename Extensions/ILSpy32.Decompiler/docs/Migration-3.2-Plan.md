@@ -93,10 +93,17 @@ DecompilerService(ctor)
 - [x] 打 tag / 归档 `Extensions/ILSpy.Decompiler`（2026-11-07）：
   tag `archive/ilspy-2.3-engine`（887e46cac）+ 源码备份
   `D:/Codebase/dnSpyEx/_local_backup_20261107_ilspy23.tar.gz`（含 2.3 扩展与核心引擎，3374 文件）
-- [ ] 移除 2.3 的 `IDecompilerCreator` 导出与 IL 视图，同步删除设置页
-  —— **延后至 IL spans 专项落地**；注意：`dnSpy/dnSpy.Decompiler/MSBuild` 导出管线
-  与 `DecompilerBase` 被 3.2 扩展继承使用，移除范围仅限 2.3 反编译器本体，需保留导出基建
-  （ILAst/Mixed 已于 2026-11-16 由 3.2 接管，不随 2.3 移除，见 `docs/ILAst-Mixed-3.2.md`）
+- [x] **移除 2.3 的注册（2026-11-16，M4 阶段 1+2）**：
+  - 阶段 1：3.2 扩展补上非语言注册——`Settings/DecompilerSettingsPageProvider32.cs`
+    （C#/VB/IL 三页，C# 与 IL 页 GUID 同 2.3）、`Themes/wpf.styles.templates.xaml` + `TheExtension32.cs`
+    （IExtension）、`Settings/DecompilerAppSettingsModifiedListener32.cs`（改设置即刷新）。
+  - 阶段 2：`dnSpy.sln` 移除 2.3 扩展项目（15 条）；`dnSpy.Console/Program.cs` 不再加载
+    `dnSpy.Decompiler.ILSpy.Core`；bin 内仅余 ILSpy32 程序集。2.3 扩展**源码目录保留但不再构建**；
+    2.3 引擎子模块保留（`dnSpy.BamlDecompiler`、`ICSharpCode.NRefactory.VB32` 仍引用）。
+  - 验证：全量构建 0 错误；`dnSpy.Console -l "C#"` 报未知语言、`-l "C# (ILSpy 3.2)"` 正常；
+    IL 视图与 2.3 基线仍逐字一致（diff 0）；probe：engine-tests/ilast-verify/
+    mixed-verify/settings-wiring 均通过（`ilprint-diff` 因缺 2.3 程序集改为 SKIP）。
+  - 注意：M4 后审计文档中「2.3 段变孤儿」的担忧已消失（2.3 语言不再注册）。
 - [x] 移除解决方案引用，全量构建 0 错误（2026-11-08：dnSpy.sln 移除 14 条 ILSpy.Core 引用，dnSpy 主项目 + 3.2 扩展均构建 0 错误）
 - [ ] 更新 README / Action-Plan / Dev-Plan / 本文件状态
 

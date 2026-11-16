@@ -286,7 +286,7 @@ class Probe {
 					identical++;
 				else {
 					diffLines += DiffLineCount(a, b);
-					if (samples.Count < 5)
+					if (samples.Count < 25)
 						samples.Add(type.FullName + " (" + DiffLineCount(a, b) + ")");
 				}
 			}

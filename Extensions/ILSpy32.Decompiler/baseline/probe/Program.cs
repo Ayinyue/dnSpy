@@ -99,7 +99,7 @@ class Probe {
 			return MixedVerify(args[1], args[2], args[3]);
 		}
 		if (args.Length > 0 && args[0] == "lang-diff") {
-			return LangDiff(args[1], args[2], args[3], args[4], args.Length >= 7 ? args[5] : null, args.Length >= 7 ? args[6] : null);
+			return LangDiff(args[1], args[2], args[3], args[4], args.Length >= 7 ? args[5] : null, args.Length >= 7 ? args[6] : null, args.Length >= 8 ? args[7] : null);
 		}
 		if (args.Length > 0 && args[0] == "settings-wiring") {
 			InstallBinResolver(new[] { args[1] });
@@ -256,7 +256,7 @@ class Probe {
 	// load it. This mode loads the archived/rebuilt 2.3 core assembly from an explicit path and
 	// diffs each language's output against the 3.2 one. Usage:
 	//   lang-diff <targetDll> <0xToken|TypeName> <dnspyBin> <path23Core>
-	static int LangDiff(string targetDll, string tokenOrTypeName, string dnspyBin, string path23, string? out23 = null, string? out32 = null) {
+	static int LangDiff(string targetDll, string tokenOrTypeName, string dnspyBin, string path23, string? out23 = null, string? out32 = null, string? langFilter = null) {
 		InstallBinResolver(new[] { dnspyBin, path23 });
 		var module = ModuleDefMD.Load(targetDll);
 		var languages23 = LoadProviders(Path.Combine(path23, "dnSpy.Decompiler.ILSpy.Core.dll"));
@@ -279,10 +279,7 @@ class Probe {
 			}
 			var diff = DiffLineCount(text23, text32);
 			// Optional: lang-diff <dll> <token|type> <dnspyBin> <path23> <out23> <out32>
-			if (out23 is not null && out32 is not null &&
-				(kv32.Key.StartsWith("C#", StringComparison.Ordinal) ||
-				 kv32.Key.StartsWith("IL (", StringComparison.Ordinal) ||
-				 kv32.Key.StartsWith("Visual", StringComparison.Ordinal))) {
+			if (out23 is not null && out32 is not null && !string.IsNullOrEmpty(langFilter) && kv32.Key.StartsWith(langFilter, StringComparison.Ordinal)) {
 				File.WriteAllText(out23, text23);
 				File.WriteAllText(out32, text32);
 			}

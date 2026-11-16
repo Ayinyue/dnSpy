@@ -540,10 +540,22 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		return variableName is null ? null : typeDef.Fields.FirstOrDefault(f => f.Name == variableName);
 	}
 
-	internal static void InsertTokenComments(ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree, ModuleDefMD module, bool showTokens) {
+	internal static void InsertTokenComments(ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree tree, ModuleDefMD module, bool showTokens,
+			bool collapseAutoProperties = true) {
 		if (module is null || !showTokens)
 			return;
 		foreach (var decl in tree.DescendantsAndSelf.OfType<ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration>().ToList()) {
+			// A collapsed auto-property prints '{ get; set; }' on the declaration line, so the
+			// per-accessor comments cannot stay above the accessors (2.3 prints them, with
+			// '(get)'/'(set)' prefixes, above the whole declaration instead).
+			if (collapseAutoProperties && decl is ICSharpCode.Decompiler.CSharp.Syntax.Accessor acc
+				&& acc.Parent is ICSharpCode.Decompiler.CSharp.Syntax.PropertyDeclaration pp
+				&& IsCollapsedAutoProperty(pp.Getter, pp.Setter))
+				continue;
+			if (collapseAutoProperties && decl is ICSharpCode.Decompiler.CSharp.Syntax.Accessor acc2
+				&& acc2.Parent is ICSharpCode.Decompiler.CSharp.Syntax.IndexerDeclaration idx
+				&& IsCollapsedAutoProperty(idx.Getter, idx.Setter))
+				continue;
 			var definition = (IMDTokenProvider?)decl.Annotation<MethodDef>() ?? (IMDTokenProvider?)decl.Annotation<PropertyDef>() ??
 				(IMDTokenProvider?)decl.Annotation<EventDef>() ?? (IMDTokenProvider?)decl.Annotation<TypeDef>();
 			if (definition is null) {
@@ -568,6 +580,14 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			try {
 				var comment = new ICSharpCode.Decompiler.CSharp.Syntax.Comment(BuildTokenCommentText(definition, module), ICSharpCode.Decompiler.CSharp.Syntax.CommentType.SingleLine);
 				decl.Parent?.InsertChildBefore(decl, comment, ICSharpCode.Decompiler.CSharp.Syntax.Roles.Comment);
+				if (collapseAutoProperties && decl is ICSharpCode.Decompiler.CSharp.Syntax.PropertyDeclaration collapsedProp
+					&& IsCollapsedAutoProperty(collapsedProp.Getter, collapsedProp.Setter)) {
+					InsertAccessorTokenComments(collapsedProp.Getter, collapsedProp.Setter, decl, module);
+				}
+				else if (collapseAutoProperties && decl is ICSharpCode.Decompiler.CSharp.Syntax.IndexerDeclaration collapsedIdx
+					&& IsCollapsedAutoProperty(collapsedIdx.Getter, collapsedIdx.Setter)) {
+					InsertAccessorTokenComments(collapsedIdx.Getter, collapsedIdx.Setter, decl, module);
+				}
 			}
 			catch {
 				// a comment must never break the decompilation
@@ -575,12 +595,41 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		}
 	}
 
+	/// <summary>True when the accessor list is the one the engine collapses onto the declaration line.</summary>
+	static bool IsCollapsedAutoProperty(ICSharpCode.Decompiler.CSharp.Syntax.Accessor getter, ICSharpCode.Decompiler.CSharp.Syntax.Accessor setter) =>
+		(getter.IsNull || (getter.Body.IsNull && !getter.Attributes.Any()))
+		&& (setter.IsNull || (setter.Body.IsNull && !setter.Attributes.Any()));
+
+	/// <summary>
+	/// 2.3 printed the accessor comments (with '(get)'/'(set)' prefixes) above the whole
+	/// declaration when the accessor list collapsed to '{ get; set; }'.
+	/// </summary>
+	static void InsertAccessorTokenComments(ICSharpCode.Decompiler.CSharp.Syntax.Accessor getter, ICSharpCode.Decompiler.CSharp.Syntax.Accessor setter,
+			ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration decl, ModuleDefMD module) {
+		InsertAccessorTokenComment(getter, "(get)", decl, module);
+		InsertAccessorTokenComment(setter, "(set)", decl, module);
+	}
+
+	static void InsertAccessorTokenComment(ICSharpCode.Decompiler.CSharp.Syntax.Accessor accessor, string prefix,
+			ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration decl, ModuleDefMD module) {
+		if (accessor.IsNull)
+			return;
+		if ((IMDTokenProvider?)accessor.Annotation<MethodDef>() is not MethodDef def)
+			return;
+		// BuildTokenCommentText already starts with a space; the comment writer emits '//'
+		// directly before the text, so the prefix needs a leading space of its own.
+		var comment = new ICSharpCode.Decompiler.CSharp.Syntax.Comment(" " + prefix + BuildTokenCommentText(def, module), ICSharpCode.Decompiler.CSharp.Syntax.CommentType.SingleLine);
+		decl.Parent?.InsertChildBefore(decl, comment, ICSharpCode.Decompiler.CSharp.Syntax.Roles.Comment);
+	}
+
 	static string BuildTokenCommentText(IMDTokenProvider definition, ModuleDefMD module) {
 		var text = $" Token: 0x{definition.MDToken.Raw:X8} RID: {definition.MDToken.Rid}";
 		if (definition is MethodDef method && method.RVA != 0) {
 			try {
+				// dnlib's MethodDef.RVA is the dnlib.PE.RVA struct; formatting it with X8 throws,
+				// so cast to uint (2.3 printed "RVA: 0x... File Offset: 0x...").
 				var fileOffset = module.ToFileOffset((uint)method.RVA);
-				text += $" RVA: 0x{method.RVA:X8} File Offset: 0x{fileOffset:X8}";
+				text += $" RVA: 0x{(uint)method.RVA:X8} File Offset: 0x{fileOffset:X8}";
 			}
 			catch {
 				// offsets unavailable in-memory; the token part stays

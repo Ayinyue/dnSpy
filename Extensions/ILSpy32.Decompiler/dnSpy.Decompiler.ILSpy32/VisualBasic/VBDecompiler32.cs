@@ -217,7 +217,9 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				// The 2.3 engine shows a 'Token: 0x... RID: ...' comment before every member
 				// declaration when ShowTokenAndRvaComments is on; the converter turns those
 				// comments into VB quotes.
-				CSharpDecompiler32.InsertTokenComments(csharpUnit, module as ModuleDefMD, settings.ShowTokenAndRvaComments);
+				// VB has no auto-property syntax, so the C# accessor list is never collapsed and
+				// the per-accessor comments must stay above the accessors.
+				CSharpDecompiler32.InsertTokenComments(csharpUnit, module as ModuleDefMD, settings.ShowTokenAndRvaComments, collapseAutoProperties: false);
 				// Debug locals come from the C# tree's engine variables (the converted VB nodes
 				// carry no variable annotations), so collect them before the tree is consumed.
 				// Only when the caller asked for debug info, like the sequence points.

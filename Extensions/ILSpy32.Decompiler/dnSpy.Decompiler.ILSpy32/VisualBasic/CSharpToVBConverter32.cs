@@ -119,6 +119,12 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 
 		readonly ICSharpCode.Decompiler.TypeSystem.DecompilerTypeSystem? engineTypeSystem;
 
+		/// <summary>
+		/// dnSpy's 2.3 VB output carried the Nullable/NullableContext attributes; the 3.2
+		/// converter drops them (VB cannot apply them, BC30662). Keeping them is what matches 2.3.
+		/// </summary>
+		public bool EmitNullableAttributes { get; set; }
+
 		public CSharpToVBConverter32(ModuleDef module, IEnvironmentProvider provider,
 				ICSharpCode.Decompiler.TypeSystem.DecompilerTypeSystem? engineTypeSystem = null)
 		{
@@ -2002,12 +2008,14 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			return EndNode(attributeSection, block);
 		}
 
-		static bool IsIgnoredCompilerAttribute(CS.Attribute attribute) {
+		bool IsIgnoredCompilerAttribute(CS.Attribute attribute) {
 			var name = NormalizeAttributeName(attribute.Type?.ToString());
-			// Nullable*/NullableContext describe C# nullable annotations; TupleElementNames
-			// describes tuple element names, which VB cannot apply explicitly (BC37269).
-			// Neither carries meaning for VB, so both are dropped.
-			return name == "Nullable" || name == "NullableContext" || name == "TupleElementNames";
+			// Nullable*/NullableContext describe C# nullable annotations; VB cannot apply them
+			// (BC30662) but 2.3 emitted them, so keep them unless the caller opts out.
+			if (name == "Nullable" || name == "NullableContext")
+				return !EmitNullableAttributes;
+			// TupleElementNames describes tuple element names, which VB cannot apply explicitly (BC37269).
+			return name == "TupleElementNames";
 		}
 
 		public AstNode VisitDelegateDeclaration(CS.DelegateDeclaration delegateDeclaration, object data)

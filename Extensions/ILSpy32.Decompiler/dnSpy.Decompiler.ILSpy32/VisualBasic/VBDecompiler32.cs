@@ -227,7 +227,11 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				var pendingLocals = ctx.CalculateILSpans
 					? CollectPendingLocals(module as ModuleDefMD, csharpUnit)
 					: null;
-				var converter = new CSharpToVBConverter32(module, new ILSpyEnvironmentProvider32(), engineTypeSystem);
+				// dnSpy's 2.3 VB output carried the Nullable/NullableContext attributes; keep that
+				// behaviour (the alternative drops them, which diverges from 2.3).
+				var converter = new CSharpToVBConverter32(module, new ILSpyEnvironmentProvider32(), engineTypeSystem) {
+					EmitNullableAttributes = true,
+				};
 				var unit = (CompilationUnit)csharpUnit.AcceptVisitor(converter, null);
 				ApplyIdentifierRenames(csharpUnit, unit);
 				var outputFormatter = new VBTextOutputFormatter32(output, 1, ctx.CalculateILSpans, pendingLocals);

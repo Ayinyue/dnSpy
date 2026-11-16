@@ -27,7 +27,7 @@ namespace dnSpy.Decompiler.ILSpy32.Settings {
 	/// <summary>
 	/// Persisted IL (ILSpy 3.2) settings. One MEF singleton shared by the IL view and the Mixed
 	/// view - the 2.3 side did the same with its <c>ILSettings</c> singleton. Also carries the
-	/// four 2.3 IL options that the 3.2 engine honours over from the 2.3 section.
+	/// 2.3 IL options over from the 2.3 section.
 	/// </summary>
 	[Export]
 	sealed class ILDecompilerSettings32Impl : ILDecompilerSettings32 {
@@ -54,11 +54,14 @@ namespace dnSpy.Decompiler.ILSpy32.Settings {
 			ShowTokenAndRvaComments = sect.Attribute<bool?>(nameof(ShowTokenAndRvaComments)) ?? ShowTokenAndRvaComments;
 			ShowILBytes = sect.Attribute<bool?>(nameof(ShowILBytes)) ?? ShowILBytes;
 			ShowPdbInfo = sect.Attribute<bool?>(nameof(ShowPdbInfo)) ?? ShowPdbInfo;
+			ShowILComments = sect.Attribute<bool?>(nameof(ShowILComments)) ?? ShowILComments;
+			SortMembers = sect.Attribute<bool?>(nameof(SortMembers)) ?? SortMembers;
+			MaxStringLength = sect.Attribute<int?>(nameof(MaxStringLength)) ?? MaxStringLength;
+			HexadecimalNumbers = sect.Attribute<bool?>(nameof(HexadecimalNumbers)) ?? HexadecimalNumbers;
 		}
 
 		/// <summary>
-		/// One-time carry-over of the 2.3 IL options. The 3.2 engine has no equivalent for the
-		/// other four (IL comments, member sorting, max string length, hexadecimal numbers).
+		/// One-time carry-over of the 2.3 IL options (all eight).
 		/// </summary>
 		void MigrateFrom23() {
 			var target = settingsService.GetOrCreateSection(SETTINGS_GUID);
@@ -66,6 +69,11 @@ namespace dnSpy.Decompiler.ILSpy32.Settings {
 				return; // the user already has 3.2-era values; migration is done
 			var legacy = settingsService.GetOrCreateSection(Legacy23ILSettingsGuid);
 			foreach (var (key, value) in legacy.Attributes) {
+				if (key == nameof(MaxStringLength)) {
+					if (int.TryParse(value, out var maxLen))
+						MaxStringLength = maxLen;
+					continue;
+				}
 				if (!bool.TryParse(value, out var b))
 					continue;
 				switch (key) {
@@ -73,6 +81,9 @@ namespace dnSpy.Decompiler.ILSpy32.Settings {
 					case nameof(ShowTokenAndRvaComments): ShowTokenAndRvaComments = b; break;
 					case nameof(ShowILBytes): ShowILBytes = b; break;
 					case nameof(ShowPdbInfo): ShowPdbInfo = b; break;
+					case nameof(ShowILComments): ShowILComments = b; break;
+					case nameof(SortMembers): SortMembers = b; break;
+					case nameof(HexadecimalNumbers): HexadecimalNumbers = b; break;
 				}
 			}
 		}
@@ -85,6 +96,10 @@ namespace dnSpy.Decompiler.ILSpy32.Settings {
 			sect.Attribute(nameof(ShowTokenAndRvaComments), ShowTokenAndRvaComments);
 			sect.Attribute(nameof(ShowILBytes), ShowILBytes);
 			sect.Attribute(nameof(ShowPdbInfo), ShowPdbInfo);
+			sect.Attribute(nameof(ShowILComments), ShowILComments);
+			sect.Attribute(nameof(SortMembers), SortMembers);
+			sect.Attribute(nameof(MaxStringLength), MaxStringLength);
+			sect.Attribute(nameof(HexadecimalNumbers), HexadecimalNumbers);
 		}
 	}
 }

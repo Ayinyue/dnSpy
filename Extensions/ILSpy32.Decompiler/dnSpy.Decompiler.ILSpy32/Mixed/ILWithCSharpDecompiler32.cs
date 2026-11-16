@@ -270,6 +270,14 @@ namespace dnSpy.Decompiler.ILSpy32.Mixed {
 			bodyDisassembler.GetLocalNames = m => ToDnlib(module, m) is MethodDef dm ? MixedDisassemblyComments32.GetLocalNames(dm) : null;
 			bodyDisassembler.ShowILBytes = ilLangSettings.ShowILBytes;
 			bodyDisassembler.ShowPdbInfo = ilLangSettings.ShowPdbInfo;
+			// The four remaining 2.3 IL options (shared IL settings, like 2.3's Mixed view).
+			if (ilLangSettings.ShowILComments)
+				bodyDisassembler.GetOpCodeDocumentation = OpCodeDocumentation32.GetDocumentation;
+			bodyDisassembler.MaxStringLength = ilLangSettings.MaxStringLength;
+			bodyDisassembler.HexadecimalNumbers = ilLangSettings.HexadecimalNumbers;
+			disassembler.SortMembers = ilLangSettings.SortMembers;
+			disassembler.MaxStringLength = ilLangSettings.MaxStringLength;
+			disassembler.HexadecimalNumbers = ilLangSettings.HexadecimalNumbers;
 			return disassembler;
 		}
 

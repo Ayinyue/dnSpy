@@ -44,9 +44,9 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 	/// the cecil snapshot via their metadata tokens (the bridge preserves rids), and the engine's
 	/// <see cref="ITextOutput"/> writes are translated onto dnSpy's
 	/// <see cref="IDecompilerOutput"/> with the BoxedTextColor IL palette used by the 2.3 view.
-	/// 2.3 options that the 3.2 engine has no hook for (IL comments, token/RVA comments, IL bytes,
-	/// member sorting, PDB info, string length/number format, original-bytes reading) are not
-	/// exposed; the settings page stays empty.
+	/// All eight 2.3 IL options are honoured: the four original ones plus ShowILComments,
+	/// SortMembers, MaxStringLength and HexadecimalNumbers, which are wired through the engine
+	/// hooks added for them.
 	/// </summary>
 	sealed class ILDecompiler32 : DecompilerBase {
 		static readonly Guid THE_GUID = new Guid("7A3F1C2E-8B24-4D57-9C36-1E5A0F4B92D3");
@@ -235,6 +235,16 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 			bodyDisassembler.ShowPdbInfo = settings.ShowPdbInfo;
 			bodyDisassembler.IsBodyModifiedFunc = ctx.IsBodyModified;
 			bodyDisassembler.UseDnSpyLayout = true;
+			// The four remaining 2.3 IL options. ShowILComments installs the opcode doc
+			// provider; the other three are engine-level formatting/sorting switches whose
+			// defaults keep the current output.
+			if (settings.ShowILComments)
+				bodyDisassembler.GetOpCodeDocumentation = OpCodeDocumentation32.GetDocumentation;
+			bodyDisassembler.MaxStringLength = settings.MaxStringLength;
+			bodyDisassembler.HexadecimalNumbers = settings.HexadecimalNumbers;
+			disassembler.SortMembers = settings.SortMembers;
+			disassembler.MaxStringLength = settings.MaxStringLength;
+			disassembler.HexadecimalNumbers = settings.HexadecimalNumbers;
 			return disassembler;
 		}
 
@@ -345,9 +355,7 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 	}
 
 	/// <summary>
-	/// IL-view settings. Only the 2.3 IL options that the 3.2 engine can honour are exposed (the
-	/// rest - IL comments, member sorting, max string length, hexadecimal numbers - have no 3.2
-	/// equivalent and stay unavailable). Defaults and GUIDs match 2.3.
+	/// IL-view settings. All eight 2.3 IL options are exposed; defaults and GUIDs match 2.3.
 	/// </summary>
 	class ILDecompilerSettings32 : DecompilerSettingsBase {
 		int version;
@@ -356,6 +364,14 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 		bool showTokenAndRvaComments = true;
 		bool showILBytes = true;
 		bool showPdbInfo = true;
+		// 2.3 defaults: ShowILComments=false, SortMembers=false,
+		// MaxStringLength=DecompilerSettings.ConstMaxStringLength (20000), HexadecimalNumbers=false.
+		// The 3.2 engine has no such constant, so the value is mirrored here.
+		public const int DefaultMaxStringLength = 20000;
+		bool showILComments;
+		bool sortMembers;
+		int maxStringLength = DefaultMaxStringLength;
+		bool hexadecimalNumbers;
 
 		public bool ShowXmlDocumentation {
 			get => showXmlDocumentation;
@@ -377,12 +393,36 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 			set { if (showPdbInfo != value) { showPdbInfo = value; RaiseVersionChanged(); } }
 		}
 
+		public bool ShowILComments {
+			get => showILComments;
+			set { if (showILComments != value) { showILComments = value; RaiseVersionChanged(); } }
+		}
+
+		public bool SortMembers {
+			get => sortMembers;
+			set { if (sortMembers != value) { sortMembers = value; RaiseVersionChanged(); } }
+		}
+
+		public int MaxStringLength {
+			get => maxStringLength;
+			set { if (maxStringLength != value) { maxStringLength = value; RaiseVersionChanged(); } }
+		}
+
+		public bool HexadecimalNumbers {
+			get => hexadecimalNumbers;
+			set { if (hexadecimalNumbers != value) { hexadecimalNumbers = value; RaiseVersionChanged(); } }
+		}
+
 		public override DecompilerSettingsBase Clone() => new ILDecompilerSettings32 {
 			version = version,
 			showXmlDocumentation = showXmlDocumentation,
 			showTokenAndRvaComments = showTokenAndRvaComments,
 			showILBytes = showILBytes,
 			showPdbInfo = showPdbInfo,
+			showILComments = showILComments,
+			sortMembers = sortMembers,
+			maxStringLength = maxStringLength,
+			hexadecimalNumbers = hexadecimalNumbers,
 		};
 		public override int Version => version;
 		public override event EventHandler? VersionChanged;
@@ -408,6 +448,29 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 				() => ShowPdbInfo, v => ShowPdbInfo = v) {
 				Description = "Show the PDB source location (and async state machine) comments",
 				Name = "Show PDB info",
+			};
+			// The four remaining 2.3 IL options. Names/GUIDs are the 2.3 constants so the
+			// command line (--comments / --dont-comments / --max-string-length N / --hex)
+			// matches the 2.3 language.
+			yield return new DecompilerOption<bool>(DecompilerOptionConstants.ShowILComments_GUID,
+				() => ShowILComments, v => ShowILComments = v) {
+				Description = "Show the opcode documentation comment after every instruction",
+				Name = DecompilerOptionConstants.ShowILComments_NAME,
+			};
+			yield return new DecompilerOption<bool>(DecompilerOptionConstants.SortMembers_GUID,
+				() => SortMembers, v => SortMembers = v) {
+				Description = "Sort nested types, fields, methods, properties and events",
+				Name = DecompilerOptionConstants.SortMembers_NAME,
+			};
+			yield return new DecompilerOption<int>(DecompilerOptionConstants.MaxStringLength_GUID,
+				() => MaxStringLength, v => MaxStringLength = v) {
+				Description = "Max length of a string operand (int.MaxValue = no limit)",
+				Name = DecompilerOptionConstants.MaxStringLength_NAME,
+			};
+			yield return new DecompilerOption<bool>(DecompilerOptionConstants.HexadecimalNumbers_GUID,
+				() => HexadecimalNumbers, v => HexadecimalNumbers = v) {
+				Description = "Format integer operands as hexadecimal numbers",
+				Name = DecompilerOptionConstants.HexadecimalNumbers_NAME,
 			};
 		}
 

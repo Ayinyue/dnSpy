@@ -242,18 +242,20 @@ namespace dnSpy.Decompiler.ILSpy32.Mixed {
 			var disassembler = new ReflectionDisassembler(bridge, bodyDisassembler, ctx.CancellationToken) {
 				DetectControlStructure = true,
 			};
-			// XML documentation above each member header, like the 2.3 Mixed view (its
-			// ShowXmlDocumentation option defaulted to on).
+			// XML documentation above each member header (2.3's ShowXmlDocumentation, on by default).
 			var sb = new StringBuilder();
-			disassembler.GetXmlDocComments = m => XmlDocComments32.GetXmlDocComments(module, m, sb);
-			// '// Token: 0x... RID: ... RVA: ... File Offset: ...' above the header, like the
-			// 2.3 view's ShowTokenAndRvaComments (also on by default there).
-			disassembler.GetTokenAndRvaComment = m => TokenComment32.GetComment(module, m);
+			if (ilLangSettings.ShowXmlDocumentation)
+				disassembler.GetXmlDocComments = m => XmlDocComments32.GetXmlDocComments(module, m, sb);
+			// '// Token: 0x... RID: ... RVA: ... File Offset: ...' above the header (ShowTokenAndRvaComments).
+			if (ilLangSettings.ShowTokenAndRvaComments)
+				disassembler.GetTokenAndRvaComment = m => TokenComment32.GetComment(module, m);
 			// Body header block, local names, IL bytes and PDB info: the 2.3 disassembler
 			// options that the Mixed view showed by default. These are the inherited engine fields
 			// (declaring same-named members here would hide them).
 			bodyDisassembler.GetBodyHeaderComments = m => ToDnlib(module, m) is MethodDef dm ? MixedDisassemblyComments32.GetHeaderComments(dm) : null;
 			bodyDisassembler.GetLocalNames = m => ToDnlib(module, m) is MethodDef dm ? MixedDisassemblyComments32.GetLocalNames(dm) : null;
+			bodyDisassembler.ShowILBytes = ilLangSettings.ShowILBytes;
+			bodyDisassembler.ShowPdbInfo = ilLangSettings.ShowPdbInfo;
 			return disassembler;
 		}
 
@@ -358,8 +360,8 @@ namespace dnSpy.Decompiler.ILSpy32.Mixed {
 				this.module = module ?? throw new ArgumentNullException(nameof(module));
 				this.createProvider = createProvider;
 				IsBodyModifiedFunc = isBodyModified;
-				// The 2.3 decorations and dnSpy's IL layout (padded operand column, upper-case labels).
-				ShowInstructionDecorations = true;
+				// The 2.3 decorations are switched on/off through ILDecompilerSettings32 by
+				// CreateReflectionDisassembler, which configures this instance.
 				UseDnSpyLayout = true;
 			}
 

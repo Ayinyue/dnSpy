@@ -19,12 +19,14 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using dnlib.DotNet;
 using dnSpy.Contracts.Decompiler;
 using dnSpy.Contracts.Text;
 using dnSpy.Decompiler.ILSpy32.CSharp;
+using dnSpy.Decompiler.Settings;
 using dnSpy.Decompiler.ILSpy32.Common;
 using ICSharpCode.Decompiler;
 using ICSharpCode.Decompiler.Disassembler;
@@ -216,13 +218,17 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 			};
 			// The 2.3 IL view's defaults: XML documentation, the '// Token: ...' comment, the
 			// Header/Code Size/LocalVarSig block, local names, IL bytes, PDB source locations and
-			// the padded operand column with upper-case IL labels.
+			// the padded operand column with upper-case IL labels. The four 2.3 options are honoured;
+			// their defaults match 2.3.
 			var sb = new StringBuilder();
-			disassembler.GetXmlDocComments = m => XmlDocComments32.GetXmlDocComments(module, m, sb);
-			disassembler.GetTokenAndRvaComment = m => TokenComment32.GetComment(module, m);
+			if (settings.ShowXmlDocumentation)
+				disassembler.GetXmlDocComments = m => XmlDocComments32.GetXmlDocComments(module, m, sb);
+			if (settings.ShowTokenAndRvaComments)
+				disassembler.GetTokenAndRvaComment = m => TokenComment32.GetComment(module, m);
 			bodyDisassembler.GetBodyHeaderComments = m => ToDnlib(module, m) is MethodDef dm ? MixedDisassemblyComments32.GetHeaderComments(dm) : null;
 			bodyDisassembler.GetLocalNames = m => ToDnlib(module, m) is MethodDef dm ? MixedDisassemblyComments32.GetLocalNames(dm) : null;
-			bodyDisassembler.ShowInstructionDecorations = true;
+			bodyDisassembler.ShowILBytes = settings.ShowILBytes;
+			bodyDisassembler.ShowPdbInfo = settings.ShowPdbInfo;
 			bodyDisassembler.IsBodyModifiedFunc = ctx.IsBodyModified;
 			bodyDisassembler.UseDnSpyLayout = true;
 			return disassembler;
@@ -335,22 +341,77 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 	}
 
 	/// <summary>
-	/// IL-view settings. The 3.2 engine has no engine-side switch for any of the 2.3 IL options
-	/// (IL comments, token/RVA comments, IL bytes, member sorting, PDB info, max string length,
-	/// hexadecimal numbers), so the option list is empty and dnSpy's settings page shows nothing.
+	/// IL-view settings. Only the 2.3 IL options that the 3.2 engine can honour are exposed (the
+	/// rest - IL comments, member sorting, max string length, hexadecimal numbers - have no 3.2
+	/// equivalent and stay unavailable). Defaults and GUIDs match 2.3.
 	/// </summary>
 	sealed class ILDecompilerSettings32 : DecompilerSettingsBase {
 		int version;
+		IDecompilerOption[]? options;
+		bool showXmlDocumentation = true;
+		bool showTokenAndRvaComments = true;
+		bool showILBytes = true;
+		bool showPdbInfo = true;
 
-		public override DecompilerSettingsBase Clone() => new ILDecompilerSettings32 { version = version };
-		public override int Version => version;
-		// Contract member with nothing to raise it for: the settings are stateless (empty options).
-#pragma warning disable CS0067
-		public override event EventHandler? VersionChanged;
-		public override IEnumerable<IDecompilerOption> Options {
-			get { yield break; }
+		public bool ShowXmlDocumentation {
+			get => showXmlDocumentation;
+			set { if (showXmlDocumentation != value) { showXmlDocumentation = value; RaiseVersionChanged(); } }
 		}
-#pragma warning restore CS0067
+
+		public bool ShowTokenAndRvaComments {
+			get => showTokenAndRvaComments;
+			set { if (showTokenAndRvaComments != value) { showTokenAndRvaComments = value; RaiseVersionChanged(); } }
+		}
+
+		public bool ShowILBytes {
+			get => showILBytes;
+			set { if (showILBytes != value) { showILBytes = value; RaiseVersionChanged(); } }
+		}
+
+		public bool ShowPdbInfo {
+			get => showPdbInfo;
+			set { if (showPdbInfo != value) { showPdbInfo = value; RaiseVersionChanged(); } }
+		}
+
+		public override DecompilerSettingsBase Clone() => new ILDecompilerSettings32 {
+			version = version,
+			showXmlDocumentation = showXmlDocumentation,
+			showTokenAndRvaComments = showTokenAndRvaComments,
+			showILBytes = showILBytes,
+			showPdbInfo = showPdbInfo,
+		};
+		public override int Version => version;
+		public override event EventHandler? VersionChanged;
+		public override IEnumerable<IDecompilerOption> Options => options ??= CreateOptions().ToArray();
+
+		IEnumerable<IDecompilerOption> CreateOptions() {
+			yield return new DecompilerOption<bool>(DecompilerOptionConstants.ShowXmlDocumentation_GUID,
+				() => ShowXmlDocumentation, v => ShowXmlDocumentation = v) {
+				Description = "Show XML documentation comments above members",
+				Name = "Show XML documentation",
+			};
+			yield return new DecompilerOption<bool>(DecompilerOptionConstants.ShowTokenAndRvaComments_GUID,
+				() => ShowTokenAndRvaComments, v => ShowTokenAndRvaComments = v) {
+				Description = "Show the '// Token: 0x... RID: ... RVA: ... File Offset: ...' comment",
+				Name = "Show token/RVA comments",
+			};
+			yield return new DecompilerOption<bool>(DecompilerOptionConstants.ShowILBytes_GUID,
+				() => ShowILBytes, v => ShowILBytes = v) {
+				Description = "Show the instruction bytes in front of every instruction",
+				Name = "Show IL bytes",
+			};
+			yield return new DecompilerOption<bool>(DecompilerOptionConstants.ShowPdbInfo_GUID,
+				() => ShowPdbInfo, v => ShowPdbInfo = v) {
+				Description = "Show the PDB source location (and async state machine) comments",
+				Name = "Show PDB info",
+			};
+		}
+
+		void RaiseVersionChanged() {
+			version++;
+			VersionChanged?.Invoke(this, EventArgs.Empty);
+		}
+
 		public override bool Equals(object? obj) => obj is ILDecompilerSettings32;
 		public override int GetHashCode() => 0x32;
 	}
@@ -380,11 +441,16 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 			instructionMap is not null && instructionMap.TryGetValue(offset, out var inst) ? inst : null;
 
 		/// <summary>
-		/// Whether to write the 2.3-style per-instruction decorations: the <c>/* 0x... bytes */</c>
-		/// prefix, the PDB source-location comment and the async state machine comments. Off by
-		/// default; the IL and Mixed views turn it on.
+		/// Whether to write the <c>/* 0x... bytes */</c> prefix before every instruction (2.3's
+		/// ShowILBytes). Off by default.
 		/// </summary>
-		public bool ShowInstructionDecorations { get; set; }
+		public bool ShowILBytes { get; set; }
+
+		/// <summary>
+		/// Whether to write the PDB source-location and async state machine comments (2.3's
+		/// ShowPdbInfo). Off by default.
+		/// </summary>
+		public bool ShowPdbInfo { get; set; }
 
 		/// <summary>Used to decide whether the original or modified instruction bytes are read.</summary>
 		public Func<MethodDef, bool>? IsBodyModifiedFunc { get; set; }
@@ -399,7 +465,7 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 			instructionMap = BuildInstructionMap(currentMethod);
 			byteReader = null;
 			baseFileOffset = null;
-			if (ShowInstructionDecorations && currentMethod is not null) {
+			if (ShowILBytes && currentMethod is not null) {
 				byteReader = MixedDisassemblyComments32.CreateByteReader(
 					currentMethod, IsBodyModifiedFunc?.Invoke(currentMethod) == true);
 				baseFileOffset = MixedDisassemblyComments32.GetBaseFileOffset(currentMethod);
@@ -420,7 +486,7 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 		/// written before the span starts, exactly like the 2.3 engine did.
 		/// </summary>
 		protected override void WriteInstruction(ITextOutput output, Instruction instruction) {
-			if (ShowInstructionDecorations)
+			if (ShowILBytes || ShowPdbInfo)
 				WriteDecorations(output, instruction);
 			if (output is DecompilerOutputTextOutput bridge)
 				bridge.BeginInstruction(instruction.Offset);
@@ -429,7 +495,9 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 				bridge2.EndInstruction();
 		}
 
-		/// <summary>The 2.3 <c>ShowILBytes</c> / <c>ShowPdbInfo</c> decorations for one instruction.</summary>
+		/// <summary>
+		/// The 2.3 <c>ShowILBytes</c> / <c>ShowPdbInfo</c> decorations for one instruction.
+		/// </summary>
 		protected void WriteDecorations(ITextOutput output, Instruction instruction) {
 			var method = currentMethod;
 			if (method is null)
@@ -437,14 +505,18 @@ namespace dnSpy.Decompiler.ILSpy32.IL {
 			var dnlibInstruction = FindInstruction(instruction.Offset);
 			if (dnlibInstruction is null)
 				return;
-			var sequencePointComment = MixedDisassemblyComments32.GetSequencePointComment(dnlibInstruction);
-			if (sequencePointComment is not null)
-				output.WriteLine(sequencePointComment);
-			foreach (var asyncComment in MixedDisassemblyComments32.GetAsyncComments(method, dnlibInstruction))
-				output.WriteLine(asyncComment);
-			var byteComment = MixedDisassemblyComments32.GetByteComment(method, byteReader, dnlibInstruction, baseFileOffset);
-			if (byteComment is not null)
-				output.Write(byteComment);
+			if (ShowPdbInfo) {
+				var sequencePointComment = MixedDisassemblyComments32.GetSequencePointComment(dnlibInstruction);
+				if (sequencePointComment is not null)
+					output.WriteLine(sequencePointComment);
+				foreach (var asyncComment in MixedDisassemblyComments32.GetAsyncComments(method, dnlibInstruction))
+					output.WriteLine(asyncComment);
+			}
+			if (ShowILBytes) {
+				var byteComment = MixedDisassemblyComments32.GetByteComment(method, byteReader, dnlibInstruction, baseFileOffset);
+				if (byteComment is not null)
+					output.Write(byteComment);
+			}
 		}
 
 		MethodDef? TryResolveMethod(MethodDefinition method) {

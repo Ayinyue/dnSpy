@@ -331,13 +331,25 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		/// cannot be bridged through cecil (external accessors, external operator methods) and
 		/// the table entry carries the authoritative assembly scope.
 		/// </summary>
+		/// <summary>member name → declaring-type candidates, for the prefix match without a
+		/// full-table scan (a table miss on a common BCL member used to walk thousands of
+		/// entries per token, dominating large-type renders).</summary>
+		static Dictionary<string, List<(string Class, MemberRef Ref)>>? memberRefByName;
+		static ModuleDef? memberRefByNameModule;
+
 		public static MemberRef? FindMemberRefInTable(ModuleDefMD module, string declaringTypeFullName, string memberName) {
 			if (memberRefTable is null || !ReferenceEquals(memberRefTableModule, module)) {
 				memberRefTable = new Dictionary<string, MemberRef>(StringComparer.Ordinal);
 				memberRefTableModule = module;
+				memberRefByName = new Dictionary<string, List<(string, MemberRef)>>(StringComparer.Ordinal);
 				foreach (var existing in module.GetMemberRefs()) {
-					if (existing.Class?.FullName is string cls)
+					if (existing.Class?.FullName is string cls) {
 						memberRefTable[cls + "::" + existing.Name] = existing;
+						var nameKey = existing.Name?.String ?? string.Empty;
+						if (!memberRefByName.TryGetValue(nameKey, out var candidates))
+							memberRefByName[nameKey] = candidates = new List<(string, MemberRef)>();
+						candidates.Add((cls, existing));
+					}
 				}
 			}
 			if (memberRefTable.TryGetValue(declaringTypeFullName + "::" + memberName, out var found))
@@ -345,17 +357,18 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			// The type-system full name of a generic type omits the arity suffix (List vs
 			// List`1) and generic instances (List`1<System.String>), while dnlib keys carry
 			// them. Match by prefix: the declaring name followed by the arity tick or an
-			// instantiation angle bracket.
+			// instantiation angle bracket. The by-name index keeps the scan to the handful of
+			// same-named members instead of the whole table.
+			if (memberRefByName is null || !ReferenceEquals(memberRefByNameModule, module))
+				return null;
 			MemberRef? prefixMatch = null;
-			foreach (var kv in memberRefTable) {
-				var colon = kv.Key.IndexOf("::", StringComparison.Ordinal);
-				if (colon < 0 || kv.Key.Substring(colon + 2) != memberName)
-					continue;
-				var cls = kv.Key.Substring(0, colon);
-				if (cls == declaringTypeFullName ||
-					(cls.Length > declaringTypeFullName.Length && cls.StartsWith(declaringTypeFullName, StringComparison.Ordinal) &&
-					 (cls[declaringTypeFullName.Length] == '`' || cls[declaringTypeFullName.Length] == '<')))
-					prefixMatch ??= kv.Value;
+			if (memberRefByName.TryGetValue(memberName, out var sameName)) {
+				foreach (var (cls, mr) in sameName) {
+					if (cls == declaringTypeFullName ||
+						(cls.Length > declaringTypeFullName.Length && cls.StartsWith(declaringTypeFullName, StringComparison.Ordinal) &&
+						 (cls[declaringTypeFullName.Length] == '`' || cls[declaringTypeFullName.Length] == '<')))
+						prefixMatch ??= mr;
+				}
 			}
 			return prefixMatch;
 		}

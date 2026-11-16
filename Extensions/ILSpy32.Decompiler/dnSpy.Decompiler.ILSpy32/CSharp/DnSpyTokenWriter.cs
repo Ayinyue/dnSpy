@@ -1295,31 +1295,54 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		/// tree's resolve results and the shared dnlib/cecil token table (the bridge writes the
 		/// snapshot with PreserveRids, so tokens are identical on both sides).
 		/// </summary>
+		internal static long ProfAnnTicks, ProfTrrTicks, ProfITypeTicks, ProfInvocTicks, ProfSymbolTicks, ProfFallbackTicks;
+		internal static readonly bool ProfEnabled = Environment.GetEnvironmentVariable("DNSPY_ILSPY32_PROF") == "1";
+
+		static long ProfAcc(System.Diagnostics.Stopwatch? sw) => sw?.ElapsedTicks ?? 0;
+
 		object? ResolveReference(AstNode node) {
 			if (node is null || typeSystem is null)
 				return null;
 			var rr = node.Annotation<MemberResolveResult>();
 			if (rr?.Member != null) {
 				lastColorPath = "ref-rr";
+				var sw1 = ProfEnabled ? System.Diagnostics.Stopwatch.StartNew() : null;
 				var memberResolved = ToDnlib(TryGetCecil(rr.Member));
+				ProfAnnTicks += ProfAcc(sw1);
 				if (memberResolved is not null)
 					return memberResolved;
 				// External members (x.Length, x.Count on BCL types, external accessors) can
 				// fail GetCecil; the module's own MemberRef table carries the authoritative
-				// entry - the same ref the 2.3 engine emitted for these sites.
-				return FindMemberRefForTypeSystemMember(rr.Member, node);
+				// entry - the same ref the 2.3 engine emitted for these sites. The lookup is
+				// cached per member identity: large types resolve the same external members
+				// from hundreds of tokens, and the table scan dominates the render otherwise.
+				var sw2 = ProfEnabled ? System.Diagnostics.Stopwatch.StartNew() : null;
+				if (externalMemberRefCache is null)
+					externalMemberRefCache = new Dictionary<ICSharpCode.Decompiler.TypeSystem.IMember, object?>();
+				if (!externalMemberRefCache.TryGetValue(rr.Member, out var extCached)) {
+					extCached = FindMemberRefForTypeSystemMember(rr.Member, node);
+					externalMemberRefCache[rr.Member] = extCached;
+				}
+				ProfFallbackTicks += ProfAcc(sw2);
+				return extCached;
 			}
 			var trr = node.Annotation<TypeResolveResult>();
 			if (trr?.Type?.GetDefinition() != null) {
 				lastColorPath = "ref-trr";
-				return ToDnlib(TryGetCecil(trr.Type.GetDefinition()));
+				var sw3 = ProfEnabled ? System.Diagnostics.Stopwatch.StartNew() : null;
+				var trrResolved = ToDnlib(TryGetCecil(trr.Type.GetDefinition()));
+				ProfTrrTicks += ProfAcc(sw3);
+				return trrResolved;
 			}
 			var type = node.Annotation<ICSharpCode.Decompiler.TypeSystem.IType>();
 			if (type != null) {
 				var definition = type.GetDefinition();
 				if (definition != null) {
 					lastColorPath = "ref-itype";
-					return ToDnlib(TryGetCecil(definition));
+					var sw4 = ProfEnabled ? System.Diagnostics.Stopwatch.StartNew() : null;
+					var itypeResolved = ToDnlib(TryGetCecil(definition));
+					ProfITypeTicks += ProfAcc(sw4);
+					return itypeResolved;
 				}
 			}
 			// 'items.Add(...)': the engine attaches the resolved method to the surrounding
@@ -1342,16 +1365,25 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					node.Annotation<ResolveResult>() is null &&
 					inv.Annotation<ResolveResult>() is InvocationResolveResult irr && irr.Member != null) {
 				lastColorPath = "ref-invocation";
+				var sw5 = ProfEnabled ? System.Diagnostics.Stopwatch.StartNew() : null;
 				var invocationRef = ToDnlib(TryGetCecil(irr.Member));
+				ProfInvocTicks += ProfAcc(sw5);
 				if (invocationRef != null)
 					return invocationRef;
 			}
+			var sw6 = ProfEnabled ? System.Diagnostics.Stopwatch.StartNew() : null;
 			var symbol = node.GetSymbol();
-			if (symbol is null)
+			if (symbol is null) {
 				lastColorPath = "ref-no-symbol";
-			else
+				ProfSymbolTicks += ProfAcc(sw6);
+			}
+			else {
 				lastColorPath = "ref-symbol";
-			return SymbolToDnlib(symbol);
+				var symbolResult = SymbolToDnlib(symbol);
+				ProfSymbolTicks += ProfAcc(sw6);
+				return symbolResult;
+			}
+			return null;
 		}
 
 		object? SymbolToDnlib(ISymbol? symbol) {
@@ -1372,6 +1404,7 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		/// assemblies that failed to resolve); a token writer must never kill a decompilation.
 		/// </summary>
 		Dictionary<ICSharpCode.Decompiler.TypeSystem.IMember, Mono.Cecil.MemberReference?>? cecilCache;
+		Dictionary<ICSharpCode.Decompiler.TypeSystem.IMember, object?>? externalMemberRefCache;
 
 		/// <summary>
 		/// Cached GetCecil: the engine's entityDict lookup takes a lock every call, and the

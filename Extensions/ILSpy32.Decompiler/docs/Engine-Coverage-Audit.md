@@ -162,3 +162,27 @@
 - **构建管线（新发现，已修）**：`dotnet build dnSpy.sln -c Release -f net10.0-windows` 会把 **Debug** 版 3.2 引擎 DLL 放进 dnSpy bin（引擎不在 sln 内，MSBuild 对引用外用默认配置）——已实测：sln 构建后 `ILSpy32.Decompiler.dll` 为 1,832,960 字节（Debug），单独构建扩展后为 1,585,152（Release）。已在 `build.ps1` 的 `Build-Net` 里显式以 Release 重建引擎与扩展（两条分支都加）；把引擎加入 sln 的替代方案与 `-f` 冲突（NETSDK1005，引擎是 netstandard2.0-only），已回退。
 - **P2（引擎能力缺口 / 清理）**：⑥ ✅ 四个引擎能力缺口已全部补齐（ShowILComments / SortMembers / MaxStringLength / HexadecimalNumbers），均 opt-in、默认同 2.3；对拍（`dnSpy.Console --comments/--hex/--max-string-length/--sort-members`）逐项 diff 0。⑦ ✅ Mixed 的 C# 叠加改用持久化 C# 设置；⑧ ✅ IL/ILAst 设置持久化 + 2.3 IL 选项迁移。
 - **IL 视图现状**：方法级与类型级（`-t`，含/不含 `--sort-members`）输出均已与 2.3 **逐字一致**（diff 0）；期间修掉三处类型级差异：参数特性缩进、访问器声明缺 `// Token:` 注释、`.locals` 名未转义。
+
+### 8.6 已知残余差异（2026-11-17，用 probe `lang-diff` 对拍量化）
+
+对拍方法：`m3probe.dll lang-diff <asm> <类型> <dnSpyBin> <2.3目录>`（2.3 产物按
+`baseline/README.md` 重建；M4 后 dnSpy bin 内不再有 2.3）。
+
+| 类型（dnSpy.Contracts.Logic） | C# diff | VB diff | IL diff | token 数 2.3/3.2 |
+|---|---|---|---|---|
+| `MethodDebugInfoBuilder` | 226 行 | 110 行 | **0** | 28 / 28 |
+| `MethodDebugInfo` | 290 行 | 231 行 | 4 行 | 27 / 27 |
+| `MethodDebugScope` | 76 行 | 63 行 | **0** | 12 / 12 |
+
+结论：
+- **token 集合与数量逐一相同**——C#/VB 的差异是**形态**而非引用缺失，符合项目既定的
+  「token 级对齐」口径（见 §3），不是回归。
+- **两类系统性形态差异**：
+  1. **成员顺序**：字段/属性/方法的排列与 2.3 不同（同一集合）。
+  2. **自动属性折叠**：2.3 把 `{ get; set; }` 写成一行（样本中 4/7/5 处），3.2 一律写成
+     多行（`get;`/`set;` 各占一行，访问器无函数体，语义等价）。3.2 的引擎输出访问器
+     （`CSharpOutputVisitor.VisitPropertyDeclaration`）总是 `OpenBrace` 换行；折叠需要改引擎
+     并处理访问器 token 注释的位置，风险高于收益，暂不动。
+- **Mixed**：类型级已补上 C# 叠加（本轮修复），剩余差异是叠加行粒度（3.2 的语句级
+  sequence point 更细），见 `docs/ILAst-Mixed-3.2.md` 第 5 节。
+- **IL 视图**：逐字一致（其中 `MethodDebugInfo` 有 4 行差异，属该样本的个例，需单独复核）。

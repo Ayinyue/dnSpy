@@ -952,3 +952,28 @@ Mono.Cecil 与引擎的 cecil 类型身份冲突导致 override 失配）。Test
   IntroduceUsingDeclarations 的排序对齐 dnSpy 2.3（上游 ILSpy 3.x expected 文件不同）
 - 零星：匿名类型/元组等个别形态（<8 行）
 无引擎逻辑回归：失败在各 fixture 均匀分布（编译器变体参数化），无单点功能崩溃。
+
+## probe 对拍模式
+
+M4 之后 2.3 扩展不再参与构建，`dnSpy.Console` 也就无法加载 2.3 语言。`probe lang-diff`
+用显式路径加载 2.3 的 `dnSpy.Decompiler.ILSpy.Core.dll`，逐个语言与 3.2 对拍：
+
+```
+m3probe.dll lang-diff <目标程序集> <0xToken|类型全名> <dnSpyBin> <2.3目录> [<out23> <out32>]
+```
+
+`<2.3目录>` 需要一份 2.3 扩展的构建产物（仅作比较资产，不参与 dnSpy 构建，已在
+`.gitignore` 中忽略）。重建方式（只构建 net10 目标，net48 在本机不可用）：
+
+```
+dotnet build Extensions/ILSpy.Decompiler/dnSpy.Decompiler.ILSpy/dnSpy.Decompiler.ILSpy.csproj \
+  -c Release -f net10.0-windows \
+  -p:OutputPath='<仓库>/Extensions/ILSpy32.Decompiler/baseline/ilspy23/'
+```
+
+probe 的 `UseWPF=true` 是为了加载 2.3 core（它引用 WPF）。
+
+对拍判读（2026-11-16，`dnSpy.Contracts.Logic.dll` 的 `MethodDebugInfoBuilder`）：
+IL `diffLines=0`；C# 226 行、VB 110 行为**既定的 token 级对齐口径**内的差异
+（成员顺序、自动属性是否展开），不是回归；Mixed 的差异是叠加行粒度（见
+`docs/ILAst-Mixed-3.2.md` 第 5 节）。

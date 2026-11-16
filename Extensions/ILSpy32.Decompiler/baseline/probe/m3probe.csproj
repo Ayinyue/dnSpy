@@ -5,6 +5,8 @@
          they must never be picked up as sources. -->
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- The 2.3 core assembly (and the settings pages) reference WPF. -->
+    <UseWPF>true</UseWPF>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <LangVersion>latest</LangVersion>

@@ -95,6 +95,9 @@ class Probe {
 			InstallBinResolver(new[] { args[3] });
 			return MixedVerify(args[1], args[2], args[3]);
 		}
+		if (args.Length > 0 && args[0] == "lang-diff") {
+			return LangDiff(args[1], args[2], args[3], args[4], args.Length >= 7 ? args[5] : null, args.Length >= 7 ? args[6] : null);
+		}
 		if (args.Length > 0 && args[0] == "settings-wiring") {
 			InstallBinResolver(new[] { args[1] });
 			return SettingsWiring(args[1]);
@@ -244,6 +247,105 @@ class Probe {
 			sections[guid] = sect;
 			return sect;
 		}
+	}
+
+	// ==== lang-diff: M4 removed the 2.3 extension from the build, so the console can no longer
+	// load it. This mode loads the archived/rebuilt 2.3 core assembly from an explicit path and
+	// diffs each language's output against the 3.2 one. Usage:
+	//   lang-diff <targetDll> <0xToken|TypeName> <dnspyBin> <path23Core>
+	static int LangDiff(string targetDll, string tokenOrTypeName, string dnspyBin, string path23, string? out23 = null, string? out32 = null) {
+		InstallBinResolver(new[] { dnspyBin, path23 });
+		var module = ModuleDefMD.Load(targetDll);
+		var languages23 = LoadProviders(Path.Combine(path23, "dnSpy.Decompiler.ILSpy.Core.dll"));
+		var languages32 = LoadProviders(Path.Combine(dnspyBin, "dnSpy.Decompiler.ILSpy32.x.dll"));
+		Console.WriteLine("2.3 languages: " + string.Join(", ", languages23.Values.Select(l => l.Item1)));
+		Console.WriteLine("3.2 languages: " + string.Join(", ", languages32.Values.Select(l => l.Item1)));
+		int rc = 0;
+		foreach (var kv32 in languages32) {
+			var suffix = kv32.Key.Replace(" (ILSpy 3.2)", string.Empty);
+			if (!languages23.TryGetValue(suffix, out var l23)) {
+				Console.WriteLine($"SKIP {kv32.Key} (no 2.3 counterpart)");
+				continue;
+			}
+			var text23 = DecompileLanguage(l23.Item2, module, tokenOrTypeName);
+			var text32 = DecompileLanguage(kv32.Value.Item2, module, tokenOrTypeName);
+			if (text23 is null || text32 is null) {
+				Console.WriteLine($"FAIL {kv32.Key}: decompile returned nothing (23={text23 is not null}, 32={text32 is not null})");
+				rc = 1;
+				continue;
+			}
+			var diff = DiffLineCount(text23, text32);
+			// Optional: lang-diff <dll> <token|type> <dnspyBin> <path23> <out23> <out32>
+			if (out23 is not null && out32 is not null && kv32.Key.StartsWith("C#", StringComparison.Ordinal)) {
+				File.WriteAllText(out23, text23);
+				File.WriteAllText(out32, text32);
+			}
+			Console.WriteLine($"{kv32.Key,-24} chars 23={text23.Length} 32={text32.Length} diffLines={diff}");
+			if (diff != 0)
+				rc = 1;
+		}
+		return rc;
+	}
+
+	static Dictionary<string, (string, dnSpy.Contracts.Decompiler.IDecompiler)> LoadProviders(string asmPath) {
+		var result = new Dictionary<string, (string, dnSpy.Contracts.Decompiler.IDecompiler)>(StringComparer.Ordinal);
+		if (!File.Exists(asmPath))
+			return result;
+		var asm = System.Reflection.Assembly.LoadFrom(asmPath);
+		foreach (var type in asm.GetTypes()) {
+			var isProvider = typeof(dnSpy.Contracts.Decompiler.IDecompilerProvider).IsAssignableFrom(type);
+			var isCreator = typeof(dnSpy.Contracts.Decompiler.IDecompilerCreator).IsAssignableFrom(type);
+			if ((!isProvider && !isCreator) || type.IsAbstract)
+				continue;
+			if (type.GetConstructor(Type.EmptyTypes) is null)
+				continue;
+			var langs = isProvider
+				? ((dnSpy.Contracts.Decompiler.IDecompilerProvider)System.Activator.CreateInstance(type)).Create()
+				: ((dnSpy.Contracts.Decompiler.IDecompilerCreator)System.Activator.CreateInstance(type)).Create();
+			foreach (var lang in langs) {
+				var name = lang.UniqueNameUI ?? lang.GenericNameUI ?? type.Name;
+				result[name] = (name, lang);
+			}
+		}
+		return result;
+	}
+
+	static string? DecompileLanguage(dnSpy.Contracts.Decompiler.IDecompiler lang, ModuleDefMD module, string tokenOrTypeName) {
+		var output = new RecordingOutput();
+		var ctx = new dnSpy.Contracts.Decompiler.DecompilationContext { CalculateILSpans = true };
+		try {
+			if (tokenOrTypeName.StartsWith("0x", StringComparison.Ordinal)) {
+				var member = module.ResolveToken(Convert.ToInt32(tokenOrTypeName, 16)) as MethodDef;
+				if (member is null)
+					return null;
+				lang.Decompile(member, output, ctx);
+			}
+			else {
+				var type = module.GetTypes().FirstOrDefault(t => string.Equals(t.FullName, tokenOrTypeName, StringComparison.OrdinalIgnoreCase));
+				if (type is null)
+					return null;
+				lang.Decompile(type, output, ctx);
+			}
+		}
+		catch (Exception ex) {
+			return "// EX: " + ex.GetType().Name + ": " + ex.Message;
+		}
+		return output.Text;
+	}
+
+	static int DiffLineCount(string a, string b) {
+		var la = a.Replace("\r\n", "\n").Split('\n');
+		var lb = b.Replace("\r\n", "\n").Split('\n');
+		int diff = 0, i = 0, j = 0;
+		while (i < la.Length || j < lb.Length) {
+			if (i < la.Length && j < lb.Length && la[i] == lb[j]) { i++; j++; continue; }
+			diff++;
+			// crude LCS-free advance: prefer moving the side that matches next
+			if (i + 1 < la.Length && j < lb.Length && la[i + 1] == lb[j]) i++;
+			else if (j + 1 < lb.Length && i < la.Length && la[i] == lb[j + 1]) j++;
+			else { i++; j++; }
+		}
+		return diff;
 	}
 
 	// ==== ilast-verify: the console's output discards custom data, so the only way to see the

@@ -207,7 +207,9 @@ namespace dnSpy.Decompiler.ILSpy32.Mixed {
 				return;
 			}
 			try {
-				CreateReflectionDisassembler(output, ctx, type.Module, null, out _).DisassembleType(cecilType);
+				// 2.3's Mixed view also overlays the C# source when a whole type is decompiled:
+				// the disassembler walks the method bodies, so the per-method provider must be set.
+				CreateReflectionDisassembler(output, ctx, type.Module, m => GetSourceStatementProvider(m, ctx), out _).DisassembleType(cecilType);
 			}
 			catch (OperationCanceledException) {
 				throw;

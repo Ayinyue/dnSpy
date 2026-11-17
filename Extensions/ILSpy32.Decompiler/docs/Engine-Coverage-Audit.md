@@ -1195,3 +1195,24 @@ C# 视图对 `HexBytes` 看到 **170** 个 `CheckedUncheckedAnnotation`（VB 视
 
 **另两类已计数但未修**：`.Invoke()`（2.3 印 `handler.Invoke(...)`，3.2 省略，2.3 有 21 处/3.2 3 处）；
 `= default(...)` 局部初始化器（3.2 比 2.3 多 31 处，责任点 `DeclareVariables.cs:449`）。
+
+### 8.44 显式转换插入：2.3 明显更多（2026-11-18，未修）
+
+`--all` 全量计数（`dnSpy.Contracts.DnSpy.dll`，1414 类型）：
+
+| 字面量 | 2.3 | 3.2 |
+|---|---|---|
+| `(int)` | **167** | 66 |
+| `(long)` | **104** | 22 |
+| `(byte)` | 24 | 51 |
+
+即 **2.3 系统性保留更多显式转换**。实例：
+`SerializedImageUtilities` 里 2.3 印
+`if ((short)((int)rawData[0] | ((int)rawData[1] << 8)) != 7189)`，
+3.2 印 `if ((short)(rawData[0] | (rawData[1] << 8)) != 7189)` —— 每个 `byte` 元素都被 2.3 显式转 `(int)`。
+
+**已排查**：2.3 的 `AstMethodBodyBuilder.cs:631` 对 `ldelem.*` 也只是 `arg1.Indexer(arg2)`（无转换）；
+`Indexer(...)` 是 NRefactory `Expression` 上的构造器，本身不加转换。
+所以 `(int)` 来自**别处**（很可能是 2.3 的 `TypeAnalysis`/`CastInsertion`：当 IL 栈类型（I4）与 C# 元素类型
+（`byte`）不一致时插入显式转换）。**未修**，这是「cast」类差异的主体，值得下一轮从
+「2.3 在何处插入 IL 栈类型→C# 类型的显式转换」入手。

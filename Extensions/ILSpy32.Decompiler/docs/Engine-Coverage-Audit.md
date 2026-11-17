@@ -1066,3 +1066,19 @@ corlib 未解析时落回 `get_Chars(...)`。改法：在 `HandleAccessorCall:78
 
 **未采纳的实验**：给 `InlineReturnTransform.CanModifyInstructions` 加「返回局部被多处赋值就不内联」
 的守卫 —— Debugger 反而变差（2819 → 2852），已回退。
+
+### 8.42 赋值右值的括号优先级：已修（2026-11-17）
+
+**差异**：3.2 在 `x = (a == b);` 上多留一层括号，2.3 印 `x = a == b;`。
+
+**根因**：`InsertParenthesesVisitor.VisitAssignmentExpression` 里 3.2 用
+`RelationalAndTypeTesting + 1`，2.3（NRefactory）用 **`Conditional + 1`**，并且**跳过 `DirectionExpression`**。
+
+**修改**：按 2.3 改成 `Conditional + 1` 且 `!(Right is DirectionExpression)`。
+
+**验证**：语料 Contracts.DnSpy 16071 → **16041**、Debugger 2819 → **2814**、Logic 7476 → **7467**。
+合计 26366 → **26322**（-44），identical 861 → 867。`verify-all` hardFail=0。
+
+**同批普查但未修**（各仅 3~5 处）：P1 `= default(...)` 局部初始化器
+（`DeclareVariables.cs:449` 的 `DefaultInitialization`）；P3 `lock` 临时局部
+（`Instructions.cs:1788` 的 `canInlineInto`，改动波及内联、风险高）。

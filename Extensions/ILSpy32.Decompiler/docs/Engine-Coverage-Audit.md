@@ -1381,6 +1381,12 @@ IL 是 `conv.i`（0xD3，非 ovf），本不该有 checked 上下文，但 3.2 �
 `ExpressionBuilder` 中除 `AddCheckedBlocks` 外没有其它 `CheckedAnnotation` 赋值点，范围已锁死到该 transform。
 后续若要修，需要读 `AddCheckedBlocks.GetResult` 的递归与 `InsertedExpression`/`Cost` 模型（改动面大）。
 
+**进一步定位（已插桩验证）**：`HandleBinaryNumeric` 确实被调用（实测 `op=BitwiseOr`、`left=System.Byte`、
+`right=System.Int32`），定型代码也确实跑了；但输出仍无 cast。原因在 `TranslatedExpression.ConvertTo`
+（`:363-367`）：`ResolveCast` 的结果若 `IsCompileTimeConstant` 就走 `ConvertConstantValue` 直接返回常量、
+**不加 cast**。所以「加不上 cast」是 `ConvertTo` 的常量捷径造成的，而不是定型没跑。
+后续要修应在该捷径处区分「真的编译期常量」与「只是被解析器标成常量」的情形。
+
 ### 8.51 `?.` 空条件运算符：3.2 用，2.3 完全不用（2026-11-18）
 
 `--all` 全量计数：`?.` 2.3 = **0**，3.2 = **107**。实例（`BMObject`）：

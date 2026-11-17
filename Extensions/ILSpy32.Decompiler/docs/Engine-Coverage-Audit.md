@@ -890,3 +890,11 @@ obj.IsVisibleChanged -= new DependencyPropertyChangedEventHandler(UIUtilities.se
 
 **定性**：这是**类型系统/桥层面**的缺口（cecil 未暴露 in 标记），不是输出层规则；
 在弄清 cecil 为何读不到之前无法在输出层绕过。**这是目前已知最大的单项残余**（3466 行/类型）。
+
+**下一步线索**：`CecilLoader.ReadParameter` 把 `parameter.ParameterType` 交给
+`ReadTypeReference(..., isFromSignature: true)`，而 `in` 在元数据里很可能编码在
+**by-ref 元素类型上的 modreq**（`System.Runtime.CompilerServices.IsReadOnlyAttribute`）——
+需要确认 `ReadTypeReference` 是否把 modreq 丢掉了（ILSpy 里对应 `ModifiedTypeReference`）。
+若确实丢失，在读取时保留 modreq 并在 `ConvertParameter` 里判定即可；
+这同时能解释为什么「元数据里查得到 `IsReadOnlyAttribute` 字符串、cecil 的
+`CustomAttributes` 里却没有」（它不是 CustomAttribute，而是 modreq）。

@@ -1280,6 +1280,20 @@ G 的子项：临时变量 117、`L` 后缀 46、扩展方法语法 46、`?.` 38
 **都已经有「整数部分无小数点就补 `.0`」的逻辑**。所以这 244 处差异来自**另一条渲染路径**
 （值可能不是 `double`，或走了 `literalValue`/其它分支）。**未修**，值得下一轮先确认那个 `96` 的值的 CLR 类型。
 
+**已追到源头**：`dnSpy.Contracts.Controls.MetroWindow`，IL 是 **`ldc.r8 96`**（真 double）。
+`DnSpyTokenWriter.WritePrimitiveValue:1128` 会先判 `literalValue != null` → 原样输出；
+`UnsafeLiteralValue` 只由 `PrimitiveExpression.SetValue` 设置，而引擎里已无调用者（十六进制那处已删），
+所以 `literalValue` 应为 null。**矛盾未解**：两个 writer 的 double 分支都会补 `.0`，却输出 `96`。
+**下一步**：在 `WritePrimitiveValue` 入口打印 `value?.GetType()`，一次即可定位。
+
+**实测（矛盾，未解）**：入口诊断显示 MetroWindow 里有 **60 次 `System.Double` 且 `literal=null`**；
+而 `DnSpyTokenWriter.FormatPrimitiveLiteral` 的 double 分支明确会 `number += ".0"`（:1196-1197）。
+全新重跑确认输出确实是 `96`（2.3 是 `96.0`）。**即：这些 double 常量没有走
+`WritePrimitiveValue`/`FormatPrimitiveLiteral`** —— 必然存在另一条渲染路径
+（可能是别的 AST 节点或 `EmitText` 直接输出）。**下一轮应在 `WritePrimitiveValue` 之外
+（例如 `CSharpOutputVisitor.VisitPrimitiveExpression` 之外的分支）找那条路径**，
+或在 `DnSpyTokenWriter` 里统计所有 `EmitText` 的调用点。
+
 **A（控制流塑形，306 行，最大类）**：跨 `IL/ControlFlow/SwitchDetection.cs`、`ControlFlowSimplification.cs`、
 `CSharp/ExpressionBuilder.cs:2210` 三处，单类可修性低。实例：`return mod != null && (mod.Characteristics & 8192) == 0;`
 （2.3）vs `if (mod != null) { return …; } return false;`（3.2）；`if (msg == 736)` 链（2.3）vs `switch (msg)`（3.2）。

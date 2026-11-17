@@ -341,3 +341,9 @@ C#/VB 残余差异中最大一类是局部名（2.3 有 PDB 名 `sharedPaths/inf
 `NullableAttribute`/`NullableContextAttribute`/`RefSafetyRulesAttribute` 等），但会改变
 **所有 enum 常量**的打印路径，属引擎输出层改动，需专项评估（默认保留 3.2 行为）。
 其余为 PDB（§8.12）与既定显示风格（§3、§8.13）。
+
+**C#/VB corpus 扩展（2026-11-17）**：把对拍扩到第三方真实库后 identical 骤降（Iced C# 104/764、
+MessagePack 16/297），抽样确认**主因是编译器生成的类型**（`NullableAttribute`/`NullableContextAttribute`/
+`RefSafetyRulesAttribute` 等，位于引用程序集）。差异构成：组合枚举值（§8.14）、生成参数名
+（`A_1` vs `P_0`）、数组初始化形态、`this.` 省略。**C#/VB 残余不是接线缺口**；其中 `this.` 与
+组合枚举值可用 AST/引擎变换对齐，但会改变全部 C# 输出形态，需单独立项评估。

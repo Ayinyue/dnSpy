@@ -347,3 +347,15 @@ MessagePack 16/297），抽样确认**主因是编译器生成的类型**（`Nul
 `RefSafetyRulesAttribute` 等，位于引用程序集）。差异构成：组合枚举值（§8.14）、生成参数名
 （`A_1` vs `P_0`）、数组初始化形态、`this.` 省略。**C#/VB 残余不是接线缺口**；其中 `this.` 与
 组合枚举值可用 AST/引擎变换对齐，但会改变全部 C# 输出形态，需单独立项评估。
+
+### 8.15 属性参数的组合枚举值：**接受的不一致**（不是待修缺口）
+
+实测：2.3 印数值 `[AttributeUsage(27524, …)]`，3.2 展开为
+`AttributeTargets.Class | AttributeTargets.Property | …`。根因：3.2 的 `AstBuilder` 为
+**属性参数**构建了 `|` 表达式（2.3 只留 primitive int）。属性参数走
+`CSharpOutputVisitor.VisitAttribute`（`CSharpOutputVisitor.cs:1287`）→ 参数表达式。
+
+**判定为接受的不一致**：展开形式更可读、语义等价，且与 3.2 处理**方法参数**枚举的方式一致
+（`StringComparison.OrdinalIgnoreCase` 两边都是名字）。为逐字复刻 2.3 而把属性枚举改成数字，
+是**降低输出质量**，不符合升级目标。保留 3.2 行为。
+（若确有个别场景必须数值，再按特性开关处理。）

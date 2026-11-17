@@ -1384,3 +1384,17 @@ right = PrepareArithmeticArgument(right, inst.RightInputType, inst.Sign, inst.Is
 而同一个 transform 也负责 `??` —— 全语料 `??` 计数 2.3 = **79**、3.2 = **122**（方向相反：3.2 引入得更多）。
 也就是说 **整个 null-propagation 优化在 3.2 里都更激进**，`?.` 与 `??` 是同一族差异，
 不建议只关 `?.` 而留下 `??`；要动就是评估整个 transform 的取/舍（2.3 基本不做这类合并）。
+
+### 8.52 `?.` 空条件运算符：**已修**（2026-11-18）
+
+**做法**：`DecompilerSettings.NullPropagation = false`（`DecompilerSettings32` 构造里，紧挨
+`UseImplicitMethodGroupConversion`）。该设置的文档就是 "Decompile C# 6 ?. and ?[] operators."。
+
+**效果（本段最大单项）**：
+- 语料：Contracts.DnSpy 15760 → **14176**、Debugger 2780 → **2155**、Logic 7461 → **7346**；
+  合计 26001 → **23677**（**-2324**），identical 1176 → **1180**。
+- `dnSpy.dll` 全量 `?.` 计数：**107 → 0**，与 2.3 一致。
+- `verify-all` hardFail=0；net48 0 错误。
+
+**注**：`??` 计数仍是 3.2 多（122 vs 79），但那是 `NullCoalescingTransform` 的事，
+且 3.2 多的方向与 `?.` 相反 —— 两项要一起评估，不能只改一边。

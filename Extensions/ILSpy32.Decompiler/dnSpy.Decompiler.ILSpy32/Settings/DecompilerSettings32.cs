@@ -85,6 +85,9 @@ namespace dnSpy.Decompiler.ILSpy32.Settings {
 			// dnSpy's 2.3 engine put System.* usings first (SortSystemUsingStatementsFirst);
 			// the 3.2 engine sorts all namespaces ordinal-ascending instead.
 			EngineSettings.SortSystemUsingStatementsFirst = true;
+			// dnSpy 2.3 never emits '?.': it renders every null-conditional as an
+			// explicit null check (corpus: '?.': 2.3 = 0, 3.2 = 107).
+			EngineSettings.NullPropagation = false;
 			// dnSpy 2.3 always spelled out the delegate type for method-group conversions
 			// ('obj.Event += new EventHandler(this.M)'); the 3.2 engine defaults to the
 			// implicit form ('obj.Event += this.M').

@@ -917,3 +917,9 @@ obj.IsVisibleChanged -= new DependencyPropertyChangedEventHandler(UIUtilities.se
 3. superproject 的 gitlink 自然会指向这些提交，再推 superproject 即可。
 
 **在动手推之前需要你确认**：fork 地址、是否要保留 detached 状态、以及谁来做这次推送。
+
+**已做的本地保护（无需授权，HEAD 与工作树未变）**：
+- `git branch feature/ilspy32-upstream-port HEAD` —— 把当前 HEAD 固化成分支，
+  这样后续即使切走也不会让这 28 个提交变成不可达对象；
+- `git tag -a ilspy32-port-snapshot-20261117 HEAD -m "Snapshot of the 3.2 port work on 2026-11-17 (28 commits ahead of origin/master)"`。
+- 两者都是**本地**操作，可逆（`git branch -d` / `git tag -d`），不涉及任何远端。

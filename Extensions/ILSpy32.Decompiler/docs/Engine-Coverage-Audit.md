@@ -939,3 +939,43 @@ obj.IsVisibleChanged -= new DependencyPropertyChangedEventHandler(UIUtilities.se
 （与 `ilspyv3` / `ilspyv3-dnSpy` 的 merge-base 之后，对方各有 9200+ 提交、我方 27 个）。
 本次是**新分支**推送，没有覆盖对方任何分支；若后续要把这 27 个提交并入 `ilspyv3-dnSpy`，
 需要单独做一次 rebase/merge 评估。
+
+### 8.37 四路并行调查：`in` 已修一半，另三项拿到精确入口（2026-11-17）
+
+用并行代理对四个残余项做了定位（只研究、不改码），结论如下。
+
+**(1) `in` 参数修饰符 —— 已修声明侧，调用点未通**
+- 纠正 §8.35 的结论：**桥层没有丢**。cecil 侧 `ParameterDefinition.IsIn == true` 且带
+  `[IsReadOnlyAttribute]`，`CecilLoader.AddAttributes` 会补 `InAttribute`。丢在**输出层**。
+- 已补：`ParameterModifier.In` + `ParameterDeclaration.InModifierRole`、`FieldDirection.In`
+  + `DirectionExpression.InKeywordRole`、`CSharpOutputVisitor` 两处输出分支、
+  `TypeSystemAstBuilder.ConvertParameter`（by-ref + `IsReadOnlyAttribute`/`InAttribute` → `in`）、
+  `CallBuilder` 调用点包 `DirectionExpression(In, …)`。
+- 实测：**声明侧生效**（Iced 141879 → 141855）；**调用点未生效** ——
+  诊断（把判定改成 `Attributes.Count > 0` 或 `=> true`）证明调用点拿到的 `IParameter.Attributes`
+  是**空的**（`=> true` 会让输出大变，属性判定则完全不动）。根因未找到（`GetCecil` 只在扩展项目里，
+  引擎的 `CallBuilder` 用不上）。**剩余 3466 行/类型的调用点差异待解。**
+
+**(2) 属性里的数组初始化器 —— 找到了 §8.31 零效果的原因**
+`DecompilerSettings.cs:831` 把 `ArrayInitializerWrapping` 强制成 `WrapAlways`，
+把 2.3 的规则（`wrapAlways || count > 10`）短路成恒真。改法：该行改 `WrapIfTooLong`，
+并把 2.3 NRefactory 的 `wrap/wrapAlways` 规则移植进 `CSharpOutputVisitor.PrintInitializerElements`
+（§8.31 只改了后者，所以没效果）。**未实施**（影响所有数组初始化器，需整体回归）。
+
+**(3) 方法体内枚举命名 —— 责任点已定位**
+不是 `ConvertEnumValue`（它无 `val == 0` 特判）。是 `TranslatedExpression.cs:435-444` 的
+`ConvertToBoolean` 用**硬编码 Int32** 拼出 `kind != 0`，绕过了 `ConvertEnumValue`；
+2.3 在 `AstMethodBodyBuilder.cs:1587-1594` 会按类型印 `MakePrimitive(0, enumType)`。
+改法：改用 `expressionBuilder.ConvertConstantValue(new ConstantResolveResult(Type, 0))`。**未实施**。
+
+**(4) 控制流塑形 —— 责任 transform 已定位**
+`IL/Transforms/InlineReturnTransform.cs:28`（注册于 `CSharpDecompiler.cs:80`）把 `return 局部`
+复制到各 `stloc` 赋值点，再经 `ILInlining` 变成「提前 return」；2.3 用
+`ILAst/SimpleControlFlow.cs:69/254` 的 ret-ternary→`&&`/`||`。
+改法：给 `InlineReturnTransform` 加守卫（返回局部被 ≥2 个分支赋值时不复制）。
+**未实施**（停用会影响 try/catch、循环内 return 的定位，需整体回归）。
+
+**(5) 索引器语法 —— 责任点已定位**
+3.2 在 `CallBuilder.cs:686/780` 无条件生成 `IndexerExpression`；2.3 在
+`AstMethodBodyBuilder.cs:1278-1283` 要求 `prop.GetMethod == methodDef`，
+corlib 未解析时落回 `get_Chars(...)`。改法：在 `HandleAccessorCall:780` 加同一门控。**未实施**（约 27 处）。

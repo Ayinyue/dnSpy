@@ -1296,6 +1296,12 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				return number;
 			}
 			var sb = new StringBuilder();
+			// Mirror WritePrimitiveValue: floats carry 'f' and decimals carry 'm'. This path
+			// bypasses that method, so without these the literals would be untyped.
+			if (value is float ff)
+				return ((IFormattable)ff).ToString(null, NumberFormatInfo.InvariantInfo) + "f";
+			if (value is decimal dec)
+				return ((IFormattable)dec).ToString(null, NumberFormatInfo.InvariantInfo) + "m";
 			sb.Append(((IFormattable)value).ToString(null, NumberFormatInfo.InvariantInfo));
 			// dnSpy 2.3 writes the unsigned suffix in upper case ('0U', 'UL'), not 'u'/'uL'.
 			if (value is uint || value is ulong)

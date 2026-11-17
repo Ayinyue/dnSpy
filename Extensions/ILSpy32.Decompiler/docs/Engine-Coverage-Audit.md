@@ -1387,6 +1387,20 @@ IL 是 `conv.i`（0xD3，非 ovf），本不该有 checked 上下文，但 3.2 �
 **不加 cast**。所以「加不上 cast」是 `ConvertTo` 的常量捷径造成的，而不是定型没跑。
 后续要修应在该捷径处区分「真的编译期常量」与「只是被解析器标成常量」的情形。
 
+### 8.55 `checked((IntPtr)x)` 的排查结论（2026-11-18，未修）
+
+把这条线索上能查的都查了，逐条排除（都已实测）：
+- `ILReader.ReadConv`（`:594`）对 `conv.i` 传的是 **`false`** —— reader 没问题；
+- `IL/Instructions/Conv.cs:164` 只是存下构造参数 —— 节点本身没问题；
+- `ExpressionBuilder.VisitConv` 各分支**都不**加 `CheckedAnnotation`（只有 `HandleCompoundAssignment` :1337 会加）；
+- `AddCheckedBlocks` 与 `HandleCompoundAssignment` 都不会产生它 —— 不是这两条路径；
+- `CSharpResolver` 里设置 `CheckForOverflow` 的点只用于重载决议，与 `IntPtr` 转换无关；
+- `ILAstOptimizer` / `ExpressionTransforms` 里没有改写 `Conv` 节点类型的地方。
+
+**结论**：标注来源仍未定位。唯一确定的是「不是 reader、不是 Conv 节点、不是 VisitConv、不是
+AddCheckedBlocks / HandleCompoundAssignment」。排查这个需要单步调试 `AddCheckedBlocks` 对
+`d[(int)checked((IntPtr)index)]` 的处理（该表达式里 `checked` 包住了 `conv.i`）。
+
 ### 8.54 冗余 cast 不再被常量捷径吞掉：`(int)d[i]`（2026-11-18）
 
 **问题**：`HandleBinaryNumeric` 里给操作数补的显式转换（byte → int 的 `(int)d[i]`）**没有出现在输出里**，

@@ -1222,3 +1222,13 @@ C# 视图对 `HexBytes` 看到 **170** 个 `CheckedUncheckedAnnotation`（VB 视
 （`Ast/Transforms`、`CSharp/Transforms` 里都没有 `*Cast*`），2.3 的二元运算符构造
 （`AstMethodBodyBuilder.cs:496-552`）也不加转换。**结论：插入点在 2.3 的 ILAst→AST 阶段
 （`ldelem` 结果的类型提升），需要在 2.3 的 `ILAstOptimizer` 里找 `Ldelem` 相关的类型改写。**
+
+### 8.45 局部声明的 `= default(...)`：已修（2026-11-18）
+
+**差异**：`DeclareVariables.cs:449` 在 `v.DefaultInitialization` 时给局部声明加 `= default(T)`，
+2.3 不加（这些局部在 IL 里是「先赋值再使用」的）。
+
+**修改**：去掉该初始化器，保持 `T x;`。
+
+**验证**：语料 Contracts.DnSpy 16041 → **16038**（合计 26322 → **26319**），无回归；
+`verify-all` hardFail=0。收益很小（多数含该声明的类型本身还有其他差异），但方向与 2.3 一致。

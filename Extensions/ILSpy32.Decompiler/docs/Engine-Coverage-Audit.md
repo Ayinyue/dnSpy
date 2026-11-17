@@ -681,3 +681,17 @@ type reference 被 3.2 的 using 计算算入。
 **结论**：这是 2.3 的一个**冗余 using** 习惯，量级约 250 行（占剩余差异 0.15%）。
 要复刻就是在 using 生成处补「被反编译类型的命名空间」，需要改引擎的 using 计算，
 本轮未做（预算不足以完成「改 + 双 TFM + 语料 + 提交」的完整闭环）。
+
+**⚠️ 上述结论已被语料证伪（2026-11-17 同日修正）**：
+在三套语料（Contracts.DnSpy / Debugger / Logic）里，2.3 的「导入自身命名空间」**只有 1 例**，
+且该例是 `namespace System` 中声明的类型导致的统计误报 —— 也就是说**语料中 2.3 从不导入自身命名空间**，
+与 3.2 一致。真实视图以语料为准，那条规则不成立。
+
+实测复现：把 `FindRequiredImports.IsParentOfCurrentNamespace` 的**相等**分支从「跳过」改成「导入」后，
+语料 identical 从 797 → **335**（大幅回退），已 `git checkout` 回退并重建复核
+（恢复到 797/24719、197/5016、50/8416）。
+
+**因此**：`dnSpy.dll` 的 `--all` 全量转储与语料的**逐类型**转储在
+`context.DecompiledTypeDefinition` / `currentNamespace` 上并不一致，
+§8.26 / §8.28 里基于 `--all` 的 dnSpy.dll 统计（含 821 vs 229）**不能代表真实反编译视图**，
+引用时须注明口径。3.2 侧多出的 209 个 `System.Runtime.CompilerServices` 仍未解释。

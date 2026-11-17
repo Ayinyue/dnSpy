@@ -773,6 +773,21 @@ type reference 被 3.2 的 using 计算算入。
 改动已回退。另外注意 3.2 该输出的缩进为 0（`{`/`2,`/`1`/`}` 全部顶格），
 也印证它不是排版器产生的。需要另行定位属性参数的渲染路径。
 
+**✅ 已修（2026-11-17，并行调查 §8.37 找到真因）**：
+`DecompilerSettings.cs:831` 把 `ArrayInitializerWrapping` 强制成 `WrapAlways`，
+把 2.3 的规则（`wrapAlways || count > 10`）**短路成恒真** —— 所以 §8.31 只改 `PrintInitializerElements`
+当然没效果，真因在这条设置。两处一起改后才生效：
+- `DecompilerSettings.cs:831`：`WrapAlways` → `WrapIfTooLong`（`CreateAllman()` 的默认值，2.3 同款）；
+- `CSharpOutputVisitor.PrintInitializerElements`：移植 2.3 的 `wrap/wrapAlways` 规则
+  （`wrapAlways = ArrayInitializerWrapping == WrapAlways || (>1 且含非简单元素) || 含复杂元素`；
+  `wrap = wrapAlways || count > 10`；不换行时输出 `{ a, b, c }`，换行时每 10 个元素一行）。
+
+**验证（这是本会话单次收益最大的一项）**：
+- 语料：Contracts.DnSpy 21985 → **16233**；Debugger 4980 → **2820**；Logic 8094 → **7476**。
+  合计 35059 → **26529**（**-8530**）。
+- Iced：141855 → **98549**（**-43306**），identical 165 → 173。
+- `verify-all`：hardFail=0；net48 构建 0 错误。
+
 ### 8.32 局部名：桥改为读取 PDB 符号（2026-11-17）
 
 **差异**：3.2 丢失 PDB 局部名 —— `depo`（2.3）vs `dependencyObject`（3.2），

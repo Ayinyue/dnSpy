@@ -1232,3 +1232,15 @@ C# 视图对 `HexBytes` 看到 **170** 个 `CheckedUncheckedAnnotation`（VB 视
 
 **验证**：语料 Contracts.DnSpy 16041 → **16038**（合计 26322 → **26319**），无回归；
 `verify-all` hardFail=0。收益很小（多数含该声明的类型本身还有其他差异），但方向与 2.3 一致。
+
+### 8.46 委托调用保留显式 `.Invoke`：已修（2026-11-18）
+
+**差异**：2.3 印 `handler.Invoke(...)`（2.3 有 21 处 / 3.2 3 处），3.2 简化成 `handler(...)`。
+
+**根因**：`CallBuilder.cs:246` 有一条特例 —— 当被调方法是委托的 `Invoke` 时，直接生成
+`InvocationExpression(target, args)`（C# 的委托调用语法）。2.3 没有这条特例，走普通成员调用。
+
+**修改**：删掉该特例分支。
+
+**验证**：语料 Contracts.DnSpy 16038 → **16030**（合计 26319 → **26311**），identical 867 → 869；
+`verify-all` hardFail=0；net48 0 错误。

@@ -744,3 +744,23 @@ type reference 被 3.2 的 using 计算算入。
 
 **方法论提示**：这两条都是**逐类型语料**驱动发现的（§8.26 基于 `--all` 的口径不足以覆盖），
 说明 `--all` 之外仍需按语料逐类型排查。
+
+### 8.31 事件访问器注释：已修；数组初始化器打包：未解（2026-11-17）
+
+**已修（事件访问器注释）**：2.3 的 `AstBuilder`（`:1577-1580`、`:1614-1617`）对**事件**调用
+`AddComment(astEvent, eventDef.AddMethod, "add")` / `(RemoveMethod, "remove")`，
+在事件上方多出两行 `// (add) Token: …` / `// (remove) Token: …`。
+3.2 只给属性/索引器做了 `(get)`/`(set)`，事件漏了。已补 `InsertEventAccessorTokenComment`
+（注意插入顺序：先插 `(add)`，再插 `(remove)`，后者会更靠近声明，与 2.3 输出一致）。
+
+- `dnSpy.Contracts.ToolWindows.IToolWindowGroupService`：**141 行差异 → 逐字节一致**。
+- 语料：Contracts.DnSpy 820/23600 → **833/22538**；Debugger 218/4878 → 221/4986；
+  Logic 54/8317 → 54/8305。合计 36795 → **35829**，identical 1092 → **1108**。
+
+**未解（数组初始化器打包）**：`[Nullable(new byte[] { 2, 1 })]`（2.3 内联）vs
+3.2 多行。2.3 的 NRefactory `PrintInitializerElements` 规则已拿到（`wrap = wrapAlways || count > 10`，
+`wrapAlways` 取决于 `ArrayInitializerWrapping == WrapAlways` / 非简单元素 / 复杂元素；
+换行后每 10 个元素一行），并在 3.2 的 `CSharpOutputVisitor.PrintInitializerElements` 实现。
+**但语料毫无变化**（833/22538 前后相同），说明该属性参数**不走**这条 visitor 路径；
+改动已回退。另外注意 3.2 该输出的缩进为 0（`{`/`2,`/`1`/`}` 全部顶格），
+也印证它不是排版器产生的。需要另行定位属性参数的渲染路径。

@@ -298,7 +298,11 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 									builder.Scope.Span = ILSpan.FromBounds(0, (uint)method.Body.GetCodeSize());
 									builders.Add(method, builder);
 								}
-								foreach (var (function, sps) in sequencePoints) {
+								// KeyValuePair.Deconstruct is not available on .NET Framework (net48),
+								// so read Key/Value explicitly instead of using deconstruction syntax.
+								foreach (var sequencePoint in sequencePoints) {
+									var function = sequencePoint.Key;
+									var sps = sequencePoint.Value;
 									// The bridge preserves rids, so the cecil method's token resolves
 									// back to the dnlib method; lambdas map to compiler-generated
 									// methods that are not rendered and get skipped here.

@@ -445,3 +445,33 @@ ColorConverter、DbgExceptionId、DbgCodeBreakpointSettings…），**3.2 为 0*
 （`private readonly DbgExceptionId.Flags flags;`），两者相矛盾，说明决策点不在 `ConvertTypeHelper`
 的短名分支（`AlwaysUseShortTypeNames=true` 时该分支恒命中）。曾试在 `ConvertTypeHelper` 加
 `DeclaringType == null` 门槛：语料仅 -14 行、枚举路径完全未变，**已回退**，待定位真实决策点。
+
+### 8.20 全解决方案构建：抓到并修复 net48 目标缺口（2026-11-17）
+
+**背景**：此前的构建/对拍都只针对 `net10.0-windows`（`verify-all`、`run-regression` 均带 `-f net10.0-windows`），
+**从未验证过 net48**。而 dnSpy 同时发布 net48 与 net10.0-windows，解决方案里两个目标都在。
+
+**发现**：`dotnet build dnSpy.sln -c Release` 直接失败，4 个错误全部落在
+`dnSpy.Decompiler.ILSpy32/CSharp/CSharpDecompiler32.cs(301)`：
+
+```
+error CS0411 / CS8129 / CS8130: KeyValuePair<ILFunction, List<SequencePoint>> 没有
+适用的 Deconstruct 扩展方法（out 参数 2 个、返回 void）
+```
+
+根因：`KeyValuePair.Deconstruct` 是 .NET Core 2.0 / .NET Standard 2.1 才加入的扩展，
+** .NET Framework（net48）上没有**；`TupleExtensions.Deconstruct` 只覆盖 `Tuple<,>`。
+
+**修改**：该处改为显式 `foreach (var sequencePoint in sequencePoints) { var function = sequencePoint.Key; var sps = sequencePoint.Value; … }`，
+语义完全等价，两个目标都能编译。
+
+**验证**：
+- `dotnet build Extensions/ILSpy32.Decompiler/dnSpy.Decompiler.ILSpy32/dnSpy.Decompiler.ILSpy32.csproj -c Release -f net48` → **0 错误**。
+- `dotnet build dnSpy.sln -c Release`（M4 后的完整解决方案：2.3 扩展已移出，2.3 引擎子模块仍由
+  `dnSpy.BamlDecompiler` / `ICSharpCode.NRefactory.VB32` 引用）→ **已成功生成，0 错误**。
+  中途出现的 `CS2001 GeneratedInternalTypeHelper.g.cs 缺失` 与 `CS0012 System.Runtime 10.0` 是
+  中断的 WPF `_wpftmp` 临时工程留下的陈旧 obj，重跑即消失，非源码问题。
+- `verify-all`：hardFail=0、skip=0，唯一 softFail 仍是既有单类型 `lang-diff`（数字未变）。
+
+**新增常态门禁**：后续改动必须同时构建 `net10.0-windows` 与 `net48` 两个目标
+（`dotnet build dnSpy.sln -c Release`），只构建单目标不算验证通过。

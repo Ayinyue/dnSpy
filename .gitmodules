@@ -24,4 +24,5 @@
 	branch = dnSpy
 [submodule "Extensions/ILSpy32.Decompiler/ICSharpCode.Decompiler"]
 	path = Extensions/ILSpy32.Decompiler/ICSharpCode.Decompiler
-	url = https://github.com/icsharpcode/ILSpy.git
+	url = https://github.com/Ayinyue/ILSpy.git
+	branch = feature/ilspy32-upstream-port

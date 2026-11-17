@@ -626,3 +626,27 @@ B 完全去掉 token 排序（2.3 对方法/属性/事件确实按访问器 toke
 
 **结论**：剩余差异已从「输出层规则差异」转为「引擎 transform 语义差异」，
 继续往下需要逐个 transform 对齐，不再适合在审计轮里盲改。
+
+### 8.27 嵌套类型限定：按 2.3 源码修正（2026-11-17）
+
+**差异**：2.3 印 `DbgEngineModule.UpdateOptions.IsExe`、`DbgExceptionId.Flags.KindMask`、
+`(DbgExceptionId.Flags)0`，3.2 印 `UpdateOptions.IsExe`、`Flags.KindMask`、`(Flags)0`（§8.19 起记录的未解项）。
+
+**ground truth**：2.3 的 `AstBuilder.ConvertType`（`Extensions/ILSpy.Decompiler/.../Ast/AstBuilder.cs:814`）
+对嵌套类型**一律**限定：`if (type.DeclaringType != null && !DoNotIncludeEnclosingType)`
+→ `MemberType { Target = ConvertType(DeclaringType), MemberName = name }`，不存在短名分支。
+
+**根因**：3.2 的 `ConvertTypeHelper` 有**两条**短名路径 ——
+(a) `resolver.LookupSimpleNameOrTypeName(typeDef.Name, ...)`（`:302`，实际生效的那条），
+(b) `if (AlwaysUseShortTypeNames || ...)` 兜底（`:314`）。
+只在 (b) 上加 `DeclaringType == null` 门槛（§8.19 的失败尝试）不会生效，因为走的是 (a)。
+
+**修改**：给 (a) 也加 `genericType.DeclaringType == null` 门槛（嵌套类型不做短名查找），
+并保留 (b) 的同样门槛。
+
+**验证**：
+- 语料（C#，identical/diffLines）：Contracts.DnSpy 794/24769 → **797/24719**；
+  Debugger 196/5028 → **197/5016**；Logic 50/8430 → **50/8416**。合计 38227 → **38151**，identical 1040 → **1044**。
+- `verify-all`：hardFail=0、skip=0，唯一 softFail 仍是既有单类型 `lang-diff`。
+- 注：§8.19 记的「同一类型作字段声明时已限定、作枚举常量/转换时省略」的矛盾由此解释 ——
+  两条路径分别命中 (a)/(b)，与是否嵌套无关。

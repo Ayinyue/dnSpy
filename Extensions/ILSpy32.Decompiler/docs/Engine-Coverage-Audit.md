@@ -596,3 +596,29 @@ B 完全去掉 token 排序（2.3 对方法/属性/事件确实按访问器 toke
   `ColorType.` 出现次数 **754 → 0**（与 2.3 一致），该文件 diff 行数显著下降；
   `ThemeClassificationFormatDefinitions` 已跌出 dnSpy.dll 差异前 5。
 - `verify-all`：hardFail=0、skip=0，唯一 softFail 仍是既有单类型 `lang-diff`。
+
+### 8.26 剩余差异分类（2026-11-17，诊断结论）
+
+`dnSpy.dll` 全量原始行 diff 已从 214470 降到 **172678**。分类统计：
+
+| 类别 | 量级 | 性质 |
+|---|---|---|
+| **控制流塑形** | `return true/false/null;` **2328** 行、含 `flag` 临时局部 **1126** 行 | 引擎 transform 层 |
+| **using 集合** | 共 **942** 行（3.2 多 271 / 少 671） | 导入计算口径 |
+
+**控制流塑形**（剩余大头）举例（`dnSpy.Text.Operations.EditorOperations`）：
+- 2.3：`bool flag; try { flag = Clipboard.ContainsText(); } catch { flag = false; } return flag;`
+  vs 3.2：`try { return Clipboard.ContainsText(); } catch { return false; }`
+- 2.3：`return A || !B;` vs 3.2：`if (!A) { return !B; } return true;`
+
+即 2.3 更贴近 IL 原样（保留临时局部、保留 `||`），3.2 的 transform 更激进。
+这**不是「一处规则」能对齐的**，需要逐个比对 `AstMethodBodyBuilder` 系列的 transform，
+风险高，建议单独立项。
+
+**using 集合**：3.2 多出的命名空间里 `System.Runtime.CompilerServices` 占 **209** 次，
+且抽样文件中该 using **没有任何对应类型使用**（`Extension`/`InternalsVisibleTo`/`Nullable`/`IndexerName` 均 0 次），
+两侧 `NullableContext`/`[Nullable]` 文件数相同（24 vs 24），所以**不是**可空特性的问题，
+而是 3.2 的 using 计算把「已被 transform 消掉的类型引用」也算了进去。ROI 低（0.5%），暂不动。
+
+**结论**：剩余差异已从「输出层规则差异」转为「引擎 transform 语义差异」，
+继续往下需要逐个 transform 对齐，不再适合在审计轮里盲改。

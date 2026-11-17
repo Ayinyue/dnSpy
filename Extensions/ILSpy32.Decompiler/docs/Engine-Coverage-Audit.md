@@ -574,3 +574,25 @@ events / fields / nestedTypes）**无条件执行**。`List.Sort` 是不稳定�
 
 **§8.23 的 A/B 实验由此得到解释**：A 把**字段**也纳入了 token 排序（2.3 不排字段 → 错）；
 B 完全去掉 token 排序（2.3 对方法/属性/事件确实按访问器 token 排 → 错）。两者都只对了一半。
+
+### 8.25 枚举常量：引用程序集里的枚举打印数值（2026-11-17）
+
+**差异**：2.3 在**代码**里把枚举常量打印成**数值**，3.2 恢复成**枚举成员名**（§8.21(2)）。
+
+**ground truth**：2.3 的 `AstBuilder.CreateExpressionForConstant`（`Extensions/ILSpy.Decompiler/.../Ast/AstBuilder.cs:2030`）
+对所有常量走 `MakePrimitive(value, type, sb)`；是否展开成员名取决于**枚举定义能否解析**，
+而 2.3 只解析**被反编译模块内**定义的枚举。旁证：
+- `DbgImageLayout`（定义在 `dnSpy.Contracts.Debugger.dll`，即当时被反编译的模块）→ 2.3 印 `DbgImageLayout.Unknown`；
+- `ColorType`（定义在 `dnSpy.Contracts.DnSpy.dll`，而当时反编译的是 `dnSpy.dll`）→ 2.3 印 `16528`。
+
+**修改**：`TypeSystemAstBuilder.ConvertConstantValue` 里已有的这条规则（原先只用于属性参数
+`isAttributeArgument`，即 §8.15/§8.17 的组合枚举修复）**推广到所有枚举常量**：
+枚举定义来自引用程序集（`!ParentAssembly.IsMainAssembly`）时返回 `PrimitiveExpression(数值)`。
+
+**验证**：
+- 语料（C#，identical/diffLines）：Contracts.DnSpy 782/24849 → **794/24769**；
+  Debugger 196/5028（不变）；Logic 50/8441 → **50/8430**。合计 38298 → **38227**，identical 1028 → **1040**。
+- `dnSpy.dll`（不在语料内的装配，但正是该差异的主战场）：`dnSpy.Themes.ColorInfos` 里
+  `ColorType.` 出现次数 **754 → 0**（与 2.3 一致），该文件 diff 行数显著下降；
+  `ThemeClassificationFormatDefinitions` 已跌出 dnSpy.dll 差异前 5。
+- `verify-all`：hardFail=0、skip=0，唯一 softFail 仍是既有单类型 `lang-diff`。

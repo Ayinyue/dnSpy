@@ -1128,5 +1128,12 @@ C# 视图对 `HexBytes` 看到 **170** 个 `CheckedUncheckedAnnotation`（VB 视
 下一步应直接在 `GetResultFromBlock` 里对每个 statement 打印 `stmtResult.CostInUncheckedContext`，
 定位是哪一个 statement 的结果被丢掉了。
 
+**逐语句实测**：在 `GetResultFromBlock` 里打印每个 statement 的 `CostInUncheckedContext` ——
+**全部是 `[0 + 0]`**，包括那些祖先链里带注解 cast 的 `IfElseStatement` / `ReturnStatement`。
+即 `GetResult(statement)` 的**子节点递归没有把注解的成本累加上来**（`GetResult` 本身确实看到了注解，
+否则不会有 `ACB-ANNBLOCK`）。这与 `GetResult` 的代码（`for child ... result.CostInUncheckedContext += childResult...`）矛盾，
+怀疑**存在两个不同的 `GetResult`/`GetResultFromBlock` 调用上下文**（例如 VB 视图也跑了一遍，
+两侧的 statement/block id 不同），需要在同一轮里同时打印 statement id 与注解所在 block 的 id 才能定论。
+
 **另两类已计数但未修**：`.Invoke()`（2.3 印 `handler.Invoke(...)`，3.2 省略，2.3 有 21 处/3.2 3 处）；
 `= default(...)` 局部初始化器（3.2 比 2.3 多 31 处，责任点 `DeclareVariables.cs:449`）。

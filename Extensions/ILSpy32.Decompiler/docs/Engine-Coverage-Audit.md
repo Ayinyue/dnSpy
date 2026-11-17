@@ -1187,5 +1187,11 @@ C# 视图对 `HexBytes` 看到 **170** 个 `CheckedUncheckedAnnotation`（VB 视
 （不要绕 `Int64`），并去掉 `TranslateArrayIndex` 在索引外多加的 `(int)`。
 两处都改完再对拍，预计能同时拿到正确性与 diffLines 收益。
 
+**已改完第二步（保留）**：`ConvertTo` 现在对 `IntPtr → Int32` / `UIntPtr → UInt32`
+**直接转换**（不再绕 `Int64`/`UInt64`，语义等价：都是截断低位）。
+3.2 输出从 `(int)(long)checked((IntPtr)index)` 变为 **`(int)checked((IntPtr)index)`**，
+与 2.3 的 `(int)(checked((IntPtr)index))` 只差外层一对括号。
+语料不变（Contracts.DnSpy 16041，无回归）；`verify-all` hardFail=0。
+
 **另两类已计数但未修**：`.Invoke()`（2.3 印 `handler.Invoke(...)`，3.2 省略，2.3 有 21 处/3.2 3 处）；
 `= default(...)` 局部初始化器（3.2 比 2.3 多 31 处，责任点 `DeclareVariables.cs:449`）。

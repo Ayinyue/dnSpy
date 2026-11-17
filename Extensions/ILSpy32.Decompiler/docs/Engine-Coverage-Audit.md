@@ -1335,3 +1335,28 @@ primitive-ref 分支走 `FormatPrimitiveLiteral`，不经 `EmitText` 的文本�
 
 **B（显式转换，143 行）**：见 §8.44；普查建议的入口 `TranslatedExpression.cs:173` / `ExpressionBuilder.cs:1305`
 两处补丁已验证可行（IntPtr / checked / 数组下标），但 `ldelem` 元素级 cast 仍未解决。
+
+### 8.50 二元运算操作数的定型：精确入口（2026-11-18）
+
+**现象**：`HexBytes` 里 2.3 印 `index + 1L`，3.2 印 `index + 1`（`index` 是 `long`；IL 为
+`ldc.i4.1; conv.i8; add`）。全语料 `L` 后缀 2.3=130 / 3.2=38，`U` 后缀 2.3=199 / 3.2=61。
+
+**已排除**：
+- `VisitConv` 的 `SignExtend` 分支（`:1360`）确实收到 `conv.i8`（实测 kind 有 SignExtend），
+  我在这里对编译期常量做了「按目标类型重定」——只让语料降了 2 行，`HexBytes` 的 `1` 没变；
+- `ConvertConstantValue` 的值重定（`GetIntegralClrType`）——同样只影响 2 行。
+
+**精确入口**：`ExpressionBuilder.HandleBinaryNumeric`（`:971`）
+```csharp
+left  = PrepareArithmeticArgument(left,  inst.LeftInputType,  inst.Sign, inst.IsLifted);
+right = PrepareArithmeticArgument(right, inst.RightInputType, inst.Sign, inst.IsLifted);
+```
+它把操作数定型到 **IL 输入类型**（`LeftInputType`/`RightInputType`），而不是**运算结果类型**。
+2.3 的结果是把常量按结果类型定型，所以 `1` 变成 `1L`。
+
+**下一步**：确认 `BinaryNumericInstruction` 上记录结果类型的字段（可能是 `inst.ResultType` 或
+`InferredType`），把常量操作数重定到该类型；或验证 2.3 是否对**所有**操作数（含非常量）都做。
+若只对常量做，改动面很小；若对所有操作数做，需要评估对 `int`/`uint` 混合运算的影响。
+
+**同一规则也解释 B 类（显式转换）**：`ldelem.u1` 的结果在 IL 栈上是 I4，2.3 按目标类型定型后
+会补 `(int)`；3.2 不补。两者是同一条「按目标类型定型」规则的两个面。

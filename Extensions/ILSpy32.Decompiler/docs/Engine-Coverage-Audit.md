@@ -1379,3 +1379,8 @@ right = PrepareArithmeticArgument(right, inst.RightInputType, inst.Sign, inst.Is
 **未修**：要字节对齐必须停用该优化（`?.` 会退回显式判空，约 107 处 + 语句结构变化），
 属于 ILAst 层改动；且 `?.` 与 `??` 共用 null-propagation 基础设施，需评估连带影响。
 **若只做「少改动」的取舍**：这一项的收益（107 行）比前面几项大，但改动面也最大，建议单独立项。
+
+**补充**：`IntroduceUnwrap` 在 `NullPropagationTransform` 里有 4 个调用点（:119/:125/:132/:179），
+而同一个 transform 也负责 `??` —— 全语料 `??` 计数 2.3 = **79**、3.2 = **122**（方向相反：3.2 引入得更多）。
+也就是说 **整个 null-propagation 优化在 3.2 里都更激进**，`?.` 与 `??` 是同一族差异，
+不建议只关 `?.` 而留下 `??`；要动就是评估整个 transform 的取/舍（2.3 基本不做这类合并）。

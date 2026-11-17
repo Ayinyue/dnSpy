@@ -323,7 +323,7 @@ C#/VB 残余差异中最大一类是局部名（2.3 有 PDB 名 `sharedPaths/inf
 局部名（`sb` vs `stringBuilder`，需 PDB）、语句形态（`{`/`for`/`return` 分布）。
 `this.` 是明确规则（2.3 总是限定实例成员访问），可用 AST 变换实现，但影响全部 C# 输出，需专项评估。
 
-### 8.14 C#/VB 残余：编译器生成类型与组合枚举值（2026-11-17）
+### 8.14 C#/VB 残余：编译器生成类型（2026-11-17）
 
 把 C#/VB 对拍扩到第三方真实库（Iced/MessagePack/Mono.Cecil）后，identical 骤降
 （Iced C# 104/764、MessagePack 16/297），但抽样确认**主因是编译器生成的类型**，
@@ -350,15 +350,12 @@ MessagePack 16/297），抽样确认**主因是编译器生成的类型**（`Nul
 
 ### 8.15 属性参数的组合枚举值：**接受的不一致**（不是待修缺口）
 
-实测：2.3 印数值 `[AttributeUsage(27524, …)]`，3.2 展开为
+（已解决，见 §8.17）实测：2.3 印数值 `[AttributeUsage(27524, …)]`，3.2 曾展开为
 `AttributeTargets.Class | AttributeTargets.Property | …`。根因：3.2 的 `AstBuilder` 为
 **属性参数**构建了 `|` 表达式（2.3 只留 primitive int）。属性参数走
 `CSharpOutputVisitor.VisitAttribute`（`CSharpOutputVisitor.cs:1287`）→ 参数表达式。
 
-**判定为接受的不一致**：展开形式更可读、语义等价，且与 3.2 处理**方法参数**枚举的方式一致
-（`StringComparison.OrdinalIgnoreCase` 两边都是名字）。为逐字复刻 2.3 而把属性枚举改成数字，
-是**降低输出质量**，不符合升级目标。保留 3.2 行为。
-（若确有个别场景必须数值，再按特性开关处理。）
+已在引擎侧复刻（属性参数中，外部枚举回退为数值），见 §8.17。
 
 ### 8.16 Mixed 叠加粒度：实测结论（2026-11-17）
 
@@ -368,3 +365,18 @@ MessagePack 16/297），抽样确认**主因是编译器生成的类型**（`Nul
 3.2 为 8/12/16（语句级基准）；试将 3.2 整体减 4 后顶层对齐（166 vs 164）但**嵌套分布反转**
 （一层 36 vs 17），收益不明确，**已回退**。
 结论：Mixed 叠加的差异与 C#/VB 同源（§8.13），无独立缺口；`this.` 省略为最大可见项。
+
+### 8.17 `this.` 限定与属性枚举值：已复刻（2026-11-17）
+
+之前把这两项判为「接受的不一致」，实测后确认都是**可复刻的规则**，已由并行代理在引擎侧实现
+（提交 `f953ef7`）：
+
+- **`this.`**：2.3 在 AST 构建期（`AstMethodBodyBuilder`）给实例字段/属性/方法/事件/indexer 访问
+  设 `ThisReferenceExpression` 目标；3.2 的 `ExpressionBuilder.ConvertField` 与 `CallBuilder`
+  （普通调用、访问器、委托方法组）此前不加。抽样 this. 计数 2.3=22 vs 3.2=1 → 修后 23，逐行对齐。
+- **属性参数枚举**：2.3 只在枚举类型**可解析**（同程序集）时展开名字，**外部枚举**（`AttributeTargets`、
+  `EditorBrowsableState`、`StringComparison`）回退为数值。3.2 总是展开。现 `TypeSystemAstBuilder`
+  对**属性参数**复刻该回退（`!IsMainAssembly` 时数值）。
+
+语料 identical/diffLines：DnSpy.dll 556/32248 → **741/31073**；Debugger 108/5735 → **186/5449**；
+Logic 29/10021 → **44/9842**。VB 亦同步（VB 由 C# AST 转换而来，`Me.` 与 2.3 一致）。

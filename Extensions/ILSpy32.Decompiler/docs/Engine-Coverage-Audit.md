@@ -1050,3 +1050,19 @@ corlib 未解析时落回 `get_Chars(...)`。改法：在 `HandleAccessorCall:78
 **下一个最大子项**：**cast/checked 消除（297 行）** —— 2.3 印
 `(int)this.bytes[(int)(checked((IntPtr)index))]`，3.2 印 `this.bytes[index]`。
 即 3.2 把 2.3 保留的显式转换/`checked` 省略了。**未修**，是 H 类里最大的一块。
+（复核说明：普查引用的 `checked((IntPtr)pos)` 例子在当前构建里两边都已消失，属旧转储；
+真正的 cast 类差异主要是下面的可空构造。）
+
+### 8.41 显式可空构造 `new T?(x)`：已修（2026-11-17）
+
+**差异**：2.3 保留 `new bool?(node.IsExpanded)` / `new int?(x)` 这类**显式可空构造**；
+3.2 把它解包成 `x`（`TranslatedExpression.ConvertTo` 的 `case InvocationResolveResult`
+里，当目标类型是 `Nullable<T>` 时 `UnwrapChild`）。
+
+**修改**：去掉该解包（2.3 没有对应逻辑）。
+
+**验证**：语料 Contracts.DnSpy 16099 → **16071**（合计 26394 → **26366**），identical 859 → 861。
+`verify-all` hardFail=0。
+
+**未采纳的实验**：给 `InlineReturnTransform.CanModifyInstructions` 加「返回局部被多处赋值就不内联」
+的守卫 —— Debugger 反而变差（2819 → 2852），已回退。

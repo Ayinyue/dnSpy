@@ -863,3 +863,30 @@ obj.IsVisibleChanged -= new DependencyPropertyChangedEventHandler(UIUtilities.se
 - 语料：Contracts.DnSpy 840/21985、Debugger 221/4980、Logic 55/8094；合计 35106 → **35059**。
 - 剩余差异只有两类已知塑形：`??` vs 「临时局部 + if」（缓存的写法差异）与
   可空枚举比较（`ChangedButton == null` vs `!= 0`，见 §8.13）。
+
+### 8.35 第三方库语料：差异集中在 `in` 参数修饰符（2026-11-17）
+
+13 项修复后重测第三方语料（§8.14 的数字已过时）：
+
+| 程序集 | identical / 类型 | diffLines |
+|---|---|---|
+| Iced | 165 / 764 | **141879** |
+| MessagePack | 21 / 297 | 20823 |
+| Mono.Cecil | 128 / 315 | 22354 |
+
+**Iced 的差异高度集中**：`Iced.Intel.Assembler` 单个类型就占 **60871 行（43%）**。
+对该类型逐行分类（25684 变更行）后，主体是：
+
+- **`in` vs `ref` 参数修饰符：3466 处**（2.3 输出 `Add(in instruction)`，3.2 输出 `Add(ref instruction)`）。
+  注意这不只是写法：声明与调用点都不同，`ref` 版本丢失了只读语义。
+- 其余：`++` vs `+= 1UL`、成员 RID 偏移、`[System.Runtime.CompilerServices.NullableContext(1)]`
+  vs `[NullableContext(1)]`（3.2 过度限定）等。
+
+**尝试与结论**：照 2.3 的规则（`AstBuilder.cs:2089`：by-ref 参数带 `IsReadOnlyAttribute` → `in`）
+给 3.2 加了 `ParameterModifier.In` 并在 `ConvertParameter` 里检测 —— **零效果**
+（Iced 前后都是 141879）。原因：`CecilLoader.ReadParameter` 确实调用了 `AddAttributes`，
+但 cecil 侧 `ParameterDefinition.CustomAttributes` 里**没有** `IsReadOnlyAttribute`，且 `IsIn` 为 **false**
+—— 即 **cecil 根本没读到 `in` 标记**。改动已回退（未提交未验证的代码）。
+
+**定性**：这是**类型系统/桥层面**的缺口（cecil 未暴露 in 标记），不是输出层规则；
+在弄清 cecil 为何读不到之前无法在输出层绕过。**这是目前已知最大的单项残余**（3466 行/类型）。

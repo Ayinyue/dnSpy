@@ -472,6 +472,10 @@ error CS0411 / CS8129 / CS8130: KeyValuePair<ILFunction, List<SequencePoint>> �
   中途出现的 `CS2001 GeneratedInternalTypeHelper.g.cs 缺失` 与 `CS0012 System.Runtime 10.0` 是
   中断的 WPF `_wpftmp` 临时工程留下的陈旧 obj，重跑即消失，非源码问题。
 - `verify-all`：hardFail=0、skip=0，唯一 softFail 仍是既有单类型 `lang-diff`（数字未变）。
+- **2026-11-17 复跑确认**：在干净状态（无并行/中断构建）下
+  `dotnet build dnSpy.sln -c Release` → **已成功生成，0 错误**。
+  说明 §8.20 里那几次 `CS2001 / CS0012 / MC1000 / MC2000` 全部是**中断构建留下的陈旧 obj**，
+  与源码无关；门禁本身可用，但**不要紧跟在另一个构建之后运行**（会命中 WPF `_wpftmp` 临时工程竞态）。
 
 **新增常态门禁**：后续改动必须同时构建 `net10.0-windows` 与 `net48` 两个目标
 （`dotnet build dnSpy.sln -c Release`），只构建单目标不算验证通过。

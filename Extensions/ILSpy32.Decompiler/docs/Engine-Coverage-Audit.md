@@ -1387,6 +1387,23 @@ IL 是 `conv.i`（0xD3，非 ovf），本不该有 checked 上下文，但 3.2 �
 **不加 cast**。所以「加不上 cast」是 `ConvertTo` 的常量捷径造成的，而不是定型没跑。
 后续要修应在该捷径处区分「真的编译期常量」与「只是被解析器标成常量」的情形。
 
+### 8.54 冗余 cast 不再被常量捷径吞掉：`(int)d[i]`（2026-11-18）
+
+**问题**：`HandleBinaryNumeric` 里给操作数补的显式转换（byte → int 的 `(int)d[i]`）**没有出现在输出里**，
+而 `HexBytes` 的 `index + 1` 却正常（输出 `index + 1L`）。插桩确认定型代码确实执行了
+（`op=BitOr`、`left=System.Byte`、`right=System.Int32`）。
+
+**真因**：`TranslatedExpression.ConvertTo`（`:363-367`）—— `ResolveCast` 的结果只要
+`IsCompileTimeConstant` 为真，就直接 `ConvertConstantValue(...)` 返回常量，**不生成 cast**。
+于是 byte 操作数被解析成常量后静默丢了 cast（而 `1` 本来就是常量，看不出差别）。
+
+**修改**：把该捷径限定为**字面常量**：
+`if (rr.IsCompileTimeConstant && !rr.IsError && ResolveResult is ConstantResolveResult)`。
+
+**验证**：`HexBytes` 现在输出 `(int)checked((IntPtr)index)` / `(int)d[...]`，与 2.3 的 `(int)` 一致；
+语料指标不变（14177 / 2155 / 7346 —— `HexBytes` 的差异由 `checked`/`unchecked` 贡献）；
+`verify-all` hardFail=0。剩余：`checked((IntPtr)index)` vs 2.3 的 `(IntPtr)index`（§8.50）。
+
 ### 8.51 `?.` 空条件运算符：3.2 用，2.3 完全不用（2026-11-18）
 
 `--all` 全量计数：`?.` 2.3 = **0**，3.2 = **107**。实例（`BMObject`）：

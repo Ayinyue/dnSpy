@@ -489,6 +489,7 @@ error CS0411 / CS8129 / CS8130: KeyValuePair<ILFunction, List<SequencePoint>> �
 3.2：DisabledAdvancedTracepointStatement→AsmMnemonic→Black→…）。3.2 的顺序既非字母序也非
 RID 升序（首字段 RID 1532 > 2.3 的 1339），形似**哈希/字典序**，怀疑在 dnlib→cecil 桥
 或成员枚举路径上丢失了元数据顺序。该类型单文件 diff 达 7141 行，是 DnSpy 语料最大单一差异源。
+→ **部分修复，见 §8.22**（排序门控消除了「哈希状」重排，但 3.2 自身输出顺序仍非元数据序）。
 
 **(2) 枚举常量的代码形态**：2.3 在**代码**里把枚举常量打印成**数值**，3.2 恢复成**枚举成员名**。
 `dnSpy.Themes.ColorInfos` 中 `new BrushColorInfo(16528, "Selected text")`（2.3）vs
@@ -501,3 +502,29 @@ RID 升序（首字段 RID 1532 > 2.3 的 1339），形似**哈希/字典序**�
 （候选假设：switch 标签 / 接收者位置命名，其余数值；或按枚举可见性/所属程序集区分），
 再决定 3.2 侧改法。全量 `dnSpy.dll` 原始行 diff 214470 行，其中 2.3 含 ≥2 位数字的行 13933、
 3.2 含 `X.Y` 成员引用的行 25043，量级说明这两项是剩余差异的大头。
+
+### 8.22 成员排序门控：已修复（2026-11-17）
+
+**差异**：3.2 的 C# 视图把成员顺序重排成「哈希状」，与 2.3 的元数据顺序不符（§8.21(1)）。
+
+**根因**：`CSharpDecompiler32.ReorderMembers` 里 5 个 `List<T>.Sort(...)`（methods / properties /
+events / fields / nestedTypes）**无条件执行**。`List.Sort` 是不稳定排序（introsort），
+而比较器在成员未绑定到 dnlib 定义时一律 `return 0` —— **全 0 比较器依然会重排**，
+于是 323 个字段被置换成看似随机的顺序。探针文档本来就写明「off 时保持元数据顺序」，
+代码却没有检查 `sortMembers`。
+
+**修改**：把 5 个排序包进 `if (sortMembers) { ... }`。
+**分组**（methods→properties→events→fields→nestedTypes）保持无条件 —— 2.3 默认也分组
+（实测 `ColorConverter`：cctor → 方法 → 字段，两引擎一致）。
+
+**验证**：
+- 语料（C#，identical/diffLines）：Contracts.DnSpy 742/30623 → **767/29813**；
+  Debugger 187/5440 → **195/5246**；Logic 45/9768 → **49/9278**。
+  合计 diffLines 45831 → **44337**（-1494），identical 974 → **1011**。
+- `dnSpy.dll` 最大差异类型 `ThemeClassificationFormatDefinitions`：7141 → **1285** 变更行。
+- `verify-all`：hardFail=0、skip=0，唯一 softFail 仍是既有单类型 `lang-diff`（数字未变）；
+  IL 语料保持全 identical。
+
+**仍未对齐**：该类型剩 1285 行差异，首字段 2.3 是 RID 1339/1340/1341（连续，即元数据序），
+3.2 是 RID 1660/1441/1442 —— 说明**去掉排序后 3.2 引擎自身输出的成员顺序就不是元数据顺序**，
+根因在引擎/桥的成员枚举（`ITypeDefinition.GetMembers()` 的实现），待查。

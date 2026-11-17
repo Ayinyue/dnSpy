@@ -529,45 +529,48 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					}
 				}
 
-				// Sort each group by its dnlib definition when the binder attached one; items
-				// without a definition keep their relative order (List.Sort is not stable, so
-				// equal keys must return 0 without reordering guarantees - acceptable here
-				// because unbound members are rare).
-				methods.Sort((a, b) => {
-					var ma = a.Annotation<MethodDef>();
-					var mb = b.Annotation<MethodDef>();
-					if (ma is null || mb is null)
-						return 0;
-					return dnSpy.Contracts.Decompiler.MethodDefComparer.Instance.Compare(ma, mb);
-				});
-				properties.Sort((a, b) => {
-					var pa = a.Annotation<PropertyDef>();
-					var pb = b.Annotation<PropertyDef>();
-					if (pa is null || pb is null)
-						return 0;
-					return dnSpy.Contracts.Decompiler.PropertyDefComparer.Instance.Compare(pa, pb);
-				});
-				events.Sort((a, b) => {
-					var ea = a.Annotation<EventDef>();
-					var eb = b.Annotation<EventDef>();
-					if (ea is null || eb is null)
-						return 0;
-					return dnSpy.Contracts.Decompiler.EventDefComparer.Instance.Compare(ea, eb);
-				});
-				fields.Sort((a, b) => {
-					var fa = GetFieldFor(a, module);
-					var fb = GetFieldFor(b, module);
-					if (fa is null || fb is null)
-						return 0;
-					return dnSpy.Contracts.Decompiler.FieldDefComparer.Instance.Compare(fa, fb);
-				});
-				nestedTypes.Sort((a, b) => {
-					var ta = a.Annotation<TypeDef>();
-					var tb = b.Annotation<TypeDef>();
-					if (ta is null || tb is null)
-						return 0;
-					return dnSpy.Contracts.Decompiler.TypeDefComparer.Instance.Compare(ta, tb);
-				});
+				// Sorting is opt-in (SortMembers). With it off, the 2.3 engine keeps the
+				// metadata order within each group, which is what the corpus compares against.
+				// The sorts must not run unconditionally: List.Sort is unstable, so an
+				// all-zero comparer (member not bound to its dnlib definition) would still
+				// permute the group into a hash-like order.
+				if (sortMembers) {
+					methods.Sort((a, b) => {
+						var ma = a.Annotation<MethodDef>();
+						var mb = b.Annotation<MethodDef>();
+						if (ma is null || mb is null)
+							return 0;
+						return dnSpy.Contracts.Decompiler.MethodDefComparer.Instance.Compare(ma, mb);
+					});
+					properties.Sort((a, b) => {
+						var pa = a.Annotation<PropertyDef>();
+						var pb = b.Annotation<PropertyDef>();
+						if (pa is null || pb is null)
+							return 0;
+						return dnSpy.Contracts.Decompiler.PropertyDefComparer.Instance.Compare(pa, pb);
+					});
+					events.Sort((a, b) => {
+						var ea = a.Annotation<EventDef>();
+						var eb = b.Annotation<EventDef>();
+						if (ea is null || eb is null)
+							return 0;
+						return dnSpy.Contracts.Decompiler.EventDefComparer.Instance.Compare(ea, eb);
+					});
+					fields.Sort((a, b) => {
+						var fa = GetFieldFor(a, module);
+						var fb = GetFieldFor(b, module);
+						if (fa is null || fb is null)
+							return 0;
+						return dnSpy.Contracts.Decompiler.FieldDefComparer.Instance.Compare(fa, fb);
+					});
+					nestedTypes.Sort((a, b) => {
+						var ta = a.Annotation<TypeDef>();
+						var tb = b.Annotation<TypeDef>();
+						if (ta is null || tb is null)
+							return 0;
+						return dnSpy.Contracts.Decompiler.TypeDefComparer.Instance.Compare(ta, tb);
+					});
+				}
 
 				// The engine attaches its XML doc comments (and the token comments are added later)
 				// as children that precede their member, so a reorder must move each member's

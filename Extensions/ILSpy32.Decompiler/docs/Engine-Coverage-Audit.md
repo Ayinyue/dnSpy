@@ -627,6 +627,13 @@ B 完全去掉 token 排序（2.3 对方法/属性/事件确实按访问器 toke
 **结论**：剩余差异已从「输出层规则差异」转为「引擎 transform 语义差异」，
 继续往下需要逐个 transform 对齐，不再适合在审计轮里盲改。
 
+**性能（目标里的「提升反编译运行效率」）**：`verify-all` 的 `bench` 门禁实测
+最慢类型 **49 ms**（`dnSpy.Contracts.Decompiler.XmlDoc.XmlDocRenderer`），
+其余 16/13/12 ms，且全部 `cecilCalls=0 fails=0`；语料耗时 Contracts.DnSpy C# 1310 类型 32 s
+（约 25 ms/类型）。**没有可识别的热点**，桥层（`DnlibCecilBridge`）已按 dnlib `ModuleDef`
+用 `ConditionalWeakTable` 缓存 Cecil 模块，不会重复读盘。此项暂无优化空间，
+若后续要提速应先建立逐类型耗时基线再定位。
+
 ### 8.27 嵌套类型限定：按 2.3 源码修正（2026-11-17）
 
 **差异**：2.3 印 `DbgEngineModule.UpdateOptions.IsExe`、`DbgExceptionId.Flags.KindMask`、

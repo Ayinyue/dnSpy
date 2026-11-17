@@ -849,3 +849,17 @@ obj.IsVisibleChanged -= new DependencyPropertyChangedEventHandler(UIUtilities.se
 与可空/布尔塑形（`A || !B` vs 提前返回）。
 
 **建议**：这条应优先于其余风格类差异处理 —— 它影响反编译结果的可信度。
+
+**已修（2026-11-17）**：根因是 `IL.Transforms.CachedDelegateInitialization` ——
+它的 `CachedDelegateInitializationWithField` 会把
+`if (field == null) field = new D(M);` 连同后面的 `ldsfld field` 一起改写成 `new D(M)`，
+即**主动反优化掉编译器生成的委托缓存**。dnSpy 2.3 不做这个改写，所以保留缓存。
+处理：把 `CSharpDecompiler` 管线里的 `new CachedDelegateInitialization()` 停用
+（不能靠 `AnonymousMethods=false` 关，那会连带关掉匿名方法支持）。
+
+**验证**：
+- `UIUtilities` 现在输出 `(UIUtilities.<>O.<0>__selector_IsVisibleChanged ?? (… = new D(M)))`，
+  **缓存语义恢复**，`-=` 重新有效；该类型 diffLines 171 → **64**。
+- 语料：Contracts.DnSpy 840/21985、Debugger 221/4980、Logic 55/8094；合计 35106 → **35059**。
+- 剩余差异只有两类已知塑形：`??` vs 「临时局部 + if」（缓存的写法差异）与
+  可空枚举比较（`ChangedButton == null` vs `!= 0`，见 §8.13）。

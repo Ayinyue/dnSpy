@@ -657,3 +657,27 @@ B 完全去掉 token 排序（2.3 对方法/属性/事件确实按访问器 toke
 - `verify-all`：hardFail=0、skip=0，唯一 softFail 仍是既有单类型 `lang-diff`。
 - 注：§8.19 记的「同一类型作字段声明时已限定、作枚举常量/转换时省略」的矛盾由此解释 ——
   两条路径分别命中 (a)/(b)，与是否嵌套无关。
+
+### 8.28 using 集合差异的成因（2026-11-17，诊断）
+
+对 `dnSpy.dll` 全量 diff 做了双向统计（`-U0`）：
+
+| 命名空间 | 2.3 | 3.2 |
+|---|---|---|
+| `dnSpy.Documents.Tabs` | 73 | **0** |
+| `dnSpy.Text.Editor` | 62 | **0** |
+| `dnSpy.Hex.Editor` | 45 | **0** |
+| `System.Runtime.CompilerServices` | 15 | **209** |
+
+**成因（2.3 侧）**：2.3 会添加**被反编译类型自身所在命名空间**的 using。
+实例 `dnSpy.Documents.Tabs.AllTabsMenuItemCommand+<>c__DisplayClass8_0`：
+2.3 输出 `using dnSpy.Documents.Tabs;`（该类型自己的命名空间，语义上冗余），3.2 不加。
+这解释了 `dnSpy.*` 命名空间的大批「缺失」（都是各自文件自己的命名空间）。
+
+**3.2 侧多出的 `System.Runtime.CompilerServices`** 尚未定位（抽样文件中该 using 无任何对应类型使用，
+且两侧可空特性文件数相同，排除 `EmitNullableAttributes`）。可能是 `[CompilerGenerated]` 的
+type reference 被 3.2 的 using 计算算入。
+
+**结论**：这是 2.3 的一个**冗余 using** 习惯，量级约 250 行（占剩余差异 0.15%）。
+要复刻就是在 using 生成处补「被反编译类型的命名空间」，需要改引擎的 using 计算，
+本轮未做（预算不足以完成「改 + 双 TFM + 语料 + 提交」的完整闭环）。

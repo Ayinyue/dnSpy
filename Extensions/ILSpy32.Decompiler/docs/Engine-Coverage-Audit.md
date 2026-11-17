@@ -1147,5 +1147,18 @@ C# 视图对 `HexBytes` 看到 **170** 个 `CheckedUncheckedAnnotation`（VB 视
 而在处理 `ldelem` 下标的那段代码**（ILAst 构造或 `ExpressionBuilder` 的数组访问路径）。
 下一步应查 `ldelem`/`ArrayAccess` 如何构造下标表达式、以及是否有 IL transform 把 `conv.ovf` 折叠进下标。
 
+**定位到修复点（但未生效）**：`ExpressionBuilder.TranslateArrayIndex`（`:1821`）对下标调用
+`input.ConvertTo(targetType, this)` 时**没有传 `checkForOverflow`**。已补上
+（`(i as Conv)?.CheckForOverflow ?? false`）。但实测语料无变化 —— 因为诊断显示
+**传进来的下标指令根本不是 `Conv`**：`ACB-IDX type=BinaryNumericInstruction resultType=I8`（44 处）、
+`type=LdLoc resultType=I8`（16 处）、`type=LdLoc resultType=I4`（2 处）。
+即 `conv.ovf.i` 在更早的 **ILAst 阶段**就被折叠/改写了，`TranslatedExpression.ConvertTo`
+拿不到带 overflow 标志的 `Conv`。
+
+**结论**：这处 `checkForOverflow` 补全是**防御性正确改动**（当前无实测效果），
+真正要修的是**折叠 `conv.ovf` 的那条 ILAst transform** —— 下一步应比对 2.3 与 3.2 的
+`ILAstOptimizer`/`ILReader` 在 `conv.ovf` + `ldelem` 组合上的差异（2.3 侧 `ILAstOptimizer.cs:1040`
+附近的 `PatternStatementTransform` 保留了临时变量，可作对照）。
+
 **另两类已计数但未修**：`.Invoke()`（2.3 印 `handler.Invoke(...)`，3.2 省略，2.3 有 21 处/3.2 3 处）；
 `= default(...)` 局部初始化器（3.2 比 2.3 多 31 处，责任点 `DeclareVariables.cs:449`）。

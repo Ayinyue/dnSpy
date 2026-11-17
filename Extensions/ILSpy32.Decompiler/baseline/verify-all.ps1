@@ -109,9 +109,14 @@ Invoke-Probe @('bench', $logic, $dnspyBin, '20') 'bench' -Soft -AllowSkip
 Invoke-Probe @('lang-diff', $logic, 'dnSpy.Contracts.Decompiler.MethodDebugInfoBuilder', $dnspyBin, $path23) 'lang-diff (vs 2.3)' -Soft
 # Whole-assembly IL baselines. Three hand-picked samples hid a 90% line difference, so the
 # corpus numbers are part of the acceptance gate: identical= / diffLines per assembly.
-# 2026-11-17 baseline: DnSpy.dll 1226/2058, Debugger 296/286, Logic 86/2967.
+# 2026-11-17 baseline: DnSpy.dll 1310/0, Debugger 303/0, Logic 114/0 (byte-identical).
 foreach ($corpusAsm in @('dnSpy.Contracts.DnSpy.dll', 'dnSpy.Contracts.Debugger.dll', 'dnSpy.Contracts.Logic.dll')) {
 	Invoke-Probe @('lang-diff-all', "$dnspyBin/$corpusAsm", $dnspyBin, $path23, 'IL (') "corpus IL: $corpusAsm" -Soft
+	# 2026-11-17 baseline (identical / diffLines): C# 556/32248, 108/5735, 29/10021;
+	# VB 607/25582, 157/3240, 41/8508. These are engine output-layer style differences
+	# (local-const inlining, implicit this., local names, statement shape) - see audit §8.13.
+	Invoke-Probe @('lang-diff-all', "$dnspyBin/$corpusAsm", $dnspyBin, $path23, 'C#') "corpus C#: $corpusAsm" -Soft
+	Invoke-Probe @('lang-diff-all', "$dnspyBin/$corpusAsm", $dnspyBin, $path23, 'Visual') "corpus VB: $corpusAsm" -Soft
 }
 
 Write-Report "=== summary: hardFail=$script:hard softFail=$script:soft skip=$script:skip ==="

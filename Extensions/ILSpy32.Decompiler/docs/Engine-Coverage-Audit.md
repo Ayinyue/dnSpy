@@ -1366,3 +1366,16 @@ right = PrepareArithmeticArgument(right, inst.RightInputType, inst.Sign, inst.Is
 
 **同一规则也解释 B 类（显式转换）**：`ldelem.u1` 的结果在 IL 栈上是 I4，2.3 按目标类型定型后
 会补 `(int)`；3.2 不补。两者是同一条「按目标类型定型」规则的两个面。
+
+### 8.51 `?.` 空条件运算符：3.2 用，2.3 完全不用（2026-11-18）
+
+`--all` 全量计数：`?.` 2.3 = **0**，3.2 = **107**。实例（`BMObject`）：
+2.3 印 `if (closed != null) { closed.Invoke(...); }`，3.2 印 `this.Closed?.Invoke(...)`。
+
+**来源**：ILAst 的 `NullPropagationTransform.IntroduceUnwrap`（`IL/Transforms/NullPropagationTransform.cs:274`，
+创建 `NullableUnwrap` 的 282/286/292 行）；`ExpressionBuilder.VisitNullableUnwrap:2365` 再包成
+`UnaryOperatorType.NullConditional`。2.3 没有这一步，所以一律渲染成显式判空（原始 IL 形状）。
+
+**未修**：要字节对齐必须停用该优化（`?.` 会退回显式判空，约 107 处 + 语句结构变化），
+属于 ILAst 层改动；且 `?.` 与 `??` 共用 null-propagation 基础设施，需评估连带影响。
+**若只做「少改动」的取舍**：这一项的收益（107 行）比前面几项大，但改动面也最大，建议单独立项。

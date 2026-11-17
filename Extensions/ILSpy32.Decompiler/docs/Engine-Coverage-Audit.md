@@ -1294,6 +1294,19 @@ G 的子项：临时变量 117、`L` 后缀 46、扩展方法语法 46、`?.` 38
 （例如 `CSharpOutputVisitor.VisitPrimitiveExpression` 之外的分支）找那条路径**，
 或在 `DnSpyTokenWriter` 里统计所有 `EmitText` 的调用点。
 
+**已确认的硬矛盾（把范围压到最小）**：
+- IL 全部是 `ldc.r8 96`（4 处），值必为 `double`；
+- `WritePrimitiveValue` 入口实测收到 **60 次 `System.Double`、`literal=null`**（C#+VB 两轮，
+  即 C# 约 30 次）；
+- `DnSpyTokenWriter` 的 **两条** double 分支（primitive-ref 分支 `FormatPrimitiveLiteral:1196-1197`、
+  非 primitive-ref 分支 `:1195-1198`）**都会** `number += ".0"`；
+- 全新重跑的 C# 输出确实是 `new Size(96, 96)`（2.3 是 `96.0`）。
+
+四项同时成立在现有代码下**不可能**，说明存在一条既非 `WritePrimitiveValue` 两条分支、
+也不设置 `UnsafeLiteralValue` 的输出路径（或输出后被再次改写）。
+**下一步只需一步**：在 `DnSpyTokenWriter` 里给**所有** `EmitText`/`output.Write` 调用点加计数，
+打印出真正输出 `"96"` 的那一处。
+
 **A（控制流塑形，306 行，最大类）**：跨 `IL/ControlFlow/SwitchDetection.cs`、`ControlFlowSimplification.cs`、
 `CSharp/ExpressionBuilder.cs:2210` 三处，单类可修性低。实例：`return mod != null && (mod.Characteristics & 8192) == 0;`
 （2.3）vs `if (mod != null) { return …; } return false;`（3.2）；`if (msg == 736)` 链（2.3）vs `switch (msg)`（3.2）。

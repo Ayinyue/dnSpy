@@ -1082,3 +1082,24 @@ corlib 未解析时落回 `get_Chars(...)`。改法：在 `HandleAccessorCall:78
 **同批普查但未修**（各仅 3~5 处）：P1 `= default(...)` 局部初始化器
 （`DeclareVariables.cs:449` 的 `DefaultInitialization`）；P3 `lock` 临时局部
 （`Instructions.cs:1788` 的 `canInlineInto`，改动波及内联、风险高）。
+
+### 8.43 `checked(...)` 溢出检查转换：**唯一确认的语义差异**，机制未通（2026-11-17）
+
+**差异**：`dnSpy.Contracts.Hex.HexBytes` 里 2.3 印
+`(int)this.bytes[(int)(checked((IntPtr)index))]`（16 处 `checked(`），3.2 印 `this.bytes[index]`。
+全语料（`--all` 口径）2.3 有 **84** 处 `checked(`，3.2 **0** 处；两边都没有 `checked {` 块。
+即 **3.2 完全丢失了溢出检查转换** —— 这不是风格差异，溢出行为会变。
+
+**已排除**：
+- IL 层没问题：`ILReader.cs:599-621` 把 `conv.ovf.*` 读成 `Conv(checkForOverflow: true)`；
+- 转换层没问题：`ExpressionBuilder.VisitConv:1338` 把 `checkForOverflow` 传给 `ConvertTo`；
+- `TranslatedExpression.ConvertTo:378-382` 确实 `castExpr.AddAnnotation(AddCheckedBlocks.CheckedAnnotation)`；
+- `AddCheckedBlocks` 已注册（`CSharpDecompiler.cs:160`），其 `Run/GetResult` 逻辑完整，
+  对 checked 注解会产出 `CheckedExpression`。
+
+**结论**：注解在到达 `AddCheckedBlocks` 之前就被丢弃了（或被后续 transform 消掉），
+**机制未通，需继续追**。可能方向：注解挂在了后来被内联/消除的节点上；
+或 `AddAnnotation` 的键（`object` 静态字段）与 `Annotation<CheckedUncheckedAnnotation>()` 的查找键不一致。
+
+**另两类已计数但未修**：`.Invoke()`（2.3 印 `handler.Invoke(...)`，3.2 省略，2.3 有 21 处/3.2 3 处）；
+`= default(...)` 局部初始化器（3.2 比 2.3 多 31 处，责任点 `DeclareVariables.cs:449`）。

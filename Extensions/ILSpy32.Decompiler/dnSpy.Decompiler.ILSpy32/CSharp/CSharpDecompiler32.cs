@@ -619,15 +619,19 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					AddNestedTypesLast(typeDecl, nestedTypes);
 				}
 				else {
-					// Unsorted: metadata-token order, like 2.3's GetNonSortedMethodsPropertiesEvents.
-					var all = new List<ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration>();
-					all.AddRange(methods);
-					all.AddRange(properties);
-					all.AddRange(events);
-					all.AddRange(fields);
-					all.AddRange(nestedTypes);
-					all.Sort((a, b) => GetMemberToken(a, module).CompareTo(GetMemberToken(b, module)));
-					foreach (var m in all)
+					// 2.3's unsorted mode (UseSourceCodeOrder / !CanSortMethods) calls
+					// ShowAllMethods -> GetNonSortedMethodsPropertiesEvents: methods,
+					// properties and events are emitted together, ordered by the first
+					// accessor's metadata token ("original metadata order"). Fields are NOT
+					// part of that - they keep metadata order - and nested types go last.
+					var mpe = new List<ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration>();
+					mpe.AddRange(methods);
+					mpe.AddRange(properties);
+					mpe.AddRange(events);
+					mpe.Sort((a, b) => GetMemberToken(a, module).CompareTo(GetMemberToken(b, module)));
+					foreach (var m in mpe)
+						typeDecl.Members.Add(m);
+					foreach (var m in fields)
 						typeDecl.Members.Add(m);
 					AddNestedTypesLast(typeDecl, nestedTypes);
 				}

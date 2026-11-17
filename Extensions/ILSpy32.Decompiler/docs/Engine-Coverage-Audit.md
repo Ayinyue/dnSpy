@@ -548,3 +548,29 @@ events / fields / nestedTypes）**无条件执行**。`List.Sort` 是不稳定�
   `CSharpDecompiler32.GetFieldFor`：它按 `member.Ancestors...Annotation<TypeDef>()` +
   `typeDef.Fields` 名称索引查找，疑似没命中）—— 这个「半坏」状态恰好是语料最优，
   **说明真正的规则还没找到，不要继续在 token 排序方向上调参**。已回退到 `3755feb5b`。
+
+### 8.24 成员顺序：读 2.3 源码后按 ground truth 重写（2026-11-17）
+
+§8.23 的两个实验都被「2.3 到底怎么排」这个问题挡住。本轮直接读了仓库里的 **2.3 引擎源码**
+（`Extensions/ILSpy.Decompiler/ICSharpCode.Decompiler/.../Ast/AstBuilder.cs` 与
+`dnSpy/dnSpy.Contracts.Logic/Decompiler/Extensions.cs`），拿到确定规则：
+
+1. **组序**由 `DecompilerSettings.DecompilationObjects` 决定，默认
+   `Methods, Properties, Events, Fields, NestedTypes`。
+2. **未排序模式**（`UseSourceCodeOrder || !typeDef.CanSortMethods()`）走 `ShowAllMethods`
+   → `GetNonSortedMethodsPropertiesEvents()`：**方法 / 属性 / 事件合并**，按
+   「**首个访问器的 MDToken** 升序」排列（源码注释即 "original metadata order"）。
+3. **字段不参与**该排序：`GetFields()` 返回 `type.Fields`（元数据序）。
+4. 嵌套类型最后。
+
+**修改**：`ReorderMembers` 的 `else`（未排序）分支改为 —— 只对
+`methods + properties + events` 做 token 排序，字段保持引擎相对顺序（不排序），嵌套类型最后。
+
+**验证**：
+- 语料（C#，identical/diffLines）：Contracts.DnSpy 767/29813 → **782/24849**；
+  Debugger 195/5246 → **196/5028**；Logic 49/9278 → **50/8441**。
+  合计 diffLines 44337 → **38298**（**-6039**），identical 1011 → **1028**。
+- `verify-all`：hardFail=0、skip=0，唯一 softFail 仍是既有单类型 `lang-diff`。
+
+**§8.23 的 A/B 实验由此得到解释**：A 把**字段**也纳入了 token 排序（2.3 不排字段 → 错）；
+B 完全去掉 token 排序（2.3 对方法/属性/事件确实按访问器 token 排 → 错）。两者都只对了一半。

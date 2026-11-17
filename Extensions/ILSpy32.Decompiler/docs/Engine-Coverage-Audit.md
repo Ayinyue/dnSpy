@@ -322,3 +322,22 @@ C#/VB 残余差异中最大一类是局部名（2.3 有 PDB 名 `sharedPaths/inf
 实测该样本（`SearchMatcher`）的残余构成是：**隐式 `this.`（最大类，2.3 19 处 vs 3.2 1 处）**、
 局部名（`sb` vs `stringBuilder`，需 PDB）、语句形态（`{`/`for`/`return` 分布）。
 `this.` 是明确规则（2.3 总是限定实例成员访问），可用 AST 变换实现，但影响全部 C# 输出，需专项评估。
+
+### 8.14 C#/VB 残余：编译器生成类型与组合枚举值（2026-11-17）
+
+把 C#/VB 对拍扩到第三方真实库（Iced/MessagePack/Mono.Cecil）后，identical 骤降
+（Iced C# 104/764、MessagePack 16/297），但抽样确认**主因是编译器生成的类型**，
+其差异不是接线问题，而是引擎输出层规则：
+
+| 差异 | 2.3 | 3.2 |
+|---|---|---|
+| 组合枚举值 | `[AttributeUsage(27524, …)]` 保留数值 | 展开为 `AttributeTargets.Class \| …` |
+| 生成参数名 | `byte A_1` | `byte P_0` |
+| 数组初始化 | `new byte[] { A_1 }` | `new byte[1] { P_0 }` |
+| `this.` | 显式 | 省略 |
+| 局部名 | PDB 名 | 生成名（需 PDB） |
+
+「组合枚举值分解」是可明确规则的差异（影响所有 netstandard 引用程序集里编译器生成的
+`NullableAttribute`/`NullableContextAttribute`/`RefSafetyRulesAttribute` 等），但会改变
+**所有 enum 常量**的打印路径，属引擎输出层改动，需专项评估（默认保留 3.2 行为）。
+其余为 PDB（§8.12）与既定显示风格（§3、§8.13）。

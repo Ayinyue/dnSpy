@@ -1101,5 +1101,13 @@ corlib 未解析时落回 `get_Chars(...)`。改法：在 `HandleAccessorCall:78
 **机制未通，需继续追**。可能方向：注解挂在了后来被内联/消除的节点上；
 或 `AddAnnotation` 的键（`object` 静态字段）与 `Annotation<CheckedUncheckedAnnotation>()` 的查找键不一致。
 
+**诊断实测（临时加 stderr 计数，已回退）**：在 `AddCheckedBlocks.GetResult` 里统计 ——
+C# 视图对 `HexBytes` 看到 **170** 个 `CheckedUncheckedAnnotation`（VB 视图同样 170）；
+但同一轮里 `GetResultFromBlock` 对 **31** 个块全部返回 `costUnchecked=[0 + 0] nodes=False`。
+即：**注解确实存在，但都不在 `GetResultFromBlock` 遍历的语句树内**。
+`Run()` 只对 `BlockStatement` 调 `GetResultFromBlock`，非块节点只是递归 `GetResult`、
+其结果**不会被插入**。所以这些注解位于**语句块之外**（字段/属性初始化器、默认参数值、
+或未被语句遍历到的位置）—— 这是下一步最该验证的假设。
+
 **另两类已计数但未修**：`.Invoke()`（2.3 印 `handler.Invoke(...)`，3.2 省略，2.3 有 21 处/3.2 3 处）；
 `= default(...)` 局部初始化器（3.2 比 2.3 多 31 处，责任点 `DeclareVariables.cs:449`）。

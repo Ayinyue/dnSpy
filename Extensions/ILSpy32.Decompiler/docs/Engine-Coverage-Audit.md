@@ -1375,6 +1375,12 @@ IL 是 `conv.i`（0xD3，非 ovf），本不该有 checked 上下文，但 3.2 �
 另注 `ExpressionBuilder` 里没有其它 `CheckedAnnotation` 赋值点（只有 `AddCheckedBlocks`），
 故根因确定在 `AddCheckedBlocks` 的节点对应逻辑，属独立未解项。
 
+**对照实验（负结果，已排除一条）**：把 `HandleBinaryNumeric` 里二元运算的 `inst.CheckForOverflow`
+标注整段禁用后，`checked((IntPtr)index)` **仍在** —— 说明该标注不是来自二元运算路径，
+来源确定在 `AddCheckedBlocks` 自身对 IL 指令的节点映射（`conv.i` 无 ovf 却挂了 `CheckedAnnotation`）。
+`ExpressionBuilder` 中除 `AddCheckedBlocks` 外没有其它 `CheckedAnnotation` 赋值点，范围已锁死到该 transform。
+后续若要修，需要读 `AddCheckedBlocks.GetResult` 的递归与 `InsertedExpression`/`Cost` 模型（改动面大）。
+
 ### 8.51 `?.` 空条件运算符：3.2 用，2.3 完全不用（2026-11-18）
 
 `--all` 全量计数：`?.` 2.3 = **0**，3.2 = **107**。实例（`BMObject`）：

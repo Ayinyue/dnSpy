@@ -348,7 +348,7 @@ MessagePack 16/297），抽样确认**主因是编译器生成的类型**（`Nul
 （`A_1` vs `P_0`）、数组初始化形态、`this.` 省略。**C#/VB 残余不是接线缺口**；其中 `this.` 与
 组合枚举值可用 AST/引擎变换对齐，但会改变全部 C# 输出形态，需单独立项评估。
 
-### 8.15 属性参数的组合枚举值：**接受的不一致**（不是待修缺口）
+### 8.15 属性参数的组合枚举值：**接受的不一致**（结论已被 §8.17 推翻并修复）
 
 （已解决，见 §8.17）实测：2.3 印数值 `[AttributeUsage(27524, …)]`，3.2 曾展开为
 `AttributeTargets.Class | AttributeTargets.Property | …`。根因：3.2 的 `AstBuilder` 为
@@ -380,3 +380,30 @@ MessagePack 16/297），抽样确认**主因是编译器生成的类型**（`Nul
 
 语料 identical/diffLines：DnSpy.dll 556/32248 → **741/31073**；Debugger 108/5735 → **186/5449**；
 Logic 29/10021 → **44/9842**。VB 亦同步（VB 由 C# AST 转换而来，`Me.` 与 2.3 一致）。
+
+### 8.18 静态字段初始化器：已复刻（2026-11-17）
+
+**差异**：2.3 把 cctor 开头的 `字段 = 表达式;` 序列**提升回字段声明**（`private static readonly
+Dictionary<…> toDebuggerColor = new Dictionary<…>();`），cctor 里只剩真正的逻辑（`ColorConverter.AddColors(…)`）；
+3.2 保留在 cctor 内联（`toDebuggerColor = new …; toDnSpyColor = new …; AddColors(…)`），字段声明不带初始化器。
+
+**根因**：引擎转换 `CSharp/Transforms/ConvertConstructorCallIntoInitializer.cs` 的
+`HandleStaticFieldInitializers` 有一道 `ctorMethodDef.DeclaringType.IsBeforeFieldInit` 门槛，
+只有 BeforeFieldInit 类型才提升。实测 `dnSpy.Contracts.Debugger.Text.DnSpy.ColorConverter`
+的 IL 为 `.class public auto ansi abstract sealed`（**无 `beforefieldinit`**），2.3 依然提升
+→ 2.3 侧**没有这道门槛**。
+
+**修改**：去掉该门槛（并随之去掉仅用于判定的 `GetCecil` 调用与 `using Mono.Cecil;`），
+把 cctor 前缀的静态字段/属性赋值无条件提升回声明处；提升后 cctor 为空则删除。
+只提升「赋值表达式 + 静态字段/属性目标」的前缀，顺序与副作用次序不变。
+
+**验证**：
+- 单类型：`ColorConverter` 的字段声明已与 2.3 逐字节一致，cctor 内联的两行消失（该类型晋升为 identical）。
+- 语料（C#，identical/diffLines）：DnSpy.dll 741/31073 → **741/30973**；Debugger 186/5449 → **187/5442**；
+  Logic 44/9842 → **44/9824**。合计 diffLines 46364 → **46239**，identical 971 → **972**。
+- `verify-all`：hardFail=0、skip=0；唯一 softFail 为单类型 `lang-diff`（Mixed 870 / VB 70，
+  与修改前逐字节相同的数字），IL 语料仍 1310/303/114 全 identical、diffLines=0。
+
+**剩余同源差异**（不属本节）：静态调用的类型限定（2.3 `ColorConverter.AddColors` vs 3.2 `AddColors`）、
+数组初始化器的换行密度、枚举装箱形态（`BoxedTextColor.Box(91)` vs `TextColor.Error.Box()`）、
+`out var` vs `ref` 局部 + 语句形态、局部名（PDB）。

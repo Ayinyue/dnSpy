@@ -799,3 +799,22 @@ type reference 被 3.2 的 using 计算算入。
   IL 语料仍 1310/303/114 全 identical；net48 构建 0 错误。
 
 **对真实应用同样有效**：3.2 引擎从此也会显示 PDB 局部名，与 2.3 的行为一致。
+
+### 8.33 委托构造：改用显式委托类型（2026-11-17）
+
+**差异**：2.3 总是写出委托类型 —— `wpfHexView.Closed += new EventHandler(this.WpfHexView_Closed);`；
+3.2 用隐式方法组转换 —— `+= this.WpfHexView_Closed;`。
+逐类型复核确认（`dnSpy.BackgroundImage.HexViewBackgroundImageService`：2.3 与 3.2 各 2 处 vs **0 处**）。
+
+**根因**：`DecompilerSettings.UseImplicitMethodGroupConversion` 默认 `true`
+（`DecompilerSettings.cs:387`；仅当语言版本 < C# 2 才置 false）。dnSpy 2.3 输出的是显式形式。
+3.2 引擎本身**会**生成 `new D(...)`（`CallBuilder.cs:885` 的 `ObjectCreateExpression`），
+由 `TranslatedExpression.cs:188` 依据该设置决定打印成哪一种。
+
+**修改**：`DecompilerSettings32` 构造里设 `EngineSettings.UseImplicitMethodGroupConversion = false`。
+
+**验证**：
+- 语料：Contracts.DnSpy 839/21994 → **840/21982**；Debugger 221/4983（不变）；Logic 55/8141（不变）。
+  合计 35118 → **35106**，identical 1115 → **1116**（语料里委托转换很少，主要收益在 dnSpy.dll 之类的大装配）。
+- `dnSpy.BackgroundImage.HexViewBackgroundImageService` 的 `new EventHandler(...)` 已与 2.3 逐处一致。
+- `verify-all`：hardFail=0、skip=0；IL 语料仍全 identical。

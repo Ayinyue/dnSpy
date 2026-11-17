@@ -85,6 +85,10 @@ namespace dnSpy.Decompiler.ILSpy32.Settings {
 			// dnSpy's 2.3 engine put System.* usings first (SortSystemUsingStatementsFirst);
 			// the 3.2 engine sorts all namespaces ordinal-ascending instead.
 			EngineSettings.SortSystemUsingStatementsFirst = true;
+			// dnSpy 2.3 always spelled out the delegate type for method-group conversions
+			// ('obj.Event += new EventHandler(this.M)'); the 3.2 engine defaults to the
+			// implicit form ('obj.Event += this.M').
+			EngineSettings.UseImplicitMethodGroupConversion = false;
 			// dnSpy's 2.3 formatting policy collapsed an all-empty accessor list onto the
 			// declaration line ({ get; set; }); the 3.2 engine exposes the switch but its
 			// output visitor never applied it. ForceOneLine is 2.3's PropertyFormatting.SingleLine.

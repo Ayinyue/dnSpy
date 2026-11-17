@@ -1160,5 +1160,20 @@ C# 视图对 `HexBytes` 看到 **170** 个 `CheckedUncheckedAnnotation`（VB 视
 `ILAstOptimizer`/`ILReader` 在 `conv.ovf` + `ldelem` 组合上的差异（2.3 侧 `ILAstOptimizer.cs:1040`
 附近的 `PatternStatementTransform` 保留了临时变量，可作对照）。
 
+**元凶找到了，但一次改不全（已回退，净 +36 行）**：`IL/Transforms/ExpressionTransforms.cs:184`
+的 `CleanUpArrayIndices` 会**删掉数组下标里的 `conv.i`** —— 条件命中
+`conv.Kind == SignExtend && conv.CheckForOverflow`（`conv.ovf.i` 正是 int→native int 的符号扩展+溢出检查），
+于是溢出检查被丢弃。
+
+试「checked 转换不删」后：
+- 3.2 印 `this.bytes[checked((long)(IntPtr)index)]`，2.3 印 `(int)this.bytes[(int)(checked((IntPtr)index))]`
+  —— 语义对了，但**还有第二处差异**：`ExpressionBuilder.TranslateArrayIndex`（`:1821`）对
+  `StackType.I`（native int）选 **`Int64`**，2.3 选 **`Int32`**；且 2.3 在索引外还有 `(int)`、
+  整个表达式外还有 `(int)`。
+- 结果：`HexBytes` diffLines 404 → 440，Contracts.DnSpy 16041 → 16077（**变差，已回退**）。
+
+**下一步**：把 `TranslateArrayIndex` 的 `StackType.I` 分支从 `Int64` 改成 `Int32`，
+并同时保留 checked 转换（即 `CleanUpArrayIndices` 对 checked 跳过），再整体对拍。
+
 **另两类已计数但未修**：`.Invoke()`（2.3 印 `handler.Invoke(...)`，3.2 省略，2.3 有 21 处/3.2 3 处）；
 `= default(...)` 局部初始化器（3.2 比 2.3 多 31 处，责任点 `DeclareVariables.cs:449`）。

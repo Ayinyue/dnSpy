@@ -923,3 +923,19 @@ obj.IsVisibleChanged -= new DependencyPropertyChangedEventHandler(UIUtilities.se
   这样后续即使切走也不会让这 28 个提交变成不可达对象；
 - `git tag -a ilspy32-port-snapshot-20261117 HEAD -m "Snapshot of the 3.2 port work on 2026-11-17 (28 commits ahead of origin/master)"`。
 - 两者都是**本地**操作，可逆（`git branch -d` / `git tag -d`），不涉及任何远端。
+
+**✅ 已落库（2026-11-17，用户提供 fork 后）**：
+- 发现 `https://github.com/Ayinyue/ILSpy.git` 存在（分支 `ilspyv2` / `ilspyv3` /
+  `ilspyv3-dnSpy` / `ilspyv3-old` / `master` / `newdecompiler`）。
+- 引擎：`git push https://github.com/Ayinyue/ILSpy.git feature/ilspy32-upstream-port`
+  → 新分支，tip = **`8b7ee65`**（即 superproject 的 gitlink 值，**已验证可解析**）。
+- superproject：`git push origin feature/ilspy32`（`origin` = `Ayinyue/dnSpy`）
+  → 新分支，tip = **`4fed919ab`**。
+- 同时把 `.gitmodules` 里该子模块的 url 改为 `https://github.com/Ayinyue/ILSpy.git`
+  并加 `branch = feature/ilspy32-upstream-port`（随 `4fed919ab` 一起提交），
+  这样全新克隆可以正常拉取子模块。
+
+**注意（分歧提示）**：本地引擎历史与 `Ayinyue/ILSpy` 现有分支**分歧很大**
+（与 `ilspyv3` / `ilspyv3-dnSpy` 的 merge-base 之后，对方各有 9200+ 提交、我方 27 个）。
+本次是**新分支**推送，没有覆盖对方任何分支；若后续要把这 27 个提交并入 `ilspyv3-dnSpy`，
+需要单独做一次 rebase/merge 评估。

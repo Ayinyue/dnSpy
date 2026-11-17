@@ -407,3 +407,41 @@ Dictionary<…> toDebuggerColor = new Dictionary<…>();`），cctor 里只剩�
 **剩余同源差异**（不属本节）：静态调用的类型限定（2.3 `ColorConverter.AddColors` vs 3.2 `AddColors`）、
 数组初始化器的换行密度、枚举装箱形态（`BoxedTextColor.Box(91)` vs `TextColor.Error.Box()`）、
 `out var` vs `ref` 局部 + 语句形态、局部名（PDB）。
+
+### 8.19 静态成员访问的类型限定：已复刻（2026-11-17）
+
+**差异**：2.3 对**静态成员访问**（静态字段、静态方法、静态属性/事件访问器、委托方法组）
+**无条件**用声明类型名限定，即使声明类型就是当前类型或包含类型：
+
+| 位置 | 2.3 | 3.2（修前） |
+|---|---|---|
+| 静态方法 | `ColorConverter.AddColors(…)` | `AddColors(…)` |
+| 静态字段 | `ColorConverter.toDebuggerColor.Add(…)` | `toDebuggerColor.Add(…)` |
+| 静态字段（私有） | `DbgCodeBreakpointSettings.emptyLabels` | `emptyLabels` |
+| 静态方法（私有） | `DbgCodeBreakpointSettings.LabelsEquals(…)` | `LabelsEquals(…)` |
+
+**证据**：对 `dnSpy.Contracts.Debugger.dll` 全量转储后统计「代码行内（排除 XML 文档注释）
+以自身短名限定的访问」，2.3 有 13/8/6/5/5/4… 处（DbgEngineModule、DbgEngineThread、
+ColorConverter、DbgExceptionId、DbgCodeBreakpointSettings…），**3.2 为 0**。
+
+**根因**：`ExpressionBuilder.ConvertField` 与 `CallBuilder` 的三处 `requireTarget` 判定
+（普通调用 / 访问器调用 / 委托方法组）对静态成员写作
+`requireTarget = !IsCurrentOrContainingType(declaringType)`，即「声明类型是当前或包含类型时省略限定」。
+2.3 无此条件。
+
+**修改**：上述 4 处对静态成员一律 `requireTarget = true`（与 §8.17 的 `this.` 同源的输出层规则）。
+
+**验证**：
+- 单类型：`ColorConverter` 的 `ColorConverter.AddColors` / `ColorConverter.toDebuggerColor` 已与 2.3 一致。
+- 语料（C#，identical/diffLines）：DnSpy.dll 741/30973 → **742/30623**；Debugger 187/5442 → **187/5440**；
+  Logic 45/9824 → **45/9768**。合计 diffLines 46239 → **45831**（-408），identical 972 → **974**。
+- `verify-all`：hardFail=0、skip=0；唯一 softFail 仍是既有的单类型 `lang-diff`（数字未变）；
+  IL 语料保持 1310/303/114 全 identical。
+
+**仍未对齐（待查项）**：**嵌套类型名**的限定。2.3 印 `DbgEngineModule.UpdateOptions.IsExe`、
+`DbgExceptionId.Flags.KindMask`、`(DbgExceptionId.Flags)0`，3.2 印 `UpdateOptions.IsExe`、
+`Flags.KindMask`、`(Flags)0`。这些出现在**枚举常量 / 枚举转换**上下文（`ConvertEnumValue` →
+`TypeReferenceExpression(ConvertType(type))`），而同一类型作为字段声明类型时 3.2 已经是限定的
+（`private readonly DbgExceptionId.Flags flags;`），两者相矛盾，说明决策点不在 `ConvertTypeHelper`
+的短名分支（`AlwaysUseShortTypeNames=true` 时该分支恒命中）。曾试在 `ConvertTypeHelper` 加
+`DeclaringType == null` 门槛：语料仅 -14 行、枚举路径完全未变，**已回退**，待定位真实决策点。

@@ -1257,3 +1257,32 @@ C# 视图对 `HexBytes` 看到 **170** 个 `CheckedUncheckedAnnotation`（VB 视
 
 **验证**：语料 Contracts.DnSpy 16030 → **15950**、Debugger 2814 → **2794**（合计 26311 → **26211**，
 **-100**），identical 1146 → **1155**。`verify-all` hardFail=0。
+
+### 8.48 最新残余普查（2026-11-18）+ 整值 double 字面量线索
+
+**普查**（对 `dnSpy.Contracts.DnSpy.dll` 取实际 diffLines top25，合计 7301 行 ≈ 全语料 15950 的 46%）：
+
+| 类别 | 变更行 | 占比 |
+|---|---|---|
+| **G 其它** | 2002 | **78.3%** |
+| **A 控制流塑形** | 306 | 12.0% |
+| **B 显式转换** | 143 | 5.6% |
+| E 委托 / `new T?` | 26 | |
+| D `.Invoke()` | 16 | |
+| C `default(T?)` | 14 | |
+| F 括号 | 3 | |
+
+G 的子项：临时变量 117、`L` 后缀 46、扩展方法语法 46、`?.` 38、**整值 double 字面量 38**、Nullable 特性 28。
+
+**整值 double 字面量（新线索，38 处）**：`--all` 全量计数 —— 2.3 有 **267** 个 `\d+\.0`，3.2 只有 **23** 个。
+实例（`MetroWindow`）：2.3 印 `new Size(96.0, 96.0)` / `96.0 * M11`，3.2 印 `new Size(96, 96)` / `96 * M11`。
+**已排除**：`DnSpyTokenWriter.FormatPrimitiveLiteral`（:1196-1197）与引擎 `TextWriterTokenWriter`（:326-328）
+**都已经有「整数部分无小数点就补 `.0`」的逻辑**。所以这 244 处差异来自**另一条渲染路径**
+（值可能不是 `double`，或走了 `literalValue`/其它分支）。**未修**，值得下一轮先确认那个 `96` 的值的 CLR 类型。
+
+**A（控制流塑形，306 行，最大类）**：跨 `IL/ControlFlow/SwitchDetection.cs`、`ControlFlowSimplification.cs`、
+`CSharp/ExpressionBuilder.cs:2210` 三处，单类可修性低。实例：`return mod != null && (mod.Characteristics & 8192) == 0;`
+（2.3）vs `if (mod != null) { return …; } return false;`（3.2）；`if (msg == 736)` 链（2.3）vs `switch (msg)`（3.2）。
+
+**B（显式转换，143 行）**：见 §8.44；普查建议的入口 `TranslatedExpression.cs:173` / `ExpressionBuilder.cs:1305`
+两处补丁已验证可行（IntPtr / checked / 数组下标），但 `ldelem` 元素级 cast 仍未解决。

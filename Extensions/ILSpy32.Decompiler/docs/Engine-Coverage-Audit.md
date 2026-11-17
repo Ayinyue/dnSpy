@@ -898,3 +898,22 @@ obj.IsVisibleChanged -= new DependencyPropertyChangedEventHandler(UIUtilities.se
 若确实丢失，在读取时保留 modreq 并在 `ConvertParameter` 里判定即可；
 这同时能解释为什么「元数据里查得到 `IsReadOnlyAttribute` 字符串、cecil 的
 `CustomAttributes` 里却没有」（它不是 CustomAttribute，而是 modreq）。
+
+### 8.36 引擎子模块的 git 状态：**全部工作只在本地**（2026-11-17 核实）
+
+`Extensions/ILSpy32.Decompiler/ICSharpCode.Decompiler`：
+
+- **HEAD 处于 detached 状态**（`git rev-parse @{u}` → `fatal: HEAD does not point to a branch`）；
+- `git remote -v` 指向 **`https://github.com/icsharpcode/ILSpy.git`（上游仓库，不是 fork）**；
+- 相对 `origin/master` **领先 28 个提交**（含本次会话的 8 个引擎修复），
+  且基点 `a9a7288b8` **不在任何远端分支上**（`git branch -r --contains a9a7288b8` 为空）。
+
+**影响**：这些工作目前**只存在于本地磁盘**，一旦工作副本丢失就无法恢复；而且因为 remote 是上游仓库，
+既没有权限也不应该直接推上去。
+
+**建议的收口动作**（需要你决策/提供 fork）：
+1. 在子模块里 `git switch -c feature/ilspy32-upstream-port`（把当前 HEAD 固化成分支）；
+2. 把该分支推到**你们自己的 fork** 并设 upstream；
+3. superproject 的 gitlink 自然会指向这些提交，再推 superproject 即可。
+
+**在动手推之前需要你确认**：fork 地址、是否要保留 detached 状态、以及谁来做这次推送。

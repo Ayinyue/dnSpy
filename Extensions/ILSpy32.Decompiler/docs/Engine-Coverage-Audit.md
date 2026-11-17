@@ -994,3 +994,19 @@ obj.IsVisibleChanged -= new DependencyPropertyChangedEventHandler(UIUtilities.se
 3.2 在 `CallBuilder.cs:686/780` 无条件生成 `IndexerExpression`；2.3 在
 `AstMethodBodyBuilder.cs:1278-1283` 要求 `prop.GetMethod == methodDef`，
 corlib 未解析时落回 `get_Chars(...)`。改法：在 `HandleAccessorCall:780` 加同一门控。**未实施**（约 27 处）。
+
+### 8.38 方法体内「值与 0 比较」的枚举命名：已修（2026-11-17）
+
+§8.37(3) 定位到 `TranslatedExpression.ConvertToBoolean`：它用**硬编码 Int32** 的
+`new PrimitiveExpression(0)` 与表达式比较，绕过了 `ConvertEnumValue`，于是
+`if (kind != 0)` 而不是 2.3 的 `if (kind != SearchColumnCommandParser.TokenKind.Text)`。
+
+**修改**：改用 `expressionBuilder.ConvertConstantValue(new ConstantResolveResult(Type, 0))`，
+让零常量带上表达式自身的类型（与 2.3 的 `AstMethodBodyBuilder.cs:1587-1594` 一致）。
+
+**验证**：语料 Contracts.DnSpy 16233 → **16211**（合计 26529 → **26507**）；
+`SearchColumnCommandParser` 现在能印出 `TokenKind.Text`（2.3 3 处 / 3.2 由 1 处升到 2 处）。
+`verify-all` hardFail=0。
+
+**剩余同源**：`kind - TokenKind.Command > 1`（2.3）vs `(uint)(kind - 1) > 1U`（3.2）——
+算术操作数的类型提示还没传对（见 §8.37(3) 末尾），**未修**。

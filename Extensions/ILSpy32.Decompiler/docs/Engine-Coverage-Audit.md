@@ -1358,5 +1358,11 @@ right = PrepareArithmeticArgument(right, inst.RightInputType, inst.Sign, inst.Is
 `InferredType`），把常量操作数重定到该类型；或验证 2.3 是否对**所有**操作数（含非常量）都做。
 若只对常量做，改动面很小；若对所有操作数做，需要评估对 `int`/`uint` 混合运算的影响。
 
+**✅ 已实施**：不需要额外的结果类型字段 —— `ResolveBinaryOperator` 返回的 `rr.Type` 就是结果类型。
+在 `HandleBinaryNumeric` 解析出 `rr` 之后，把**编译期常量**操作数重定到 `rr.Type`
+（`RetypeConstantToResultType` → `ConvertConstantValue`，后者已含整型重定）。
+实测 `HexBytes` 的 `index + 1` 现在印 `index + 1L`（3 处）。语料 15761 → 15760 —— 幅度小是因为
+`HexBytes` 的 400 行差异主要由其它项贡献；`L`/`U` 后缀的总体缺口（130 vs 38、199 vs 61）主体仍未解。
+
 **同一规则也解释 B 类（显式转换）**：`ldelem.u1` 的结果在 IL 栈上是 I4，2.3 按目标类型定型后
 会补 `(int)`；3.2 不补。两者是同一条「按目标类型定型」规则的两个面。

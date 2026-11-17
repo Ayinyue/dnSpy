@@ -1304,8 +1304,13 @@ G 的子项：临时变量 117、`L` 后缀 46、扩展方法语法 46、`?.` 38
 
 四项同时成立在现有代码下**不可能**，说明存在一条既非 `WritePrimitiveValue` 两条分支、
 也不设置 `UnsafeLiteralValue` 的输出路径（或输出后被再次改写）。
-**下一步只需一步**：在 `DnSpyTokenWriter` 里给**所有** `EmitText`/`output.Write` 调用点加计数，
-打印出真正输出 `"96"` 的那一处。
+
+**再排除一条（决定性）**：在**引擎** `TextWriterTokenWriter.WritePrimitiveValue` 入口拦截
+`value is double && value == 96.0` —— **0 命中**。
+即这个 96.0 **既不走扩展的 `DnSpyTokenWriter`，也不走引擎的 `TextWriterTokenWriter`**。
+两个 writer 的 double 分支都会补 `.0`，输出却是 `96` —— 该字面量的渲染完全绕过了
+`WritePrimitiveValue` 这一层。**下一步应查 `CSharpOutputVisitor` 里直接写 token 的分支，
+或 dnSpy 输出层对文本的二次改写。**
 
 **又排除一条**：在 `EmitText` 入口拦截 `text == "96"` —— **完全没有命中**。
 即 `"96"` 既不走 `WritePrimitiveValue`，也不走 `EmitText`。

@@ -1216,3 +1216,9 @@ C# 视图对 `HexBytes` 看到 **170** 个 `CheckedUncheckedAnnotation`（VB 视
 所以 `(int)` 来自**别处**（很可能是 2.3 的 `TypeAnalysis`/`CastInsertion`：当 IL 栈类型（I4）与 C# 元素类型
 （`byte`）不一致时插入显式转换）。**未修**，这是「cast」类差异的主体，值得下一轮从
 「2.3 在何处插入 IL 栈类型→C# 类型的显式转换」入手。
+
+**补充定位**：`(int)` 是**元素级**的 —— 2.3 有 `return (int)this.bytes[...]`（2 处），3.2 **0 处**；
+即 `ldelem.u1` 的结果被 2.3 显式转成 `int32`（IL 栈类型）。两侧都没有专门的 cast transform
+（`Ast/Transforms`、`CSharp/Transforms` 里都没有 `*Cast*`），2.3 的二元运算符构造
+（`AstMethodBodyBuilder.cs:496-552`）也不加转换。**结论：插入点在 2.3 的 ILAst→AST 阶段
+（`ldelem` 结果的类型提升），需要在 2.3 的 `ILAstOptimizer` 里找 `Ldelem` 相关的类型改写。**

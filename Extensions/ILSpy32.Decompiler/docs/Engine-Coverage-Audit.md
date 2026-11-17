@@ -818,3 +818,34 @@ type reference 被 3.2 的 using 计算算入。
   合计 35118 → **35106**，identical 1115 → **1116**（语料里委托转换很少，主要收益在 dnSpy.dll 之类的大装配）。
 - `dnSpy.BackgroundImage.HexViewBackgroundImageService` 的 `new EventHandler(...)` 已与 2.3 逐处一致。
 - `verify-all`：hardFail=0、skip=0；IL 语料仍全 identical。
+
+### 8.34 缓存的事件委托被 3.2 内联（**疑似 3.2 侧不正确**，2026-11-17）
+
+`dnSpy.Contracts.Utilities.UIUtilities` 里，2.3 保留 Roslyn 为静态事件生成的**委托缓存字段**：
+
+```csharp
+DependencyPropertyChangedEventHandler d;
+if ((d = UIUtilities.<>O.<0>__selector_IsVisibleChanged) == null)
+{
+    d = (UIUtilities.<>O.<0>__selector_IsVisibleChanged = new DependencyPropertyChangedEventHandler(UIUtilities.selector_IsVisibleChanged));
+}
+selector.IsVisibleChanged += d;
+```
+
+3.2 输出了
+
+```csharp
+selector.IsVisibleChanged += new DependencyPropertyChangedEventHandler(UIUtilities.selector_IsVisibleChanged);
+...
+obj.IsVisibleChanged -= new DependencyPropertyChangedEventHandler(UIUtilities.selector_IsVisibleChanged);
+```
+
+**语义后果**：`-=` 用的是**新建的**委托实例，永远不会匹配到先前 `+=` 的那个 ——
+事件注销变成空操作。2.3 的写法（复用缓存实例）才是正确的。
+**这不是风格差异，而是 3.2 侧的正确性缺陷**（`DelegateConstruction` 相关 transform 把缓存字段整个消掉了；
+引擎里搜不到 `Cached` 相关分支，具体是哪条 transform 还在排查）。
+
+同一方法里还有 §8.13 的另外两类：可空枚举比较（`ChangedButton == null` vs `!= 0`，7 行）
+与可空/布尔塑形（`A || !B` vs 提前返回）。
+
+**建议**：这条应优先于其余风格类差异处理 —— 它影响反编译结果的可信度。

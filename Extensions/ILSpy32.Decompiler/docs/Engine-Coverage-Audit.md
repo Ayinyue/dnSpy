@@ -1312,12 +1312,22 @@ G 的子项：临时变量 117、`L` 后缀 46、扩展方法语法 46、`?.` 38
 `WritePrimitiveValue` 这一层。**下一步应查 `CSharpOutputVisitor` 里直接写 token 的分支，
 或 dnSpy 输出层对文本的二次改写。**
 
-**又排除一条**：在 `EmitText` 入口拦截 `text == "96"` —— **完全没有命中**。
-即 `"96"` 既不走 `WritePrimitiveValue`，也不走 `EmitText`。
-`DnSpyTokenWriter` 里绕过 `EmitText` 的 `output.Write` 只有：XmlDoc 分隔符（:1096-1109）、
-字符串（:1159）、char（:1164）、decimal（:1169）、float 特殊值（:1178）、float（:1183）——
-都不可能产出 `"96"`。**说明渲染这个字面量的 writer 根本不是 `DnSpyTokenWriter`**，
-或输出被更外层改写。下一轮应直接检查该类文件实际使用的 `IDecompilerOutput`/`TokenWriter` 实例。
+### 8.49 整值 double 字面量：`FormatPrimitiveLiteral` 缺 `.0`（已修）
+
+**真相**：`DnSpyTokenWriter.WritePrimitiveValue` 的 **primitive-ref 分支**（`nodeStack.Peek().Annotation<ResolveResult>()`
+存在时）走的是 `FormatPrimitiveLiteral(value)`，而该助手（`:1278`）**只做了特殊值名 + 后缀，
+没有补 `.0`** —— `.0` 逻辑只存在于 `WritePrimitiveValue` 的另一分支（`:1195-1198`）。
+这就是「两个 writer 都补 `.0` 却输出 `96`」的全部原因：**根本没走到那段逻辑**。
+
+**修改**：在 `FormatPrimitiveLiteral` 的 double 分支里补上
+`number.IndexOf('.') < 0 && number.IndexOf('E') < 0` → `number += ".0"`。
+
+**验证**：语料 Contracts.DnSpy 15950 → **15764**、Debugger 2794 → **2780**、Logic 7467 → **7461**
+（合计 26211 → **26005**，**-206**），identical 1155 → **1176**（+21）。
+`verify-all` hardFail=0。`--all` 口径下 2.3 的 `\d+\.0` 有 267 个，此修复让 3.2 大幅靠拢。
+
+**又排除一条**：在 `EmitText` 入口拦截 `text == "96"` —— **完全没有命中**（该结论已被 §8.49 解释：
+primitive-ref 分支走 `FormatPrimitiveLiteral`，不经 `EmitText` 的文本比较路径）。
 
 **A（控制流塑形，306 行，最大类）**：跨 `IL/ControlFlow/SwitchDetection.cs`、`ControlFlowSimplification.cs`、
 `CSharp/ExpressionBuilder.cs:2210` 三处，单类可修性低。实例：`return mod != null && (mod.Characteristics & 8192) == 0;`

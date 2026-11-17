@@ -1288,6 +1288,12 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 				var name = GetSpecialDoubleConstantName(dbl);
 				if (name != null)
 					return "double." + name;
+				// dnSpy 2.3 always keeps the decimal point ('96.0', not '96'); the '.0' logic
+				// lives in WritePrimitiveValue's other branch, which this path bypasses.
+				var number = dbl.ToString("R", NumberFormatInfo.InvariantInfo);
+				if (number.IndexOf('.') < 0 && number.IndexOf('E') < 0)
+					number += ".0";
+				return number;
 			}
 			var sb = new StringBuilder();
 			sb.Append(((IFormattable)value).ToString(null, NumberFormatInfo.InvariantInfo));

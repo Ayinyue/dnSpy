@@ -475,3 +475,29 @@ error CS0411 / CS8129 / CS8130: KeyValuePair<ILFunction, List<SequencePoint>> �
 
 **新增常态门禁**：后续改动必须同时构建 `net10.0-windows` 与 `net48` 两个目标
 （`dotnet build dnSpy.sln -c Release`），只构建单目标不算验证通过。
+
+### 8.21 两项待查的系统性差异（2026-11-17，仅诊断，未改代码）
+
+**先确认基线有效性**：曾怀疑 2.3 与 3.2 读到了不同的 `dnSpy.dll`（同一类型
+`ThemeClassificationFormatDefinitions` 的**字段 RID 不同**：2.3 首字段 RID 1339 / 3.2 RID 1532）。
+核实结论：**程序集相同**——当前 `dnSpy.dll` 中 `DisabledAdvancedTracepointStatement…` 与
+`NaturalLanguageClassificationTypeDefinition` 两组字段名**都存在**（二进制内可见），
+类型 token 也一致（`0x020001C1`）。所以是**同类型、同字段集、不同输出形态**，基线有效。
+
+**(1) 成员顺序**：`ThemeClassificationFormatDefinitions` 两引擎字段顺序完全不同
+（2.3：NaturalLanguage→FormalLanguage→Literal→Identifier→Other→WhiteSpace→…；
+3.2：DisabledAdvancedTracepointStatement→AsmMnemonic→Black→…）。3.2 的顺序既非字母序也非
+RID 升序（首字段 RID 1532 > 2.3 的 1339），形似**哈希/字典序**，怀疑在 dnlib→cecil 桥
+或成员枚举路径上丢失了元数据顺序。该类型单文件 diff 达 7141 行，是 DnSpy 语料最大单一差异源。
+
+**(2) 枚举常量的代码形态**：2.3 在**代码**里把枚举常量打印成**数值**，3.2 恢复成**枚举成员名**。
+`dnSpy.Themes.ColorInfos` 中 `new BrushColorInfo(16528, "Selected text")`（2.3）vs
+`new BrushColorInfo(ColorType.SelectedText, "Selected text")`（3.2）；该文件 2.3 里
+`ColorType.` 出现 **0 次**（769 处数值），3.2 里出现 **754 次**。
+同类还有 `this.blockFlags = (isXaml ? 7431 : 7175)`（2.3）vs
+`(isXaml ? CodeBracesRangeFlags.XamlBlockBraces : CodeBracesRangeFlags.XmlBlockBraces)`（3.2）。
+但 2.3 并非一律数值：`DbgImageLayout.Unknown`、`TextColor.Error` 在 2.3 里是带名的
+（出现在 switch / 实例方法接收者位置）。**规则未钉死**：需先逆出 2.3「何时命名、何时数值」
+（候选假设：switch 标签 / 接收者位置命名，其余数值；或按枚举可见性/所属程序集区分），
+再决定 3.2 侧改法。全量 `dnSpy.dll` 原始行 diff 214470 行，其中 2.3 含 ≥2 位数字的行 13933、
+3.2 含 `X.Y` 成员引用的行 25043，量级说明这两项是剩余差异的大头。

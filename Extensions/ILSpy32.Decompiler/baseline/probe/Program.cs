@@ -968,7 +968,9 @@ class Probe {
 			var text = mdi.Statements.Length > 0 ? Decompile(dec32cs, statementVariety, true).ToString() : "";
 			var span = first!.TextSpan;
 			var excerpt = text.Substring(span.Start, Math.Min(span.Length, 60));
-			Check(excerpt.Contains("num"), $"1b C# first SP text aligned ('{excerpt.Trim()}' contains 'num')");
+			// The bridge reads the PDB when it can (to match the 2.3 engine's local names), so the
+			// local is 'sum' when symbols are available and the generated 'num' when they are not.
+			Check(excerpt.Contains("num") || excerpt.Contains("sum"), $"1b C# first SP text aligned ('{excerpt.Trim()}' contains 'num'/'sum')");
 		});
 
 		// 2. VB statement-level SPs.
@@ -979,7 +981,8 @@ class Probe {
 		// 3. C# debug locals: SimpleStatements maps 'num' by slot.
 		DumpStatements(dec32cs, statementVariety, "SimpleStatements", mdi => {
 			var locals = mdi!.Scope.Locals;
-			Check(locals!.Any(l => l.Name == "num"), $"3a C# SimpleStatements locals contain 'num' ({string.Join(",", locals!.Select(l => l.Name))})");
+			// See 1b: 'sum' with symbols, generated 'num' without.
+			Check(locals!.Any(l => l.Name == "num" || l.Name == "sum"), $"3a C# SimpleStatements locals contain 'num'/'sum' ({string.Join(",", locals!.Select(l => l.Name))})");
 		});
 
 		// 4. VB debug locals: LinqAndLock has >= 3 (stringReader/enumerator/item).

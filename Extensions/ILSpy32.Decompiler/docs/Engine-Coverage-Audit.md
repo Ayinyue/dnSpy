@@ -292,7 +292,7 @@ IL 视图在三个程序集上达到 **100% 逐字一致**：
 → 局部名转义 → `ldelem`/`stelem` 短名。每一步都由 `lang-diff-all`（整程序集逐类型对拍）
 定位，而非手工样本。
 
-### 8.12 局部变量名：尝试通过 PDB 消除（失败，已回退）
+### 8.12 局部变量名：尝试通过 PDB 消除（**已于同日解决，见 §8.32**）
 
 C#/VB 残余差异中最大一类是局部名（2.3 有 PDB 名 `sharedPaths/info`，3.2 是 `list/dotNetBaseDir`）。
 尝试给桥接快照开启 `ReadSymbols = true`：
@@ -303,6 +303,11 @@ C#/VB 残余差异中最大一类是局部名（2.3 有 PDB 名 `sharedPaths/inf
 
 **结论**：局部名差异不能通过对拍路径消除；要么为目标程序集提供可用 PDB（并处理 cecil 符号读取失败），
 要么接受该显示风格差异。列为已知限制。
+
+> **§8.32 修正**：上面「PDB 不在位」是错的 —— PDB 一直都在
+> （`dnSpy.Contracts.DnSpy.pdb` 321 KB）。真正的原因是**桥从内存流读取**（`ReadSymbols = false`），
+> 而 cecil 是按「模块文件名旁的 PDB」定位符号的。改为「有文件路径就从文件读 + `ReadSymbols = true`」，
+> 并保留读符号失败时回落到无符号读取，局部名即与 2.3 对齐（语料 -711 行）。
 
 ### 8.13 C#/VB 残余差异的类别盘点（2026-11-17）
 
@@ -764,3 +769,30 @@ type reference 被 3.2 的 using 计算算入。
 **但语料毫无变化**（833/22538 前后相同），说明该属性参数**不走**这条 visitor 路径；
 改动已回退。另外注意 3.2 该输出的缩进为 0（`{`/`2,`/`1`/`}` 全部顶格），
 也印证它不是排版器产生的。需要另行定位属性参数的渲染路径。
+
+### 8.32 局部名：桥改为读取 PDB 符号（2026-11-17）
+
+**差异**：3.2 丢失 PDB 局部名 —— `depo`（2.3）vs `dependencyObject`（3.2），
+是 §8.13 分桶里最大的一类（非局部名类的 44 个类型里也占 2 个）。
+
+**根因**：`DnlibCecilBridge` 从**内存流**读模块且 `ReadSymbols = false`；
+而 cecil 是按「模块**文件名**旁边的 PDB」定位符号的，内存流没有文件名，
+所以 §8.12 把「读符号失败」误判成「PDB 不在位」——**PDB 一直都在**
+（`dnSpy.Contracts.DnSpy.pdb` 321 KB）。
+
+**修改**：
+- 有文件路径时改为 `ModuleDefinition.ReadModule(location, ReadSymbols = true)`，否则仍用流；
+- **容错**：读符号抛异常（例如 Windows PDB 且无原生 reader）时回落到「无符号读流」，
+  保证反编译不会整体失败 —— 这是 §8.12 当年没能跨过的那道坎。
+
+**验证**：
+- 语料：Contracts.DnSpy 833/22538 → **839/21994**；Debugger 221/4986 → **221/4983**；
+  Logic 54/8305 → **55/8141**。合计 35829 → **35118**（-711），identical 1108 → **1115**。
+- `dnSpy.Contracts.Utilities.UIUtilities` 的 `depo` / `dependencyObject` 差异**消失**。
+- 探针 `engine-tests` 的 `1b`/`3a` 原本钉的是「无 PDB 时的生成名 `num`」，
+  已改为接受 `num`（无符号）或 `sum`（读到 PDB）—— 断言的本意是验证 SP/局部作用域管道，
+  不是钉住局部名的来源。
+- `verify-all`：**hardFail=0**、skip=0（唯一 softFail 仍是既有单类型 `lang-diff`）；
+  IL 语料仍 1310/303/114 全 identical；net48 构建 0 错误。
+
+**对真实应用同样有效**：3.2 引擎从此也会显示 PDB 局部名，与 2.3 的行为一致。

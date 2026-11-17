@@ -108,9 +108,28 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 				resolver = (FailSoftAssemblyResolver)CreateResolver(location, module);
 				var readerParams = new ReaderParameters {
 					AssemblyResolver = resolver,
-					ReadSymbols = false,
+					// Reading symbols gives the engine the real local names. Cecil locates the
+					// PDB next to the module's file name, which a memory stream does not have,
+					// so read from the original file when it is available and fall back to the
+					// snapshot stream otherwise (in-memory modules).
+					ReadSymbols = true,
 				};
-				var cecilModule = ModuleDefinition.ReadModule(stream, readerParams);
+				ModuleDefinition cecilModule;
+				try {
+					if (!string.IsNullOrEmpty(location) && File.Exists(location))
+						cecilModule = ModuleDefinition.ReadModule(location, readerParams);
+					else
+						cecilModule = ModuleDefinition.ReadModule(stream, readerParams);
+				}
+				catch {
+					// Some assemblies carry a PDB cecil cannot read (e.g. Windows PDBs without a
+					// native reader). Decompilation must still work, so retry without symbols.
+					stream.Position = 0;
+					cecilModule = ModuleDefinition.ReadModule(stream, new ReaderParameters {
+						AssemblyResolver = resolver,
+						ReadSymbols = false,
+					});
+				}
 				// The engine's AddXmlDocumentationTransform locates the documentation file from
 				// ModuleDefinition.FileName; the snapshot came from a memory stream, so hand it
 				// the original assembly's path (dnlib knows it, cecil does not).

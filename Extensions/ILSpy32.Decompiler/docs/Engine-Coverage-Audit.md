@@ -1307,6 +1307,13 @@ G 的子项：临时变量 117、`L` 后缀 46、扩展方法语法 46、`?.` 38
 **下一步只需一步**：在 `DnSpyTokenWriter` 里给**所有** `EmitText`/`output.Write` 调用点加计数，
 打印出真正输出 `"96"` 的那一处。
 
+**又排除一条**：在 `EmitText` 入口拦截 `text == "96"` —— **完全没有命中**。
+即 `"96"` 既不走 `WritePrimitiveValue`，也不走 `EmitText`。
+`DnSpyTokenWriter` 里绕过 `EmitText` 的 `output.Write` 只有：XmlDoc 分隔符（:1096-1109）、
+字符串（:1159）、char（:1164）、decimal（:1169）、float 特殊值（:1178）、float（:1183）——
+都不可能产出 `"96"`。**说明渲染这个字面量的 writer 根本不是 `DnSpyTokenWriter`**，
+或输出被更外层改写。下一轮应直接检查该类文件实际使用的 `IDecompilerOutput`/`TokenWriter` 实例。
+
 **A（控制流塑形，306 行，最大类）**：跨 `IL/ControlFlow/SwitchDetection.cs`、`ControlFlowSimplification.cs`、
 `CSharp/ExpressionBuilder.cs:2210` 三处，单类可修性低。实例：`return mod != null && (mod.Characteristics & 8192) == 0;`
 （2.3）vs `if (mod != null) { return …; } return false;`（3.2）；`if (msg == 736)` 链（2.3）vs `switch (msg)`（3.2）。

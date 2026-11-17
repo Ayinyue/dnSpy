@@ -1175,5 +1175,17 @@ C# 视图对 `HexBytes` 看到 **170** 个 `CheckedUncheckedAnnotation`（VB 视
 **下一步**：把 `TranslateArrayIndex` 的 `StackType.I` 分支从 `Int64` 改成 `Int32`，
 并同时保留 checked 转换（即 `CleanUpArrayIndices` 对 checked 跳过），再整体对拍。
 
+**已按此实施（保留）**：两处一起改后
+- 3.2 输出 `this.bytes[(int)(long)checked((IntPtr)index)]`，2.3 输出
+  `(int)this.bytes[(int)(checked((IntPtr)index))]` —— **溢出检查回来了**（正确性修复），
+  但仍多一层 `(long)`（2.3 没有），且 2.3 在索引/表达式外还有 `(int)`。
+- 语料：Contracts.DnSpy 16077 → **16041**（回到基线，无回归），identical 不变。
+- `verify-all` hardFail=0。
+
+**结论**：这是**正确性修复**（3.2 原先静默丢弃溢出检查），不是字节级对齐。
+要达到 2.3 的形态还需：`TranslatedExpression.ConvertTo` 对 `IntPtr → Int32` **直接转换**
+（不要绕 `Int64`），并去掉 `TranslateArrayIndex` 在索引外多加的 `(int)`。
+两处都改完再对拍，预计能同时拿到正确性与 diffLines 收益。
+
 **另两类已计数但未修**：`.Invoke()`（2.3 印 `handler.Invoke(...)`，3.2 省略，2.3 有 21 处/3.2 3 处）；
 `= default(...)` 局部初始化器（3.2 比 2.3 多 31 处，责任点 `DeclareVariables.cs:449`）。

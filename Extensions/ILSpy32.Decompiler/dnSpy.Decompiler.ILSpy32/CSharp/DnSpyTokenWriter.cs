@@ -1237,8 +1237,9 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		static string FormatPrimitiveLiteral(object value) {
 			var sb = new StringBuilder();
 			sb.Append(((IFormattable)value).ToString(null, NumberFormatInfo.InvariantInfo));
+			// dnSpy 2.3 writes the unsigned suffix in upper case ('0U', 'UL'), not 'u'/'uL'.
 			if (value is uint || value is ulong)
-				sb.Append('u');
+				sb.Append('U');
 			if (value is long || value is ulong)
 				sb.Append('L');
 			return sb.ToString();

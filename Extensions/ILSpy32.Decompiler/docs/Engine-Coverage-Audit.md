@@ -695,3 +695,27 @@ type reference 被 3.2 的 using 计算算入。
 `context.DecompiledTypeDefinition` / `currentNamespace` 上并不一致，
 §8.26 / §8.28 里基于 `--all` 的 dnSpy.dll 统计（含 821 vs 229）**不能代表真实反编译视图**，
 引用时须注明口径。3.2 侧多出的 209 个 `System.Runtime.CompilerServices` 仍未解释。
+
+### 8.29 数字字面量后缀：大写已修，枚举回退的「有无后缀」未解（2026-11-17）
+
+**已修（大小写）**：2.3 的无符号/长整型后缀是**大写** `U` / `L` ——
+语料里 6 处（`rva = 0U;`、`ReadUInt32() != 17744U`），dnSpy.dll 里 281 处，**小写 0 处**；
+3.2 反过来：大写 0 处、小写 `u` **1088** 处。
+修改：`DnSpyTokenWriter.FormatPrimitiveLiteral`（真正生效的那处，扩展侧覆盖）与
+引擎 `TextWriterTokenWriter.WritePrimitiveValue` 的 `Append('u')` → `Append('U')`。
+（`ulong` 会得到 `UL`，与 2.3 一致。）
+
+**未解（枚举回退值的有无后缀）**：`dnSpy.Themes.ColorInfos` 里 2.3 印
+`new BrushColorInfo(16528, …)`，3.2 印 `new BrushColorInfo(16528U, …)`。
+2.3 的 `CreateExpressionForConstant` 走 `MakePrimitive((long)Cast(Int64, …))`，按理无后缀。
+尝试把回退值 long 装箱后：
+
+| 改法 | Contracts.DnSpy identical |
+|---|---|
+| 基线 | **797** |
+| 全部 long 装箱 | 765 |
+| 仅非特性参数 long 装箱 | 785 |
+
+**都低于基线** —— 说明语料里存在 2.3 **印后缀**的非特性枚举值，规则未钉死，两次尝试均已回退。
+受影响的 `ColorInfos` 仍有 802 行差异，其中很大部分是这个后缀。
+**下一步**：需要先在语料里找到一个「2.3 印后缀的枚举回退值」实例，才能确定判别条件。

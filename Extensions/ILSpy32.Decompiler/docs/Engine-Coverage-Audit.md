@@ -1367,6 +1367,14 @@ right = PrepareArithmeticArgument(right, inst.RightInputType, inst.Sign, inst.Is
 **同一规则也解释 B 类（显式转换）**：`ldelem.u1` 的结果在 IL 栈上是 I4，2.3 按目标类型定型后
 会补 `(int)`；3.2 不补。两者是同一条「按目标类型定型」规则的两个面。
 
+**残留的 `checked(...)` 标注（同源、未解）**：`HexBytes` 里 2.3 印 `d[(int)((IntPtr)index)]` /
+`(IntPtr)index + 1L`，3.2 印 `d[(int)checked((IntPtr)index)]` / `unchecked(index + 1L)`。
+对照实验：把 `HandleBinaryNumeric` 里二元运算的标注（`inst.CheckForOverflow`）整段禁用后，
+`checked` **仍在** —— 所以它不来自二元运算，而是 `AddCheckedBlocks` 的 **IL→AST 映射**：
+IL 是 `conv.i`（0xD3，非 ovf），本不该有 checked 上下文，但 3.2 给转换节点挂了 `CheckedAnnotation`。
+另注 `ExpressionBuilder` 里没有其它 `CheckedAnnotation` 赋值点（只有 `AddCheckedBlocks`），
+故根因确定在 `AddCheckedBlocks` 的节点对应逻辑，属独立未解项。
+
 ### 8.51 `?.` 空条件运算符：3.2 用，2.3 完全不用（2026-11-18）
 
 `--all` 全量计数：`?.` 2.3 = **0**，3.2 = **107**。实例（`BMObject`）：

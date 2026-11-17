@@ -782,6 +782,13 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 					&& (!collapsedIdx.Getter.IsNull || !collapsedIdx.Setter.IsNull)) {
 					InsertAccessorTokenComments(collapsedIdx.Getter, collapsedIdx.Setter, decl, module);
 				}
+				else if (decl.Annotation<EventDef>() is EventDef eventDef) {
+					// 2.3 (AstBuilder): the event's add/remove accessor tokens are printed as
+					// '(add)'/'(remove)' comment lines above the event. add goes on top, so it is
+					// inserted first (each InsertChildBefore lands directly above the declaration).
+					InsertEventAccessorTokenComment(eventDef.AddMethod, "(add)", decl, module);
+					InsertEventAccessorTokenComment(eventDef.RemoveMethod, "(remove)", decl, module);
+				}
 			}
 			catch {
 				// a comment must never break the decompilation
@@ -808,6 +815,18 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 		// BuildTokenCommentText already starts with a space; the comment writer emits '//'
 		// directly before the text, so the prefix needs a leading space of its own.
 		var comment = new ICSharpCode.Decompiler.CSharp.Syntax.Comment(" " + prefix + BuildTokenCommentText(def, module), ICSharpCode.Decompiler.CSharp.Syntax.CommentType.SingleLine);
+		decl.Parent?.InsertChildBefore(decl, comment, ICSharpCode.Decompiler.CSharp.Syntax.Roles.Comment);
+	}
+
+	/// <summary>
+	/// 2.3 prints the event's add/remove accessor tokens as '(add)'/'(remove)' comment lines
+	/// above the event (AstBuilder: AddComment(astEvent, eventDef.AddMethod, "add")).
+	/// </summary>
+	static void InsertEventAccessorTokenComment(MethodDef accessor, string prefix,
+		ICSharpCode.Decompiler.CSharp.Syntax.EntityDeclaration decl, ModuleDefMD module) {
+		if (accessor is null)
+			return;
+		var comment = new ICSharpCode.Decompiler.CSharp.Syntax.Comment(" " + prefix + BuildTokenCommentText(accessor, module), ICSharpCode.Decompiler.CSharp.Syntax.CommentType.SingleLine);
 		decl.Parent?.InsertChildBefore(decl, comment, ICSharpCode.Decompiler.CSharp.Syntax.Roles.Comment);
 	}
 

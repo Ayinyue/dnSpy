@@ -262,7 +262,7 @@ diffLines 从 20937 → 2058 → **116**：
 | 方法自身泛型参数不发 `.param type T` | DnSpy.dll diffLines 2058 → 116；IScriptGlobals 300 → 0 |
 
 残余（最大 38 行/类型，均为可解释的形态差异）：
-- **`ldelem.any` vs `ldelem`**：0xA3 的名称。3.2（cecil）印全名，2.3（dnlib）印 `ldelem`。3.2 更准确，**不改**。
+- **`ldelem.any` vs `ldelem`**：0xA3 的名称。3.2（cecil）印全名，2.3（dnlib）印 `ldelem`。短名是 0xA3 的规范 ILASM 助记符，已对齐 2.3（见 §8.11）。
 - **局部名引号**：2.3 对与 IL 关键字同名的局部名加单引号（`'field'`、`'property'`），3.2 不转义。规则明确但需改引擎 operand 写入，留作专项。
 - C#/VB 的 `this.` 省略 / 局部名（PDB）/ 嵌套类型限定：既定风格或需读符号，见 §3、§8.7。
 
@@ -272,8 +272,22 @@ diffLines 从 20937 → 2058 → **116**：
 
 DnSpy.dll 的 IL 差异行数 20937 → **43**（identical 1104 → **1296/1310**）。抽样确认残余几乎
 全部是**同一类**：`ldelem`/`stelem`（0xA3/0xA4）的名称——3.2（cecil）印 ECMA 全名
-`ldelem.any`/`stelem.any`，2.3（dnlib）印旧名 `ldelem`/`stelem`。ILDasm 用全名，故 3.2 更准确，
-**按既定「3.2 现代风格」口径不改**（与 §8.6 一致）。
+`ldelem.any`/`stelem.any`，2.3（dnlib）印旧名 `ldelem`/`stelem`。短名是 0xA3/0xA4 的规范 ILASM 助记符，**已对齐 2.3**（见 §8.11）。
 
 其余零星（每类型 1–7 行）为同类命名/顺序细节。结论：IL 视图的残余差异已收敛到「opcode 名称
 口径」这一项，不再是未知缺口。
+
+### 8.11 IL 视图：三程序集 100% 逐字一致（2026-11-17）
+
+`ldelem`/`stelem` 名称对齐后（短名是 0xA3/0xA4 的规范 ILASM 助记符，2.3 即如此），
+IL 视图在三个程序集上达到 **100% 逐字一致**：
+
+| 程序集 | 类型数 | identical | diffLines |
+|---|---|---|---|
+| dnSpy.Contracts.DnSpy.dll | 1310 | **1310** | **0** |
+| dnSpy.Contracts.Debugger.dll | 303 | **303** | **0** |
+| dnSpy.Contracts.Logic.dll | 114 | **114** | **0** |
+
+收敛路径：Events 段空行 → 接口实现特性改 `.interfaceimpl` → 方法泛型参数 `.param type T`
+→ 局部名转义 → `ldelem`/`stelem` 短名。每一步都由 `lang-diff-all`（整程序集逐类型对拍）
+定位，而非手工样本。

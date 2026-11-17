@@ -1169,10 +1169,11 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			}
 
 			if (value is float f) {
-				if (float.IsInfinity(f) || float.IsNaN(f)) {
+				var specialFloatName = GetSpecialFloatConstantName(f);
+				if (specialFloatName != null) {
 					EmitText("float", BoxedTextColor.Keyword);
 					EmitText(".", BoxedTextColor.Punctuation);
-					output.Write(float.IsPositiveInfinity(f) ? "PositiveInfinity" : float.IsNegativeInfinity(f) ? "NegativeInfinity" : "NaN", BoxedTextColor.Keyword);
+					output.Write(specialFloatName, BoxedTextColor.Keyword);
 					return;
 				}
 				if (f == 0 && 1 / f == float.NegativeInfinity)
@@ -1182,10 +1183,11 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			}
 
 			if (value is double dbl) {
-				if (double.IsInfinity(dbl) || double.IsNaN(dbl)) {
+				var specialDoubleName = GetSpecialDoubleConstantName(dbl);
+				if (specialDoubleName != null) {
 					EmitText("double", BoxedTextColor.Keyword);
 					EmitText(".", BoxedTextColor.Punctuation);
-					output.Write(double.IsPositiveInfinity(dbl) ? "PositiveInfinity" : double.IsNegativeInfinity(dbl) ? "NegativeInfinity" : "NaN", BoxedTextColor.Keyword);
+					output.Write(specialDoubleName, BoxedTextColor.Keyword);
 					return;
 				}
 				if (dbl == 0 && 1 / dbl == double.NegativeInfinity)
@@ -1234,7 +1236,59 @@ namespace dnSpy.Decompiler.ILSpy32.CSharp {
 			return null;
 		}
 
+		/// <summary>
+		/// dnSpy 2.3 rewrites ldc.r4/r8 holding these values into ldsfld float/double::&lt;name&gt;
+		/// (ILAstOptimizer.cs:595-649), so they print as 'float.MaxValue' instead of the numeric
+		/// literal. Returns null for ordinary values.
+		/// </summary>
+		static string GetSpecialFloatConstantName(float f)
+		{
+			if (float.IsNaN(f))
+				return "NaN";
+			if (float.IsPositiveInfinity(f))
+				return "PositiveInfinity";
+			if (float.IsNegativeInfinity(f))
+				return "NegativeInfinity";
+			if (f == float.Epsilon)
+				return "Epsilon";
+			if (f == float.MinValue)
+				return "MinValue";
+			if (f == float.MaxValue)
+				return "MaxValue";
+			return null;
+		}
+
+		static string GetSpecialDoubleConstantName(double d)
+		{
+			if (double.IsNaN(d))
+				return "NaN";
+			if (double.IsPositiveInfinity(d))
+				return "PositiveInfinity";
+			if (double.IsNegativeInfinity(d))
+				return "NegativeInfinity";
+			if (d == double.Epsilon)
+				return "Epsilon";
+			if (d == double.MinValue)
+				return "MinValue";
+			if (d == double.MaxValue)
+				return "MaxValue";
+			return null;
+		}
+
 		static string FormatPrimitiveLiteral(object value) {
+			// The primitive-ref path above routes every numeric literal through here, so the
+			// special-value names have to be produced in this helper (dnSpy 2.3 prints
+			// 'double.MaxValue' where a numeric literal would otherwise appear).
+			if (value is float f) {
+				var name = GetSpecialFloatConstantName(f);
+				if (name != null)
+					return "float." + name;
+			}
+			if (value is double dbl) {
+				var name = GetSpecialDoubleConstantName(dbl);
+				if (name != null)
+					return "double." + name;
+			}
 			var sb = new StringBuilder();
 			sb.Append(((IFormattable)value).ToString(null, NumberFormatInfo.InvariantInfo));
 			// dnSpy 2.3 writes the unsigned suffix in upper case ('0U', 'UL'), not 'u'/'uL'.

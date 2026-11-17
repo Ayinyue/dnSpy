@@ -1010,3 +1010,20 @@ corlib 未解析时落回 `get_Chars(...)`。改法：在 `HandleAccessorCall:78
 
 **剩余同源**：`kind - TokenKind.Command > 1`（2.3）vs `(uint)(kind - 1) > 1U`（3.2）——
 算术操作数的类型提示还没传对（见 §8.37(3) 末尾），**未修**。
+
+### 8.39 特殊浮点常量：`double.MaxValue` 等（2026-11-17）
+
+**差异**：2.3 把 `ldc.r4/r8` 里的特殊值改写成 `ldsfld float/double::<name>`
+（`ILAstOptimizer.cs:595-649`），输出 `double.MaxValue` / `double.PositiveInfinity` / `float.NaN` 等；
+3.2 直接印数字字面量（`1.7976931348623157E+308`）。
+
+**修改**：
+- 扩展侧 `DnSpyTokenWriter`：`FormatPrimitiveLiteral` 顶部按值返回 `float.<name>` / `double.<name>`；
+  并把 `WritePrimitiveValue` 里原有的 infinity/NaN 分支统一走 `GetSpecialFloat/DoubleConstantName`。
+  **注意**：真正生效的是 `FormatPrimitiveLiteral` —— `WritePrimitiveValue` 的 primitive-ref 分支
+  （`:1135-1144`）对所有数字字面量提前返回，只改后者是无效的。
+- 引擎侧 `TextWriterTokenWriter.WritePrimitiveValue` 同步（float/double 各 6 个特殊值）。
+
+**验证**：语料 Contracts.DnSpy 16211 → **16195**、Debugger 2820 → **2819**（合计 26507 → **26490**）；
+`ExportTreeNodeDataProviderAttribute`（`this.Order = double.MaxValue;`）**diffLines=0**。
+`verify-all` hardFail=0。

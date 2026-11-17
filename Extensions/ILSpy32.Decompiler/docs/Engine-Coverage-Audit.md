@@ -1027,3 +1027,26 @@ corlib 未解析时落回 `get_Chars(...)`。改法：在 `HandleAccessorCall:78
 **验证**：语料 Contracts.DnSpy 16211 → **16195**、Debugger 2820 → **2819**（合计 26507 → **26490**）；
 `ExportTreeNodeDataProviderAttribute`（`this.Order = double.MaxValue;`）**diffLines=0**。
 `verify-all` hardFail=0。
+
+### 8.40 残余差异普查 + `base.` 限定修复（2026-11-17）
+
+**普查**（并行代理，对 `dnSpy.Contracts.DnSpy.dll` 取 diffLines top30，合计 8204 行 ≈ 全量 16195 的 51%）：
+
+| 类别 | 占比 | 备注 |
+|---|---|---|
+| **H 其它** | **78.3%** | 子项：**cast/checked 消除 297**、控制流 122、变量重命名 104、**`base.` 前缀 76**、操作符 55、扩展方法 50 |
+| B 可空比较 | 12.8% | 具名类别里最大 |
+| A 提前返回 | 2.8% | |
+| E 字面量 | 2.5% |（`double.MaxValue` 等，已修，见 §8.39） |
+| D 枚举常量 | 2.1% | |
+| C 委托 | 0.9% | |
+| G using/命名空间 | 0.4% | |
+| F 索引器 | 0.3% | |
+
+**已修（`base.` 限定）**：2.3 的 NRefactory 输出层对基类成员访问**总是**加 `base.`，
+3.2 只在「非 `callvirt` 的虚调用」时保留。改成无条件 `requireTarget = true`。
+语料：Contracts.DnSpy 16195 → **16099**（合计 26490 → **26394**），identical 855 → 859。
+
+**下一个最大子项**：**cast/checked 消除（297 行）** —— 2.3 印
+`(int)this.bytes[(int)(checked((IntPtr)index))]`，3.2 印 `this.bytes[index]`。
+即 3.2 把 2.3 保留的显式转换/`checked` 省略了。**未修**，是 H 类里最大的一块。

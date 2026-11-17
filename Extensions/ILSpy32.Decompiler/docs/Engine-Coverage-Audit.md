@@ -1412,3 +1412,8 @@ IL 是 `conv.i`（0xD3，非 ovf），本不该有 checked 上下文，但 3.2 �
 
 **注**：`??` 计数仍是 3.2 多（122 vs 79），但那是 `NullCoalescingTransform` 的事，
 且 3.2 多的方向与 `?.` 相反 —— 两项要一起评估，不能只改一边。
+
+**对照实验（负结果）**：停用 `NullCoalescingTransform` 后语料**变差**
+（Contracts.DnSpy 14176 → 14958、Debugger 2155 → 2500、Logic 7346 → 8199）。
+即 `??` 的引入是对的，null 族两个 transform 的取舍结论就此闭环：
+**`?.` 该关（2.3 没有），`??` 该留（3.2 更完整）。** 两者方向相反，必须成对评估。

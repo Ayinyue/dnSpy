@@ -1109,5 +1109,16 @@ C# 视图对 `HexBytes` 看到 **170** 个 `CheckedUncheckedAnnotation`（VB 视
 其结果**不会被插入**。所以这些注解位于**语句块之外**（字段/属性初始化器、默认参数值、
 或未被语句遍历到的位置）—— 这是下一步最该验证的假设。
 
+**同轮复测（推翻上一段结论）**：把两个计数放在**同一次运行**里 ——
+- 注解节点的祖先链：`SyntaxTree/NamespaceDeclaration/TypeDeclaration/MethodDeclaration/**BlockStatement**/IfElseStatement/BinaryOperatorExpression/CastExpression`
+  —— **注解的 cast 确实在语句块内**；
+- 但同一轮 `GetResultFromBlock` 对 **31 个块**仍全部 `costUnchecked=[0 + 0] nodes=False`。
+
+**推理**：按 `GetResult` 的代码，checked 注解会先 `CostInUncheckedContext += 10000`，
+随后 `WrapInCheckedExpr` 会把它降到 `[0 + 1]` 并产生 `InsertedExpression`。
+所以只要该块遍历到注解，cost 至少是 `[0 + 1]`；实测 `[0 + 0]` 说明
+**`GetResultFromBlock` 遍历的那个块与注解所在的块不是同一批**（例如注解在 VB 视图的块里、
+或在同一次 dump 的另一次反编译里）。下一步应打印块的唯一标识（如起始偏移）来对齐两个计数。
+
 **另两类已计数但未修**：`.Invoke()`（2.3 印 `handler.Invoke(...)`，3.2 省略，2.3 有 21 处/3.2 3 处）；
 `= default(...)` 局部初始化器（3.2 比 2.3 多 31 处，责任点 `DeclareVariables.cs:449`）。

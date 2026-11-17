@@ -1244,3 +1244,16 @@ C# 视图对 `HexBytes` 看到 **170** 个 `CheckedUncheckedAnnotation`（VB 视
 
 **验证**：语料 Contracts.DnSpy 16038 → **16030**（合计 26319 → **26311**），identical 867 → 869；
 `verify-all` hardFail=0；net48 0 错误。
+
+### 8.47 可空值类型的默认值：`default(T?)` 而非 `null`（2026-11-18）
+
+**差异**：2.3 印 `default(ImageReference?)`，3.2 印 `null`。
+
+**根因**：`ExpressionBuilder.GetDefaultValueExpression`（`:411`）把 `Nullable<T>` 和引用类型一起归为
+「用 `NullReferenceExpression`」；2.3 的 `AstBuilder.MakeDefaultValue` 对 `NullableSig` 返回
+`DefaultValueExpression`（即 `default(T?)`）。
+
+**修改**：去掉 `|| type.IsKnownType(KnownTypeCode.NullableOfT)`，只让真正的引用类型走 `null`。
+
+**验证**：语料 Contracts.DnSpy 16030 → **15950**、Debugger 2814 → **2794**（合计 26311 → **26211**，
+**-100**），identical 1146 → **1155**。`verify-all` hardFail=0。

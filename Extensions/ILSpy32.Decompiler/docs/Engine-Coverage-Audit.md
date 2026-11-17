@@ -1120,5 +1120,13 @@ C# 视图对 `HexBytes` 看到 **170** 个 `CheckedUncheckedAnnotation`（VB 视
 **`GetResultFromBlock` 遍历的那个块与注解所在的块不是同一批**（例如注解在 VB 视图的块里、
 或在同一次 dump 的另一次反编译里）。下一步应打印块的唯一标识（如起始偏移）来对齐两个计数。
 
+**块标识对齐实测**：用 `RuntimeHelpers.GetHashCode(block)` 对齐后 ——
+21 个「含注解的块」里有 **19 个**同时出现在 `GetResultFromBlock` 遍历的 31 个块中。
+即 **`GetResultFromBlock` 确实遍历了这些块，却仍返回 `[0 + 0]`**。
+（按代码推演，遍历到注解后 cost 至少是 `[0 + 1]`。）
+所以损失发生在 `GetResultFromBlock` 的**逐语句累加**环节，而不是「块没被遍历」。
+下一步应直接在 `GetResultFromBlock` 里对每个 statement 打印 `stmtResult.CostInUncheckedContext`，
+定位是哪一个 statement 的结果被丢掉了。
+
 **另两类已计数但未修**：`.Invoke()`（2.3 印 `handler.Invoke(...)`，3.2 省略，2.3 有 21 处/3.2 3 处）；
 `= default(...)` 局部初始化器（3.2 比 2.3 多 31 处，责任点 `DeclareVariables.cs:449`）。

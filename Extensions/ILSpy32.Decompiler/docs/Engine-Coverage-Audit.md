@@ -1135,5 +1135,17 @@ C# 视图对 `HexBytes` 看到 **170** 个 `CheckedUncheckedAnnotation`（VB 视
 怀疑**存在两个不同的 `GetResult`/`GetResultFromBlock` 调用上下文**（例如 VB 视图也跑了一遍，
 两侧的 statement/block id 不同），需要在同一轮里同时打印 statement id 与注解所在 block 的 id 才能定论。
 
+**收尾诊断（决定性）**：
+1. 170 个注解**全部是 `unchecked`**（`checked=False`）—— 在默认 unchecked 上下文里它们成本为 0、
+   无需插入，`AddCheckedBlocks` 的行为**完全自洽**，之前「cost=0 很矛盾」的推断是错的。
+2. 在 `ExpressionBuilder.VisitConv` 里打印 `inst.CheckForOverflow` —— 出现的转换全是
+   `SignExtend/ZeroExtend/Truncate/StopGCTracking`，**`conv.ovf.i` 根本没走 `VisitConv`**。
+   （`HexBytes.TryReadByte` 的 IL 是 `ldarg.1; conv.ovf.i; ldelem.u1`。）
+
+**结论**：这个 checked 转换在**数组下标**路径里就被消费/折叠掉了，`TranslatedExpression.ConvertTo`
+拿到的不再是带 overflow 标志的 `Conv`。**修复点不在 `AddCheckedBlocks`，也不在 `ConvertTo`，
+而在处理 `ldelem` 下标的那段代码**（ILAst 构造或 `ExpressionBuilder` 的数组访问路径）。
+下一步应查 `ldelem`/`ArrayAccess` 如何构造下标表达式、以及是否有 IL transform 把 `conv.ovf` 折叠进下标。
+
 **另两类已计数但未修**：`.Invoke()`（2.3 印 `handler.Invoke(...)`，3.2 省略，2.3 有 21 处/3.2 3 处）；
 `= default(...)` 局部初始化器（3.2 比 2.3 多 31 处，责任点 `DeclareVariables.cs:449`）。

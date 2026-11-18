@@ -1969,19 +1969,17 @@ if (cur.ILSpan.End < next.ILSpan.Start)       iLSpan = cur.ILSpan;
 同类还出现在 `SpanDataCollection`（163 行，`Span span = spanData.Span;`）、
 `CachedTextColorsCollection`（62 行）、`UIUtilities`（152 行的一部分）。
 
-**根因定位到具体代码**：`IL/Transforms/CopyPropagation.cs` 的
-`CanPerformCopyPropagation`。`StLoc` 的源是 `callvirt get_ILSpan` 这类**纯属性 getter**，
-落到 `default:` 分支：
-```csharp
-return value.Flags == InstructionFlags.None && value.Children.Count == 0 && target.Kind == VariableKind.StackSlot;
-```
-`CallVirt` 有子节点 → `Children.Count != 0` → **不传播**。2.3 会传播（即内联）。
+**疑似根因（已被实验否证，待重查）**：原以为在 `IL/Transforms/CopyPropagation.cs` 的
+`CanPerformCopyPropagation` —— `StLoc` 的源是 `callvirt get_ILSpan` 这类纯属性 getter，
+落进 `default:` 分支后被 `value.Children.Count == 0` 否掉（`CallVirt` 有子节点）。
+**实测把判据放宽成「无子节点 或 `SemanticHelper.IsPure`」后语料几乎零变化**
+（`DnSpy` 11937 → **11941**，反而 +4）。所以内联**不是** `CopyPropagation` 干的，
+2.3 的差异来自别处（候选：`DeclareVariables` 的插入点选择、`SplitVariables`、
+或 2.3 的 ILAst 优化管线本身）。**根因未定位**，不要按上面的猜测改代码。
 
-**未修原因**：放开这条要把「无子节点」改成「纯指令（`SemanticHelper.IsPure`）」，
-而传播一个调用会**改变异常抛出的位置**（同文件对 `LdElema`/`LdFlda` 的注释正说明了
-这一点），属于语义敏感改动；而且它会影响**所有**结构体属性访问，量级最大。
-现有门禁只有「与 2.3 的 diff」，**没有「与源码的 diff」**，无法证明改对 ——
-再次指向 §8.67 的建议：先补源码对拍门禁。
+**未修**：量级最大（影响所有结构体属性访问），且根因未明；现有门禁只有
+「与 2.3 的 diff」，没有「与源码的 diff」，即使找到改动点也无法证明改对 ——
+再次指向 §8.67 的建议。
 
 **顺带**：`DeclareVariables` 只负责「声明」这些变量，不负责内联；
 `SplitVariables`/`RemoveDeadVariableInit` 也不是干这个的。

@@ -1398,7 +1398,15 @@ IL 是 `conv.i`（0xD3，非 ovf），本不该有 checked 上下文，但 3.2 �
 - `ILAstOptimizer` / `ExpressionTransforms` 里没有改写 `Conv` 节点类型的地方。
 
 **结论**：标注来源仍未定位。唯一确定的是「不是 reader、不是 Conv 节点、不是 VisitConv、不是
-AddCheckedBlocks / HandleCompoundAssignment」。排查这个需要单步调试 `AddCheckedBlocks` 对
+AddCheckedBlocks / HandleCompoundAssignment」。
+
+**`ldelem.*` 路径（已查完）**：`ILReader.LdElem`（`:1184`）= `Push(new LdObj(new LdElema(...) { DelayExceptions = true }, type))`
+—— `LdElema` 是带**元素类型**的（byte）；`ExpressionBuilder.VisitLdElema`（`:1886`）只构造
+`new IndexExpression(array, index)`，**丢掉了元素类型**，随后 `VisitLdobj` 再解包。
+但插桩显示定型前 `left` 的语义类型**已经是 `System.Byte`**，说明 `IndexExpression` 自身
+（从 `byte[]` 推）给出了 byte，所以多出的 `(int)` **不是 `VisitLdElema` 直接产生**，
+而是「`PrepareArithmeticArgument` 隐式加宽到 I4」与「`TypeOperandToResultType` 按尺寸再定型」
+相互作用的结果。要修得先解释：两者尺寸相同为何仍补 cast。排查这个需要单步调试 `AddCheckedBlocks` 对
 `d[(int)checked((IntPtr)index)]` 的处理（该表达式里 `checked` 包住了 `conv.i`）。
 
 ### 8.54 冗余 cast 不再被常量捷径吞掉：`(int)d[i]`（2026-11-18）
@@ -1476,3 +1484,46 @@ G 子项（临时变量 117 等）、B 类显式转换（143 行）。
 2. 再确认**实际走哪个分支**（「两个 writer 都补 `.0` 却输出 `96`」与「两个 transform 都跑却叠 cast」都是靠这一步定位）；
 3. 若两路都失效，说明是更深的类型标注/映射问题（`ldelem` 元素宽度、`AddCheckedBlocks` 的 IL→AST 节点映射），
    需要读该 transform 的实现而不是继续猜。
+
+### 8.56 `L`/`U`/`UL` 后缀：常量按「操作数位置的类型」定型（2026-11-18，已修）
+
+**现象**：`SimpleTypeConverter` 里 2.3 印 `j <= 20UL` / `value <= 9UL` / `n <= 9223372036854775807UL`，
+3.2 印 `20L` / `9L` / `9223372036854775807L`。全语料后缀总量（同 1414 类型、`dnSpy.Contracts.DnSpy.dll`）：
+
+| | `L` | `U` | `UL` | 合计 |
+|---|---|---|---|---|
+| 2.3 | 130 | 199 | 105 | **434** |
+| 3.2（修前） | 150 | **86** | 88 | **324** |
+| 3.2（修后） | 148 | **194** | 90 | **432** |
+
+即 `U` 后缀 86 → 194（2.3 = 199），总量 324 → 432（2.3 = 434）。
+
+**根因**：常量字面量的后缀取决于它被定型到的类型，而 3.2 定型到的是**字面量自身的 IL 宽度**
+（`ldc.i4.s 20; conv.i8` → `long`），不是**解析出的运算符为该操作数位置选定的类型**。
+`ulong n; n <= 20` 的运算符解析结果是 `ulong` 比较（`rr.Operands[0].Type == ulong`），
+2.3 按它定型 → `20UL`；3.2 按 IL 宽度 → `20L`。
+
+**两条路径**（都在 `ExpressionBuilder`）：
+1. `HandleBinaryNumeric`（算术/位运算）：原来用 `rr.Type`（运算符**结果**类型）。改为
+   `rr.Operands[i].Type`（运算符为该**操作数位置**选定的类型），见 `GetOperandTargetType`。
+2. `TranslateComp`（`<`/`<=`/`>`/`>=`）：**原来完全不做定型**，直接提前 return。补上同一定型。
+   比较运算符的 `rr.Type` 是 `bool`，所以必须用 `Operands[i].Type`，不能用结果类型。
+
+**三个必须的守卫**（都是实测踩出来的）：
+- `IsRetypableNumericType`：只重定数值类型（含 `Single`/`Double`/`Decimal`），排除枚举/指针/
+  引用类型 —— 2.3 只重定数值字面量；
+- **char 字面量不重定**：`AdjustConstantExpressionToType` 已经把数值 IL 常量转成 `'a'`，
+  重定回 `97` 会把它改回去（实测 `if ('0' <= c && c <= '9')` → `if (48 <= c && c <= 57)`，
+  `c - 'a' + '\n'` → `c - 97 + 10`，语料 +4）；
+- `GetOperandTargetType` 必须接受 `ResolveResult` 而不是 `OperatorResolveResult`：
+  **全常量表达式会折叠成 `ConstantResolveResult`**，硬转会抛 `InvalidCastException`，
+  实测直接把 `FastTextBlock.CacheHash()` 变成 `// ILSpy 3.2 decompilation failed`（1 个类型降级）。
+
+**验证**：`dnSpy.Contracts.DnSpy.dll` C# 14177 → **14176**、`Logic` 7346 → **7345**、
+`Debugger` 2155 → **2155**；`dnSpy.Contracts.Logic.dll` VB 仅 `SimpleTypeConverter` 变化，
+4 处 `L` → `UL`（`While j <= 20L` → `20UL` 等），与 2.3 一致；三个程序集 C#/VB dump
+`degraded=0`；`verify-all` `hardFail=0`。
+
+**注**：`diffLines` 只 −1/−1/0，因为后缀差异散落在更大的差异 hunk 里，
+`DiffLineCount` 不会为「一行变得完全相同」逐行记账；后缀总量（上表）是更灵敏的口径。
+

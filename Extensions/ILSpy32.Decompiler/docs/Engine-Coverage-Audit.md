@@ -1697,3 +1697,27 @@ VB `Logic` LCS 8887 → **8881**，且 `_discard1`/`_discard2` 变成真实参�
 （`framework` / `profile` / `bytesUsed` / `completed`），因为内联 `out` 变量此前被
 VB 转换当成 discard。`degraded=0`；`verify-all` `hardFail=0`。
 
+### 8.62 残留差异清单（2026-11-18，供下一轮起点）
+
+`dnSpy.Contracts.DnSpy.dll` C#（1414 类型，2.3 vs 当前 HEAD `1a73b43b6`）逐模式计数：
+
+| 模式 | 2.3 | 3.2 | 差 | 判定 |
+|---|---|---|---|---|
+| `goto` | 118 | 71 | −47 | **3.2 更好**，不对齐 |
+| `get_XXX()` | 45 | 0 | −45 | **3.2 更好**（`string.get_Chars(i)` → `s[i]`），不对齐 |
+| `switch` | 38 | 74 | +36 | 3.2 检测更激进；§8.53 已判定不对齐 |
+| `cast (T)x` | 755 | 794 | +39 | 显式转换偏多，未定位 |
+| `??` | 79 | 104 | +25 | 多见于惰性初始化 `x ?? (x = () => new T())`，2.3 结构不同 |
+| `?:` | 405 | 427 | +22 | 未定位 |
+| `&&` / `\|\|` | 356 / 175 | 342 / 155 | −14 / −20 | §8.59 已修，剩余为 `if (c) { …; return B; }` 带额外语句的形态，无法合并 |
+| `if` 行 | 1815 | 1747 | −68 | 与 `return false/true` 减少同源 |
+| `while (true)` | 0 | 6 | +6 | 循环塑形，未定位 |
+| `L/U` 后缀 / `double .0` | 235 / 267 | 238 / 269 | +3 / +2 | 已对齐（§8.56 / §8.49） |
+
+**最大单类型**：`HtmlClipboardFormatWriter`（117 行）混合了四类：
+`AppendInterpolatedStringHandler` 临时变量拆分、`while (i < length)` → `while (true){ if (i>=length) break; }`、
+局部变量改名（`i`→`j`）、`char c` 提升到 switch 外。均属控制流/变量生命周期层面，单点收益低。
+
+**门禁基线**（HEAD `1a73b43b6`）：`verify-all hardFail=0 softFail=1 skip=0`；
+IL 语料 1310/303/114 全一致；`dnSpy.sln` 0 错误；`bench` 最慢 71 ms。
+

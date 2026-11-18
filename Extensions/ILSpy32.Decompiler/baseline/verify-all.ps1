@@ -62,7 +62,15 @@ function Invoke-Probe([string[]]$ProbeArgs, [string]$Name, [switch]$Soft, [switc
 	}
 	else {
 		Write-Report ("FAIL {0} (exit={1}) : {2}" -f $Name, $code, $tail)
-		if ($Soft) { $script:soft++ } else { $script:hard++ }
+		# 崩溃不是「有差异」：负退出码（如 -2146232797 = .NET Debug.Assert 终止进程）
+		# 必须记成硬失败，否则 -Soft 门会把崩溃静默成 softFail（§8.63）。
+		if ($code -lt 0) {
+			$script:hard++
+		} elseif ($Soft) {
+			$script:soft++
+		} else {
+			$script:hard++
+		}
 	}
 }
 
@@ -118,6 +126,42 @@ foreach ($corpusAsm in @('dnSpy.Contracts.DnSpy.dll', 'dnSpy.Contracts.Debugger.
 	Invoke-Probe @('lang-diff-all', "$dnspyBin/$corpusAsm", $dnspyBin, $path23, 'C#') "corpus C#: $corpusAsm" -Soft
 	Invoke-Probe @('lang-diff-all', "$dnspyBin/$corpusAsm", $dnspyBin, $path23, 'Visual') "corpus VB: $corpusAsm" -Soft
 }
+
+# 双 TFM 门禁：net10.0-windows + net48 都要 0 错误。审计 §8.60 记录过并行构建会偶发把
+# net10 的 System.Runtime 解析进 net48 编译（错误数在 0/2/8/10 之间跳），必须 -m:1。
+# 另外 §8.63：本脚本前面的手工重构建会覆盖掉 dnSpy.sln 的产物，所以这道门跑之前
+# 不要在本进程外再跑 dnSpy.sln（跑了就再手工重构建一次引擎+扩展）。
+Write-Host "gate: solution build (net10.0-windows + net48, -m:1)" -ForegroundColor Cyan
+$buildOutput = & dotnet build "$repo\dnSpy.sln" -c $Configuration -m:1 --nologo -v q 2>&1
+$buildErrorCount = @($buildOutput | Select-String -Pattern ': error ' ).Count
+if ($buildErrorCount -eq 0) {
+	Write-Report "PASS solution build (-m:1)"
+} else {
+	$script:hard++
+	Write-Report "FAIL solution build (-m:1) : errors=$buildErrorCount"
+}
+# dnSpy.sln 的产物会把引擎 DLL 换成激活 Debug.Assert 的那份（§8.63），之后任何
+# -NoBuild 的门都会崩。这里把引擎+扩展重构建回来，把工作区恢复成可门禁状态。
+Write-Host "gate: restore engine after solution build" -ForegroundColor Cyan
+# 解决方案构建的 MSBuild 节点会继续占着引擎 DLL，先关掉再重构建。
+& dotnet build-server shutdown 2>&1 | Write-Host
+foreach ($proj in @(
+		"$extDir\ICSharpCode.Decompiler\ICSharpCode.Decompiler\ICSharpCode.Decompiler.csproj",
+		"$extDir\dnSpy.Decompiler.ILSpy32\dnSpy.Decompiler.ILSpy32.csproj")) {
+		$args = @('-c', $Configuration)
+		if ($proj -like '*dnSpy.Decompiler.ILSpy32*') { $args += @('-f', 'net10.0-windows') }
+		# 紧跟在 dnSpy.sln 之后跑，MSBuild 节点可能还占着文件，重试。
+		$ok = $false
+		for ($try = 1; $try -le 3; $try++) {
+			$restoreOut = & dotnet build $proj @args --nologo -v q 2>&1
+			$restoreErr = @($restoreOut | Select-String -Pattern ': error ').Count
+			if ($restoreErr -eq 0) { $ok = $true; break }
+			$restoreOut | Select-Object -First 12 | ForEach-Object { Write-Host "    $_" }
+			Write-Report "retry restore $(Split-Path $proj -Leaf) ($try) errors=$restoreErr"
+			Start-Sleep -Seconds 3
+		}
+		if (-not $ok) { Write-Report "FAIL restore $(Split-Path $proj -Leaf)"; $script:hard++ }
+	}
 
 Write-Report "=== summary: hardFail=$script:hard softFail=$script:soft skip=$script:skip ==="
 Write-Report "report: $report"

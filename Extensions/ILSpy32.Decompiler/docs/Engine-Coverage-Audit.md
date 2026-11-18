@@ -1789,6 +1789,18 @@ Process terminated. Assertion failed.
 「AST 节点携带的 IL 指令属于另一个 `ILFunction`」的情形。Release 构建下它不崩，
 但会**静默产生错误的 sequence point**，所以不是纯 debug-only 问题。
 
+**门禁已加固（同日）**：`verify-all.ps1` 现在做两件事，都是被上面这次事故逼出来的：
+1. 新增 **`solution build (-m:1)`** 硬门（net10.0-windows + net48 都要 0 错误）。
+   `-m:1` 实测稳定（连跑两次 0 错误），并行的 `dotnet build dnSpy.sln` 才是
+   §8.60 那个 0/2/8/10 跳变的根源。
+2. `Invoke-Probe` 里**负退出码一律记硬失败**（`-2146232797` 这种崩溃不再被
+   `-Soft` 吞成 softFail）；跑完 `dnSpy.sln` 后再 `dotnet build-server shutdown`
+   并把引擎+扩展**重构建回来**，让工作区保持可门禁状态。
+
+实测：完整 `verify-all`（带构建）`hardFail=0 softFail=1 skip=0`，
+随后 `-NoBuild` 的 C# 语料门 `types=1310 identical=968 diffLines=11937 errors=0`
+（即崩溃隐患已被自愈，不需要人工干预）。
+
 **已定位（同日，Debug 引擎实测）**：把引擎按 `-c Debug` 构建后必崩，
 `lang-diff-all` 逐个类型跑，崩在 **`dnSpy.Contracts.MVVM.GridViewColumnSorter`**。
 栈是

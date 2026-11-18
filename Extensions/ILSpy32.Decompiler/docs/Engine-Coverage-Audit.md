@@ -2117,3 +2117,29 @@ Block IL_0000 (incoming: 1) {
 **未修**：改它要动核心 binder 的成员标注与排序，且**没有门禁校验 token 注释**
 （`ShowTokenAndRvaComments` 可关），改错不会被发现。建议先给 token 注释加一道
 抽检门（随机抽 N 个成员，断言 `MetadataToken` 与该成员在源码中的声明一致）。
+
+### 8.74 显式接口 token 的机制：`AttachMembers` 拿到的 `typeDef.Methods` 不含显式实现（2026-11-18）
+
+给 `AstAnnotationBinder.AttachMembers`（`Common/AstAnnotationBinder.cs:265`）插桩后，
+`MenuItemBase\`1` 的实况是：
+```
+[BIND] decl='CreateContext'  pit=False -> null    || meta: Execute;IsEnabled;IsVisible;GetHeader;GetIcon;GetInputGestureText;IsChecked;.ctor
+[BIND] decl='Execute'        pit=True  -> Execute@dnSpy.Contracts.Menus.MenuItemBase
+[BIND] decl='Execute'        pit=False -> Execute@dnSpy.Contracts.Menus.MenuItemBase
+```
+两个 `Execute` 声明（显式实现 + 公共方法）**绑定到同一个 `MethodDef`** —— 这就是 §8.73
+里「两行同一个 token」的机制。同时 `CreateContext` / `GetCachedContext` 拿到 `null`
+（连自己的 token 都没有）。
+
+**真正的可疑点**：`typeDef.Methods` 里只有 7 个方法 + `.ctor`，**既没有
+`CreateContext`/`GetCachedContext`，也没有任何名字带 `.` 的显式实现**
+（dnlib 的 `MethodDef.Name` 对显式实现是 `IMenuItem.Execute`）。
+也就是说 `AttachMembers` 拿到的 `typeDef` 的 `Methods` 视图不完整/不是同一个类型 ——
+`Attach`（`:88`）里 `knownTypes`/`types`/`bySimpleName` 的解析（`:106-126`）值得单独查：
+`knownType` 是 dnSpy 传进来的 `TypeDef`，`typeDeclaration.Name` 对泛型类型
+（`MenuItemBase`）与 `TypeDef.Name`（`MenuItemBase\`1`）对不上时会走全名回退。
+
+**未修**：`MatchMethod` 的 `qualified` 判据（`method.Name.IndexOf('.')`）本身是对的，
+但它在一个已经缺成员的 `Methods` 集合里找 —— 先修解析，再谈匹配。
+**建议**：给 `Attach` 加一道断言（`typeDef.Methods.Count` 与源码声明数同量级），
+或先给 token 注释加抽检门。

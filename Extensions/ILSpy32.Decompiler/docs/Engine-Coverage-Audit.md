@@ -1951,3 +1951,37 @@ public static ColorType ToColorType(this TextColor self) => (uint)self + ColorTy
 原因是常量先被 `PrepareArithmeticArgument`/`ResolveBinaryOperator` 定型成
 `uint`，`AdjustConstantExpressionToType(right, left.Type)` 的目标已经是 `uint`
 而不是枚举 —— 光放宽谓词没用，得改操作数定型本身。已还原。
+
+### 8.68 最大残留模式：ILAst 临时局部变量不内联（2026-11-18，**未修**）
+
+**这是剩余 diffLines 里最大的一类**，样例（`MethodDebugInfoBuilder`，C# 63 行差）：
+```csharp
+// 2.3（内联）                                // 3.2（保留临时变量）
+if (cur.ILSpan.End < next.ILSpan.Start)       iLSpan = cur.ILSpan;
+{                                             uint end = iLSpan.End;
+    ...  new SourceStatement(                  iLSpan = next.ILSpan;
+        ILSpan.FromBounds(cur.ILSpan.Start,     if (end < iLSpan.Start) {
+            next.ILSpan.Start), cur.TextSpan);      ...  iLSpan = cur.ILSpan;
+}                                                 uint start = iLSpan.Start;
+                                                  iLSpan = next.ILSpan;
+                                                  ...  ILSpan.FromBounds(start, iLSpan.Start) ...
+```
+同类还出现在 `SpanDataCollection`（163 行，`Span span = spanData.Span;`）、
+`CachedTextColorsCollection`（62 行）、`UIUtilities`（152 行的一部分）。
+
+**根因定位到具体代码**：`IL/Transforms/CopyPropagation.cs` 的
+`CanPerformCopyPropagation`。`StLoc` 的源是 `callvirt get_ILSpan` 这类**纯属性 getter**，
+落到 `default:` 分支：
+```csharp
+return value.Flags == InstructionFlags.None && value.Children.Count == 0 && target.Kind == VariableKind.StackSlot;
+```
+`CallVirt` 有子节点 → `Children.Count != 0` → **不传播**。2.3 会传播（即内联）。
+
+**未修原因**：放开这条要把「无子节点」改成「纯指令（`SemanticHelper.IsPure`）」，
+而传播一个调用会**改变异常抛出的位置**（同文件对 `LdElema`/`LdFlda` 的注释正说明了
+这一点），属于语义敏感改动；而且它会影响**所有**结构体属性访问，量级最大。
+现有门禁只有「与 2.3 的 diff」，**没有「与源码的 diff」**，无法证明改对 ——
+再次指向 §8.67 的建议：先补源码对拍门禁。
+
+**顺带**：`DeclareVariables` 只负责「声明」这些变量，不负责内联；
+`SplitVariables`/`RemoveDeadVariableInit` 也不是干这个的。

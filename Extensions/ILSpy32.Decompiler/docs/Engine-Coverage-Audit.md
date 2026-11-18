@@ -2264,3 +2264,19 @@ py baseline/token-check.py <dumpDir>
 
 **用法**：改完 token 相关的东西跑一遍，`types_with_duplicates` 应当只下降不上升；
 配合 `source-check.py`（成员不丢）与 `lang-diff-all`（兼容收敛）构成三个信号。
+
+**后续实验（同日，已还原）**：真正的重复其实是**属性/方法这一层**，不是 `.override` 合成：
+```
+metadata: 'System.Collections.Generic.IEnumerator<dnSpy...IDsDocument>.Current'
+          'System.Collections.IEnumerator.Current'
+decl pit=IEnumerator<IDsDocument>  /  IEnumerator
+```
+`MatchProperty`/`MatchMethod` 只按 `".成员名"` 后缀匹配，两个接口成员（只差泛型/非泛型）
+都被绑到第一个候选上 → token 重复。改成「接口简单名 + 是否泛型都要一致」后：
+- token 重复 58 → **56**（`GetEnumerator` 的两处修好），属性 token 也变成 2.3 那样的 7288/7290；
+- **但语料 `diffLines` 11653 → 11976（+323）**，因为 3.2 同时**丢了一条字段 token 注释**
+  （`0x17000A37` 在 2.3 出现 1 次、3.2 变成 0 次）。
+
+**结论：这个方向是对的（重复确实来自接口匹配），但改完会连带弄丢字段 token，净效果是远离 2.3。
+已还原。** 要做得同时改 `MatchField`（`<Current>k__BackingField` 也有同样的泛型/非泛型碰撞），
+并且用 `token-check.py` + `lang-diff-all` 双向验证 —— 单看 token 重复数会漏掉丢失。

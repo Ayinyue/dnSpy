@@ -44,26 +44,28 @@ def type_key(file_name):
     return re.sub(r'^\d+_', '', file_name)
 
 
-def find_sources(source_dir, key, cache):
-    """Source files whose text mentions the (sanitized) type name."""
-    if key in cache:
-        return cache[key]
-    found = []
+def build_source_index(source_dir):
+    """Read every .cs file once: {file path: text}. Re-walking the tree per type
+    makes the large assemblies take forever."""
+    index = {}
     for root, _dirs, files in os.walk(source_dir):
-        if '\\obj\\' in root or '/obj/' in root or '\\bin\\' in root or '/bin/' in root:
+        low = root.lower()
+        if '\\obj\\' in low + '\\' or '\\bin\\' in low + '\\':
             continue
         for f in files:
             if not f.endswith('.cs'):
                 continue
             p = os.path.join(root, f)
             try:
-                text = open(p, encoding='utf-8-sig', errors='ignore').read()
+                index[p] = open(p, encoding='utf-8-sig', errors='ignore').read()
             except OSError:
                 continue
-            if key.split('.')[-1] in text:
-                found.append(text)
-    cache[key] = found
-    return found
+    return index
+
+
+def find_sources(index, key):
+    short = key.split('.')[-1]
+    return [text for text in index.values() if short in text]
 
 
 def main():
@@ -75,14 +77,14 @@ def main():
     if '--limit' in sys.argv:
         limit = int(sys.argv[sys.argv.index('--limit') + 1])
 
-    cache = {}
+    cache = build_source_index(source_dir)
     checked = 0
     flagged = 0
     for path in sorted(glob.glob(os.path.join(dump_dir, '*.txt'))):
         base = os.path.basename(path)
         key = type_key(os.path.splitext(base)[0])
         decompiled = open(path, encoding='utf-8-sig', errors='ignore').read()
-        sources = find_sources(source_dir, key, cache)
+        sources = find_sources(cache, key)
         if not sources:
             continue
         checked += 1
@@ -98,6 +100,12 @@ def main():
                 if stripped.startswith('//') or stripped.startswith('*') or stripped.startswith('/*'):
                     continue
                 if stripped.startswith('Copyright'):
+                    continue
+                # 独占一行的特性列表不是成员声明
+                if stripped.startswith('['):
+                    continue
+                # using 指令（含别名）不是成员
+                if stripped.startswith('using '):
                     continue
                 m = MEMBER_RE.match(line)
                 if not m:

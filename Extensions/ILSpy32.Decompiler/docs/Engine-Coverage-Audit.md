@@ -2203,3 +2203,34 @@ Block IL_0000 (incoming: 1) {
 （`LoopDetection` 的 `exitTargetBlock` 计算 vs `DetectExitPoints` 的重写顺序）。
 
 **未修**，且**不建议**在没弄清结构前放宽 `MatchLeave` —— 会得到语义错误的循环。
+
+### 8.78 `HtmlClipboardFormatWriter` 也是「2.3 更差」（2026-11-18）
+
+`lang-diff` 实测（`diffLines=117`，是「最大单类型」之一）：**2.3 的 switch 重建失败**，
+C# 输出里漏出了 IL 标签：
+```csharp
+// 2.3（失败形态）                    // 3.2（正确 switch）
+switch (c)                            switch (text[wsi])
+{                                    {
+    case '\t':                           case ' ':
+        for (int j = 0; j < TabSize; j++)    this.sb.Append("&nbsp;");
+            ...                              break;
+        goto IL_00E2;                        ...
+    case '\v':                           case '\u0085':
+    case '\f':                           case '\u2028':
+        goto IL_00EA;                        case '\u2029':
+    case '\r':                               this.WriteBr();
+        goto IL_00EA;                        break;
+    default:                             ...
+        if (c != ' ')                    case '\r':
+            goto IL_00EA;                    this.WriteBr();
+        this.sb.Append("&nbsp;");            break;
+    ...
+IL_00F0:                             }
+i = wsi + 1 - index;
+```
+`goto IL_xxxx` 是 IL 标签泄进 C#，属 2.3 的**降级产物**。连同 §8.69 的清单，
+**「最大单类型」里有相当一部分是 2.3 更差，不是 3.2 的账**。
+
+**方法论**：判断残留归属必须逐类型看输出形态，不能只看 `diffLines` 大小 ——
+`diffLines` 最大的类型往往正是 2.3 崩掉的地方。

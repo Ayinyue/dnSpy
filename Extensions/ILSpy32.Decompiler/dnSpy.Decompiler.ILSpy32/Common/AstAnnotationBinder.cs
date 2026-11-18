@@ -276,6 +276,10 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 
 		static void AttachMembers(TypeDef typeDef, ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration declaration) {
 			foreach (var method in declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.MethodDeclaration>()) {
+				// 由 .override 指令合成的转发方法没有自己的 MethodDef：按名字匹配会绑到被实现的
+				// 方法上，把那个方法的 token 注释印两遍（audit 8.79）。
+				if (method.Annotations.Any(a => ReferenceEquals(a, ICSharpCode.Decompiler.CSharp.CSharpDecompiler.SyntheticExplicitImplementationMarker)))
+					continue;
 				var methodDef = MatchMethod(typeDef, method);
 				if (methodDef != null)
 					method.AddAnnotation(methodDef);

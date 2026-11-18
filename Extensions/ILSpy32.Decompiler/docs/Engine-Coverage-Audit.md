@@ -2320,3 +2320,18 @@ decl pit=IEnumerator<IDsDocument>  /  IEnumerator
 
 **验证**：token 重复 56 → **49**；`DnSpy.dll` C# `diffLines` 11625 → **11215**（−410）、
 `Debugger` 1338 → **1264**（−74）、`Logic` 6772 不变；`degraded=0`；`verify-all` `hardFail=0`。
+
+### 8.82 `.override` 合成的转发方法不再复用被实现方法的 token（2026-11-18，已修）
+
+§8.79 的「给合成方法打标记让 binder 跳过」实验当时是净零，原因不明；把 §8.80/§8.81 的
+接口匹配与数组签名修好之后重做，**一次到位**：
+
+`AddInterfaceImplHelpers`（`CSharp/CSharpDecompiler.cs:880`）合成转发方法时打
+`SyntheticExplicitImplementationMarker`；`AttachMembers` 见到该标记就跳过 `MatchMethod`。
+
+**验证**：token 重复 49 → **14**；语料 `DnSpy` 11215 / `Logic` 6772 / `Debugger` 1264
+**全部不变**；`degraded=0`。
+
+**教训**：§8.79 那次「净零」不是方向错，而是**同一批重复里混着两种成因**（接口匹配 +
+合成转发），只修一种时总数被另一种补上，看起来像没效果。**聚合指标要配合按类型集合
+diff 才能得出结论**。

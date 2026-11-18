@@ -547,8 +547,8 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			// 绑到同一个 MethodDef 上（token 重复）。接口的简单名与泛型性必须一致。
 			var ifaceName = wantsQualified ? GetSimpleName(declaration.PrivateImplementationType) : null;
 			bool ifaceIsGeneric = wantsQualified && IsGeneric(declaration.PrivateImplementationType);
-			MethodDef fallback = null;
-			MethodDef parameterMatch = null;
+			MethodDef qualifiedParamOnly = null, qualifiedFallback = null;
+			MethodDef plainMatch = null, plainParamOnly = null, plainFallback = null;
 			foreach (var method in typeDef.Methods) {
 				bool qualified = method.Name.IndexOf('.') >= 0;
 				if (qualified) {
@@ -568,17 +568,33 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 				if (ParameterTypesMatch(parameters, declaration.Parameters)) {
 					// Full signature match; a same-params candidate with a different return type
 					// (Equals(object) vs Equals(T), explicit impl vs helper) must not win.
-					if (ReturnTypeMatches(method, declaration))
-						return method;
-					parameterMatch ??= method;
+					if (ReturnTypeMatches(method, declaration)) {
+						// 显式实现的声明优先采用「带接口名的」候选：plain 候选的返回类型
+						// (IEnumerator<T>) 与 IEnumerator 归一后相同，若先命中就会抢走
+						// IEnumerable.GetEnumerator 的 token（audit 8.84）。
+						if (qualified)
+							return method;
+						plainMatch ??= method;
+						continue;
+					}
+					if (qualified)
+						qualifiedParamOnly ??= method;
+					else
+						plainParamOnly ??= method;
 					continue;
 				}
 				// Same name and arity: remember the first candidate, but keep looking. Without
 				// this, Equals(object) inherits the definition of Equals(T) and then claims to
 				// implement an interface method it does not implement.
-				fallback ??= method;
+				if (qualified)
+					qualifiedFallback ??= method;
+				else
+					plainFallback ??= method;
 			}
-			return parameterMatch ?? fallback;
+			if (wantsQualified)
+				return qualifiedParamOnly ?? qualifiedFallback
+					?? plainMatch ?? plainParamOnly ?? plainFallback;
+			return plainMatch ?? plainParamOnly ?? plainFallback;
 		}
 
 		/// <summary>

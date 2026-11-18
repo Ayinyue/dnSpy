@@ -2362,3 +2362,19 @@ token 重复 14 → 53、`identical` 971 → **955**（语料 +231）。原因�
 
 **验证**：token 重复 14 → **13**；`DnSpy.dll` C# 11215 → **11214**（`identical` 971 → **972**）、
 `Logic` 6772 → **6556**（−216）、`Debugger` 1264 → **1247**；`degraded=0`。
+
+### 8.84 显式实现优先采用「带接口名」的候选（2026-11-18，已修）
+
+`TList\`1` 里 `public IEnumerator<T> GetEnumerator()` 与
+`IEnumerator IEnumerable.GetEnumerator()` 印同一个 token（5380；2.3 是 5380/5381）。
+
+**根因**：`MatchMethod` 一遇到「参数 + 返回类型都匹配」就立即 `return method`，而遍历按元数据序，
+plain 的 `GetEnumerator`（返回 `IEnumerator<T>`）排在显式实现之前；`NormalizeParameterTypeName`
+把 `<...>` 切掉后 `IEnumerator<T>` 与 `IEnumerator` 归一后相同，于是 plain 候选先命中并返回。
+
+**修法**：把候选按 qualified / plain 分两组记录，**显式实现的声明优先采用 qualified 组**
+（qualified 组内仍是「第一个完整匹配」）。plain 组只作为没有合格候选时的回退
+（`.override` 确实可能落在 plain 方法上，原注释保留）。
+
+**验证**：token 重复 13 → **8**；`DnSpy.dll` C# 11214 → **11199**（`identical` 972 → **973**）；
+`Logic` 6556、`Debugger` 1247 不变；`degraded=0 errors=0`。

@@ -1782,9 +1782,34 @@ Process terminated. Assertion failed.
 `Logic` 6829 → **6808**；`Debugger` 1773 → **1709**。
 `degraded=0`；`verify-all` `hardFail=0`，IL 语料仍 1310/303/114 全一致。
 
-**附带修正的方法论问题**：§8.62 的逐模式普查是按**文件索引**配对两个 dump 的，
-而两个引擎的类型枚举顺序不同（索引会错位），所以那张表的**逐类型归因不可靠**，
-聚合总量近似可用。正确做法是按**类型名**配对（去掉文件名前缀的 `^\d+_`），
-见 `baseline/out/_topdiff.py`。按类型名重算后真实总量是
-**LCS 9093 行 / 479 个类型**（`lang-diff-all` 的 `diffLines` 口径为 12637）。
+**附带发现的方法论问题**：这次普查原本按**文件索引**配对两个 dump，是错的 —— 两个引擎的
+类型枚举顺序不同（索引会错位），而且 `dotnet build dnSpy.sln` 重建目标程序集后 token 注释
+会整体位移。详见 §8.65；下面的数字**以 `lang-diff-all` 为准**。
 
+### 8.65 dump 对比不可靠 + 显式接口实现的 token/顺序差异（2026-11-18，**未修**）
+
+**dump 对比的可靠性问题**（影响 §8.62 那张表）：`baseline dump` 的两个引擎产物
+**不能**直接配对做逐类型/逐模式统计，原因有三：
+1. 文件名前缀是**枚举序号**，两个引擎的类型枚举顺序不同 → 按索引配对会错位；
+2. `dnSpy.Contracts.DnSpy.dll` 等被 `dotnet build dnSpy.sln` 重建后，**token 注释整体位移**
+   （实测 `MenuItemBase` 的 RID 从 2106 变 2025），旧 dump 立即失效；
+3. `--impl core` 的解析目录是 `baseline/ilspy23`，那里有一份**同名的旧 `dnSpy.Contracts.DnSpy.dll`**
+   （md5 与 dnSpy bin 的不同），`--dnspy-dir` 指向 dnSpy bin 时 core 引擎直接崩。
+
+**可靠口径**只有一条：`lang-diff-all`（同一进程、同一 `ModuleDef`、逐类型配对），
+其 IL 语料 1310/303/114 全一致也反证了「两个引擎读的是同一个模块」。
+§8.62 的**逐类型归因**请忽略，聚合总量近似可用；§8.57/§8.58 的「精确 LCS」数字
+同样是在错位/换版本的 dump 上算的，**不可引用**。
+
+**实测到的真实差异（`lang-diff` 单类型，可靠）**：`MenuItemBase\`1`
+- 2.3 的成员顺序是纯元数据序（`CreateContext` 0x83A、`CachedContextKey` 0x83B、
+  `GetCachedContext` 0x83C、`IMenuItem.Execute` 0x83D …）；
+- 3.2 把**显式接口实现提到最前**并与其公共方法成对出现，且**两行共用同一个 token**
+  （`IMenuItem.Execute` 与 `public abstract void Execute(TContext)` 都印 `0x06000832`），
+  而 2.3 给的是 0x83D / 0x844 两个不同的 token。
+- 类型自身 token 也差 1（2.3 `0x020001AD` vs 3.2 `0x020001AC`），但 `UIUtilities`、
+  `SpanDataCollection` 等类型的 token 完全一致 → 不是全局偏移，是**特定成员**的标注问题。
+
+**判定**：属「显式接口实现的 token 标注 + 成员排序」，机制指向 `TypeSystemAstBuilder`/
+`InsertTokenComments` 的 `Annotation<MethodDef>()` 归属，改动面在核心 binder，**本次只定位**。
+token 注释是可选显示项（`ShowTokenAndRvaComments`），优先级低于代码本体差异。

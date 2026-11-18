@@ -1721,3 +1721,29 @@ VB 转换当成 discard。`degraded=0`；`verify-all` `hardFail=0`。
 **门禁基线**（HEAD `1a73b43b6`）：`verify-all hardFail=0 softFail=1 skip=0`；
 IL 语料 1310/303/114 全一致；`dnSpy.sln` 0 错误；`bench` 最慢 71 ms。
 
+### 8.63 构建卫生：`Debug.Assert` 崩溃是陈旧产物，不是代码回归（2026-11-18）
+
+**现象**：同一提交上 `verify-all -NoBuild` 连续两次报 `softFail=6`，5 个 C#/VB 语料门
+`exit=-2146232797`，进程打印
+```
+Process terminated. Assertion failed.
+  at SequencePointBuilder.AddToSequencePoint(ILInstruction) ...:line 255
+  Debug.Assert(current.Function == null || current.Function == function);
+```
+即 `SequencePointBuilder` 的 `Debug.Assert` 失败（.NET Core 下 `Debug.Assert` 失败会终止进程）。
+
+**排除是代码回归**：把引擎与扩展**按手工命令重构建一次**
+（`ICSharpCode.Decompiler.csproj -c Release` + `dnSpy.Decompiler.ILSpy32.csproj -c Release -f net10.0-windows`）
+后，同样的 `verify-all -NoBuild` 立刻回到 `hardFail=0 softFail=1 skip=0`。
+期间唯一的提交是文档改动（`5f5e43a85`），引擎代码未变。
+
+**结论**：`dnSpy\dnSpy\bin\Release\net10.0-windows\` 下的引擎 DLL 与 probe/扩展出现
+**陈旧或错配**（`Debug.Assert` 只有在 DEBUG 常量下才编译进去，说明该 DLL 来自带 DEBUG 的构建）。
+与 §8.60 的 net48 引用竞争合起来看：**本仓库的并行/增量构建产物不可靠，门禁前必须干净重构建**。
+
+**操作建议**（写进 CI）：
+1. 构建前 `dotnet build-server shutdown`，必要时清 `obj/bin`；
+2. 门禁固定用「先手工重构建引擎+扩展，再 `verify-all -NoBuild`」两步，别依赖 `verify-all` 的
+   自动构建产物；
+3. 加一条 `bench` 与语料门的 `degraded/errors` 断言，崩溃要显式失败而不是静默 `exit=-2146232797`。
+

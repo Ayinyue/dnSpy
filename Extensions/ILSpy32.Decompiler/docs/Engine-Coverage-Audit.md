@@ -1679,6 +1679,29 @@ net10 与 net48 的产物落在相邻/共享目录），**先于本次升级存�
 `dnSpy.sln` 需要重跑 1–4 次才拿到 0 错误。CI 接线时建议：
 ① 构建加 `-m:1` 或分目标构建；② 把 net48 门禁改成先单独构建各 ProjectReference。
 
+**复发与定位（同日稍晚）**：改完文档后 `verify-all -NoBuild` 变成 `softFail=4` ——
+**三个 C# 语料门全部** `exit=-2146232797`，栈顶是
+`SequencePointBuilder.AddToSequencePoint(ILInstruction):255` 的
+`Debug.Assert(current.Function == null || current.Function == function)`。
+而在这之前的同一个提交上，同样的门禁是 `hardFail=0`。
+
+两次之间唯一的动作是跑了 `dotnet build dnSpy.sln -c Release`（还跑了两次）。
+**把引擎与扩展按手工命令重构建一次后，C# 语料门立刻恢复**：
+`types=1310 identical=962 diffLines=12207 errors=0`。
+
+**结论（更强）**：`dotnet build dnSpy.sln` 产出的引擎 DLL 与手工
+`dotnet build ICSharpCode.Decompiler.csproj -c Release` 产出的**行为不同** ——
+前者的 `Debug.Assert` 是激活的（否则 `Debug.Assert` 在 .NET Core 下会直接终止进程，
+门禁不可能是 `exit=-2146232797`）。所以：
+- 门禁**必须**用「手工重构建引擎+扩展，再 `verify-all -NoBuild`」这两步；
+- 只要跑过 `dnSpy.sln`，就必须重构建，否则拿到的是假失败；
+- 这条不只在 CI 里成立，本地换着构建方式也会踩到。
+
+**另注**：`SequencePointBuilder` 那条不变量本身值得单独查 —— 它说明存在
+「AST 节点携带的 IL 指令属于另一个 `ILFunction`」的情形（大概率与 lambda/局部函数
+或短路重建节点有关）。Release 构建下它不崩，但会**静默产生错误的 sequence point**，
+所以不是纯 debug-only 问题。已记入待办。
+
 ### 8.61 关闭 `OutVariables`：`out int x` → 先声明再 `out x`（2026-11-18，已修）
 
 **现象**：`MetroWindow.WndProc` 里

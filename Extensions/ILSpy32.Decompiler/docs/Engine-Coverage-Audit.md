@@ -1983,3 +1983,22 @@ if (cur.ILSpan.End < next.ILSpan.Start)       iLSpan = cur.ILSpan;
 
 **顺带**：`DeclareVariables` 只负责「声明」这些变量，不负责内联；
 `SplitVariables`/`RemoveDeadVariableInit` 也不是干这个的。
+
+### 8.69 残留中「2.3 更差、不该对齐」的清单（2026-11-18）
+
+逐类型用 `lang-diff` + **源码**对拍过一遍，下面这些是 2.3 的降级产物，
+**修 3.2 去对齐它们只会让输出变差**，后人不值得再花时间：
+
+| 模式 | 2.3 | 3.2（更贴源码） |
+|---|---|---|
+| 自动属性 | 展开成 `<Span>k__BackingField` + `[CompilerGenerated] get { … }` | `public Span Span { get; }` |
+| `double.MaxValue` | `1.7976931348623157E+308` | `double.MaxValue` |
+| `TimeSpan.FromMilliseconds(milliseconds)` | `(long)milliseconds`（多加 cast） | `milliseconds` |
+| LINQ 扩展方法 | `Enumerable.Select<ITreeNode, TreeNodeData>(…)` 静态形式 | `self.TreeNode.Descendants().Select(…)` |
+| 静态构造器 | 把字段初始化式塞回 `static X() { … }` + `// Note: …beforefieldinit` | `static readonly X Empty = new X(…)`（贴源码） |
+| `if (!x) return false; return y;` 的短路 | —— | 3.2 合并成 `return !x && y`（`return true` 那个朝向除外，见 §8.59 负结果） |
+
+**判据**：一律以**源码**为准（仓库里有 `dnSpy/*.cs`），不是以 2.3 为准。
+凡是 3.2 更贴源码的，就从「兼容残留」里剔除。§8.67/§8.68 剩下那些
+（枚举常量命名、临时变量内联、`(uint)` cast、循环塑形、显式接口 token/顺序、
+lambda `this` sequence point）才是**两个引擎都错或 3.2 确实更差**的真残留。

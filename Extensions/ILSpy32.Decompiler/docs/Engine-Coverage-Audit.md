@@ -1907,3 +1907,29 @@ public Guid Guid
 语料：`DnSpy.dll` 12193 → **11937**（`identical` 966 → **968**）、
 `Logic` 6793 → **6774**、`Debugger` 1666 → **1338**（`identical` 237 → **238**）。
 `degraded=0`；`verify-all` `hardFail=0`。
+
+### 8.67 枚举常量的算术语境：`ColorType.FirstNR` → `16384`（2026-11-18，**未修**）
+
+**源码**（`Themes/ExtensionMethods.cs:32`）：
+```csharp
+public static ColorType ToColorType(this TextColor self) => (uint)self + ColorType.FirstNR;
+```
+**2.3**：`return self + ColorType.Text;`（丢了 `(uint)` 转换，但保留了枚举成员名）
+**3.2**：`return (ColorType)((int)self + 16384);`（转换运算符选成 `int`，常量退化成数字）
+
+**两处 3.2 弱点**：
+1. `TypeSystemAstBuilder.ConvertConstantValue` 的 `GetIntegralClrType` 只认 8 种整型
+   （`KnownTypeCode.SByte..UInt64`），**枚举返回 null** → 直接落到
+   `new PrimitiveExpression(constantValue)`，于是枚举常量印成数字。
+   2.3 会印成员名（`FirstNR == Text`，取第一个名字 `Text`）。
+2. `HandleBinaryNumeric` 只对**位运算**做枚举处理
+   （`ExpressionBuilder.cs:1139` 的 `op.IsBitwise()`）；`+`/`-` 会把操作数降到底层类型，
+   常量也就回不到枚举类型。
+
+**未修原因**：修 1 需要给 `ConvertConstantValue` 加枚举成员命名（含 `[Flags]` 组合值
+的拆分），修 2 要动 `HandleBinaryNumeric` 的操作数定型 —— 两者都会影响所有枚举运算，
+而门禁只有「与 2.3 的 diff」，没有「与源码的 diff」。**建议先补一个源码对拍门禁**
+（仓库里就有 dnSpy 自己的源码），否则这类改动无法验证对错。
+
+**顺带**：同族的 `(uint)self` 被印成 `(int)self`（显式转换运算符选错符号），
+也归到 2。

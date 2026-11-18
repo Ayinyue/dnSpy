@@ -2084,3 +2084,36 @@ Block IL_0000 (incoming: 1) {
 循环的出口、并把条件反相成 `while (cond)`），会影响**所有**顶层循环的塑形；
 而且 `LoopDetection`/`DetectExitPoints` 的交互需要整体回归。属控制流核心，
 **本次只定位到判定**。
+
+### 8.73 显式接口实现：3.2 成对排列且**两行共用同一个 token**（2026-11-18，**未修**）
+
+`MenuItemBase\`1` 实测（`lang-diff`，`C# diffLines=146`）：
+
+**2.3**（纯元数据序，token 各不相同）
+```
+// Token: 0x0600083A   CreateContext
+// Token: 0x0600083B   CachedContextKey
+// Token: 0x0600083C   GetCachedContext
+// Token: 0x0600083D   void IMenuItem.Execute(IMenuItemContext)
+// Token: 0x0600083E   …（其余显式实现）
+// Token: 0x06000844   public abstract void Execute(TContext context);
+```
+**3.2**（把显式实现提到最前、与对应公共方法**成对**，且两行同一个 token）
+```
+// Token: 0x06000832   void IMenuItem.Execute(IMenuItemContext context)
+// Token: 0x06000832   public abstract void Execute(TContext context);   ← 同一个 token
+// Token: 0x06000833   … IsEnabled 一对
+// Token: 0x06000834   … IsVisible 一对
+```
+注意 `0x06000832`(2098) 与 2.3 的 `0x0600083D`(2109) 差 11，而**同文件里普通成员
+（如 `MethodDebugInfoBuilder.CompilerName` 的 `0x0600023F`）两边完全一致** ——
+所以不是版本/模块差异，是**显式实现这一类成员**的 `MethodDef` 标注问题。
+
+`TypeSystemAstBuilder.ConvertMethod`（`:1261`）确实写的是
+`decl.AddAnnotation(new MemberResolveResult(null, method))`，`method` 是实现方法
+本身；但输出里公共方法也拿到了显式实现的 token，说明
+`Annotation<MethodDef>()` 的解析/归属在显式实现场景下串了。
+
+**未修**：改它要动核心 binder 的成员标注与排序，且**没有门禁校验 token 注释**
+（`ShowTokenAndRvaComments` 可关），改错不会被发现。建议先给 token 注释加一道
+抽检门（随机抽 N 个成员，断言 `MetadataToken` 与该成员在源码中的声明一致）。

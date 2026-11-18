@@ -2170,3 +2170,22 @@ Block IL_0000 (incoming: 1) {
 语料：`DnSpy.dll` 11937 → **11653**（−284，`identical` 968 → **971**）、
 `Logic` 6774 → **6772**、`Debugger` 1338 → **1338**。`degraded=0`；
 `verify-all` `hardFail=0`。
+
+### 8.76 临时变量内联：又排除两条路径（2026-11-18）
+
+在 §8.68 的基础上把能查的都查完，记录排除过程，避免重复劳动：
+
+1. **`DeclareVariables` 没有「不声明/内联」分支**：`Analyze`（`:120` 起）无条件为每个
+   `ILVariable` 调 `DeclareVariable`；`FindInsertionPoints` 只负责选插入点。
+   所以「3.2 保留了临时变量」不是它主动的选择，而是**根本没走到内联**。
+2. **`CopyPropagation` 的 `LdLoc` 分支要求 `IsSingleDefinition`**
+   （`IL/Transforms/CopyPropagation.cs:92`）。`SpanDataCollection<TData>.Find` 里的
+   `Span span` 在两个分支各赋值一次 → 不是单定义 → 不传播。
+   （放松 `default:` 分支的实验已做，见 §8.67 负结果：语料零变化。）
+3. 实测对照：2.3 在**同一个类型**里既声明 `spanData`（`GetStartIndex`）又内联
+   `span`（`Find`）—— 说明 2.3 的判据是「按支配关系逐使用点传播」，而 3.2 的
+   `CopyPropagation` 只做全变量单定义传播。
+
+**结论**：要修就得实现**按支配关系的逐使用点复制传播**（per-use copy propagation），
+这是 ILAst 层的实质改动，会影响所有多定义临时变量。**未修**，需要单独的回归方案
+（现有门禁无法证明语义等价，尤其异常位置）。

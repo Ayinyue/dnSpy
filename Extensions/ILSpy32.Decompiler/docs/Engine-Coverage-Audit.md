@@ -1581,3 +1581,54 @@ internal static event EventHandler<MetroWindowCreatedEventArgs> MetroWindowCreat
 因为 `DiffLineCount` 是不做 LCS 的「指针各进一位」算法，删掉一行会打乱后续对齐；
 以 LCS 口径为准（本报告 §8.48 已记录该口径缺陷）。
 
+### 8.59 `return a && b` 被拆成 `if (a) return b; return false;`（2026-11-18，**未修**，已定位）
+
+**现象**：`NodeFormatter.IsExe`（token `060015CD`）
+```csharp
+// 2.3                                  // 3.2
+private static bool IsExe(ModuleDef m)  private static bool IsExe(ModuleDef mod)
+{                                       {
+    return m != null &&                      if (mod != null)
+        (m.Characteristics & 8192) == 0;         return (mod.Characteristics & 8192) == 0;
+}                                            return false;
+                                         }
+```
+全语料计数（`dnSpy.Contracts.DnSpy.dll`，1414 类型）：
+
+| | `&&` | `return false;` |
+|---|---|---|
+| 2.3 | **356** | 173 |
+| 3.2 | **290** | **256** |
+
+即 3.2 少 66 个 `&&`、多 83 个 `return false;` —— 强相关，是同一个模式。
+
+**ILAst 实测**（`ilast-verify … dump`，本次新增的诊断开关）：
+```
+BlockContainer {
+Block IL_0000 (incoming: 1) {
+  if (comp(ldloc mod != ldnull)) leave IL_0000 (logic.not(binary.bit.and.i4(callvirt get_Characteristics(ldloc mod), ldc.i4 8192)))
+  leave IL_0000 (ldc.i4 0)
+}
+}
+```
+即 `IfInstruction.TrueInst = leave(rhs)`、**`FalseInst = null`**（落到后面的 `leave(ldc.i4 0)`）。
+
+**根因**：`&&` 的重建只发生在 `ExpressionBuilder.VisitIfInstruction`，而它的
+`inst.MatchLogicAnd(out lhs, out rhs)`（`PatternMatching.cs:266`）要求
+`FalseInst.MatchLdcI4(0)`。这里 `FalseInst` 是 `null`，直接不匹配；
+`op` 停在 `Any`，函数返回 `null`，于是 `StatementBuilder` 走语句路径，
+印成 `if (a) return b; return false;`。
+而 `ExpressionBuilder.VisitIfInstruction` 根本不会被调用 —— `StatementBuilder`
+在语句层就处理掉了这个 `if`（`StatementBuilder.VisitIfInstruction`，`:110`），
+只有 `if` 处于表达式/条件槽位时才会走 `ExpressionBuilder`。
+
+**两条候选修法**（都还没做，属于「控制流塑形」大类，风险较高）：
+1. 让 ILAst 优化产出 `if (a) X else ldc.i4 0`（把尾部 `leave(0)` 收进 `FalseInst`），
+   使现有 `MatchLogicAnd` 直接命中；
+2. 在 `StatementBuilder` 层加一条语句级重建：`if (a) return B; return false;`
+   → `return a && B;`（以及 `if (a) return B; return true;` → `return !a || B;`）。
+   这条会影响 `aggressivelyDuplicateReturnBlocks` 的去重路径，需整体回归。
+
+**取舍**：收益约 66 处/单程序集（≈200–300 diff 行，占 DnSpy C# 语料 14151 的 2%），
+但改动落在控制流核心，回归面大，故本次只定位不实现。
+

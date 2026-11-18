@@ -1633,14 +1633,20 @@ Block IL_0000 (incoming: 1) {
   `ConvertBlockContainer` 会跳过 final leave 让它自然跌出块外，那种情况不会产生
   `return false;`，不能合并。
 
-**验证**：`dnSpy.Contracts.DnSpy.dll` C# `diffLines` 14081 → **12778**（−1303）、
-`identical` 901 → **906**；`Logic` 7290 → **6838**（−452）；`Debugger` 2115 → **1772**（−343）。
-`&&` 290 → **342**（2.3 = 356），`return false;` 256 → **204**（2.3 = 173）。
-三个程序集 C# dump `degraded=0 errors=0`；IL 语料仍 **1310 / 303 / 114 全一致**；
-`verify-all` `hardFail=0`，`bench` 最慢 75 ms（比修前更快）。
+**`||` 变体**：`if (c) return B; return true;` ≡ `return !c || B;`（2.3 印
+`return offset == 0U || offset < this.Span.Length;`）。同一函数里把尾部常量放宽到
+`0` 或 `1`，`leftExpr` 在 `1` 时取 `exprBuilder.LogicNot(cond)`、运算符取
+`ConditionalOr`。
 
-**遗留**：还有 14 个 `&&` / 31 个 `return false;` 未合并（多为 `return true;` 的
-`||` 变体，需要 `LogicNot(cond)`，本次未做）。
+**验证**：`dnSpy.Contracts.DnSpy.dll` C# `diffLines` 14081 → **12637**（−1444）、
+`identical` 901 → **906**；`Logic` 7290 → **6829**（−461）；`Debugger` 2115 → **1773**（−342）。
+`&&` 290 → **342**（2.3 = 356），`||` 133 → **155**（2.3 = 175），
+`return false;` 256 → **203**（2.3 = 173），`return true;` 157 → **149**（2.3 = 132）。
+三个程序集 C# dump `degraded=0 errors=0`；IL 语料仍 **1310 / 303 / 114 全一致**；
+`verify-all` `hardFail=0`，`bench` 最慢 104 ms、`cecilCalls=0 fails=0`。
+
+**遗留**：还剩 14 个 `&&` / 20 个 `||` / 30 个 `return false;` / 17 个 `return true;`
+未合并（`trueExpr` 非布尔、条件带副作用、或尾部常量不是 0/1 的变体）。
 
 ### 8.60 既有缺陷：`dotnet build dnSpy.sln` 的 net48 目标会偶发引用错配（与本次改动无关）
 

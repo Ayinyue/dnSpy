@@ -2024,3 +2024,24 @@ public MethodDebugInfoBuilder(int decompilerSettingsVersion, StateMachineKind st
 - 临时变量内联（同 §8.68）在 VB 侧同样存在。
 - VB 只有 `lang-diff` 一个抽样门（`-Soft`），**建议给 VB 也加整程序集语料门**，
   否则这类差异只能靠抽样发现。
+
+### 8.71 源码对拍工具 `baseline/source-check.py`（2026-11-18）
+
+§8.67/§8.68 反复指出「门禁只有与 2.3 的 diff，证明不了改对」。这个脚本把
+**仓库自带的 dnSpy 源码**当判据，做最保守的一种对拍：
+
+```
+py baseline/source-check.py <dumpDir> <sourceDir>
+# <dumpDir> = baseline dump --impl ilspy32 --lang cs --all 的输出
+```
+对每个类型：找到提及该类型短名的源文件，提取**类级成员声明**名
+（缩进 ≤ 1 tab；跳过注释、许可头、同文件里的其他类型声明），
+报「源码里有、反编译输出里没有」的名字。少一个名字就是**掉了/改了成员**的强信号。
+
+**实测**：`dnSpy.Contracts.Logic.dll` → `checked=112 flagged=0`
+（112 个类型全过，0 误报）。已知噪音源：嵌套类型、`partial` 拆分、
+`record`/`required` 等新语法的声明形式 —— 脚本是**启发式**，
+用途是「改完之后跑一遍看有没有把成员弄丢」，不是完整解析器。
+
+**用法**：改完枚举命名 / 临时变量内联这类改动后，先跑一遍这个脚本确认没有
+成员丢失，再跑 `lang-diff-all` 看兼容性 —— 两个信号一起才够。

@@ -1527,3 +1527,32 @@ G 子项（临时变量 117 等）、B 类显式转换（143 行）。
 **注**：`diffLines` 只 −1/−1/0，因为后缀差异散落在更大的差异 hunk 里，
 `DiffLineCount` 不会为「一行变得完全相同」逐行记账；后缀总量（上表）是更灵敏的口径。
 
+### 8.57 `Nullable<T>.HasValue` → `x != null`（2026-11-18，已修）
+
+**现象**：`CompilerDiagnostic.ToString()` 里 2.3 印 `if (this.LineLocationSpan != null)`，
+3.2 印 `if (this.LineLocationSpan.HasValue)`；`Bit7EncodedInt32Data.Is7Encoded()` 里
+2.3 印 `if (value == null)`，3.2 印 `if (!value.HasValue)`。
+2.3 语料 `.HasValue` 出现 **0 次**，3.2 有 52 次（`dnSpy.Contracts.DnSpy.dll`，1414 类型）。
+
+**根因**：IL 里 `Nullable<T>` 的 `== null` 就是 `get_HasValue()`，没有独立的「空」表示。
+`CallBuilder.HandleAccessorCall` 把 `get_HasValue` 访问器按属性名输出成 `.HasValue`；
+2.3 额外把该访问器翻成 `!= null`（取反时翻成 `== null`）。
+
+**两处改动**：
+1. `CallBuilder.HandleAccessorCall` 的 getter 分支加 `IsNullableHasValueGetter(method)`
+   （`AccessorOwner` 是 `System.Nullable`1` 上名为 `HasValue` 的属性），
+   输出 `BinaryOperatorExpression(target, InEquality, null)`；
+2. `ExpressionBuilder.LogicNot` 加一条：`!(a != null)` → `a == null`、`!(a == null)` → `a != null`，
+   否则取反场景会印成 `!(value != null)`。
+
+**一个必须的坑**：`LogicNot` 里**必须 `Clone()` 子树**再改 `Operator`。
+直接复用 `bin.Left`/`bin.Right` 会抛
+`InvalidOperationException: Node is already used in another tree`（`set_Left` 的父节点检查），
+实测一次降级 16 个类型（`HexPosition.get_HasValue`、`DocComment.get_Xml"1` 等）。
+
+**验证**：`dnSpy.Contracts.DnSpy.dll` C# 14176 → **14151**（−25，`identical` 896 → **900**，
+4 个类型变得完全一致）；`Logic` 7345 → **7344**；`Debugger` 2155 → **2155**。
+`.HasValue` 52 → **0**（与 2.3 一致）；`!= null` 309 → 332、`== null` 504 → 533
+（2.3 为 272 / 615）。三个程序集 C# dump `degraded=0`；VB `Logic` 降级数与修前一致（2）。
+`verify-all` `hardFail=0`。
+

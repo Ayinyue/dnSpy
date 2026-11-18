@@ -1868,6 +1868,12 @@ query 子句）；Release 构建下不崩，但 sequence point 会被写错。
 `InsertTokenComments` 的 `Annotation<MethodDef>()` 归属，改动面在核心 binder，**本次只定位**。
 token 注释是可选显示项（`ShowTokenAndRvaComments`），优先级低于代码本体差异。
 
+**负结果（同日实验）**：`CachedTextColorsCollection` 里 3.2 比 2.3 多一行
+`// (get) Token: …`（索引器的访问器注释），看着像「索引器不该打访问器注释」。
+把 `InsertTokenComments` 的 `IndexerDeclaration` 分支删掉后实测 **变差**：
+`DnSpy.dll` 11937 → **11970**（+33）。即 2.3 对**多数**索引器确实打访问器注释，
+只有个别（如该索引器）不打。**已还原，不做**。
+
 ### 8.66 `readonly get;` 被降级成 `[IsReadOnly] get;`（2026-11-18，已修）
 
 **现象**：`ToolWindowContentInfo`（struct）里 2.3 印

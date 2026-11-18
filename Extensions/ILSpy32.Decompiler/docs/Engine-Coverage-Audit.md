@@ -1945,3 +1945,9 @@ public static ColorType ToColorType(this TextColor self) => (uint)self + ColorTy
 
 **顺带**：同族的 `(uint)self` 被印成 `(int)self`（显式转换运算符选错符号），
 也归到 2。
+
+**负结果（同日实验）**：把 `HandleBinaryNumeric` 的枚举分支从 `op.IsBitwise()`
+放宽到也含 `Add`/`Subtract`，**语料零变化**（11937/6774/1338 一个数都没动）。
+原因是常量先被 `PrepareArithmeticArgument`/`ResolveBinaryOperator` 定型成
+`uint`，`AdjustConstantExpressionToType(right, left.Type)` 的目标已经是 `uint`
+而不是枚举 —— 光放宽谓词没用，得改操作数定型本身。已还原。

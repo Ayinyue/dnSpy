@@ -1581,6 +1581,16 @@ internal static event EventHandler<MetroWindowCreatedEventArgs> MetroWindowCreat
 因为 `DiffLineCount` 是不做 LCS 的「指针各进一位」算法，删掉一行会打乱后续对齐；
 以 LCS 口径为准（本报告 §8.48 已记录该口径缺陷）。
 
+**补充（同日）**：`TransformAutomaticEvents` 对**抽象事件**也做转换
+（`if (!ev.Modifiers.HasFlag(Modifiers.Abstract))` 只跳过「自动模式匹配」，不跳过转换），
+于是照样把 add 访问器的属性以 `method:` 目标搬过去 —— 多出
+`[method: NullableContext(2)]`（2.3 只保留事件级属性）。
+修法：抽象事件跳过这段拷贝。
+`HexView` 实测从「3.2 多 6 处 `[method: NullableContext]`」变成 **`diffLines=0`（完全一致）**；
+`DnSpy.dll` 12207 → **12193**（`identical` 962 → **966**）、
+`Logic` 6794 → **6793**、`Debugger` 1689 → **1666**（`identical` 233 → **237**）。
+`degraded=0`；`verify-all` `hardFail=0`。
+
 ### 8.59 `return a && b` 被拆成 `if (a) return b; return false;`（2026-11-18，已修）
 
 **现象**：`NodeFormatter.IsExe`（token `060015CD`）

@@ -2239,3 +2239,28 @@ i = wsi + 1 - index;
 `SpanData\`1`(44)、`CachedTextColorsCollection`(62) 三个大类型，两边的 `goto IL_`
 计数都是 0。所以 §8.78 是 `HtmlClipboardFormatWriter` 的个例，
 **不要据此推断「大 diffLines 类型都是 2.3 更差」**；逐个看输出形态仍然必要。
+
+### 8.79 token 抽检工具 `baseline/token-check.py`（2026-11-18）
+
+§8.73/§8.74 建议加 token 抽检门，这是它的落地：
+```
+py baseline/token-check.py <dumpDir>
+```
+扫每个 dump 文件里的 `// Token: … RID: n`，报**同一类型内 RID 重复**。
+正常输出不该有重复（属性的 `(get)`/`(set)` 注释用的是访问器自己的 RID，嵌套类型各占一个文件）。
+
+**首次实跑**（`dnSpy.Contracts.DnSpy.dll`，1414 类型）：`types_with_duplicates=58`。
+抽看一个：
+```
+// Token: 0x06001C75 RID: 7285   private bool MoveNext() { … }
+// Token: 0x06001C75 RID: 7285   bool IEnumerator.MoveNext()   // 同一个 RID
+```
+且第二行下面紧跟着 `//ILSpy generated this explicit interface implementation from .override directive`。
+全语料这种「ILSpy 由 .override 指令合成」的注释共 **35 处** —— 即 58 个重复里**至少 35 个是这条合成路径**（合成方法本身没有独立 metadata token，所以沿用了 `MoveNext` 的）。
+
+**判定**：这条是**设计取舍**，不是 §8.74 那种绑定错 —— 但它是可查的：合成方法应该印 `// Token: 0x00000000 RID: 0`（或干脆不印 token），
+而不是复用被实现方法的 token。**已定位，未修**（`TypeSystemAstBuilder` 的 `.override` 合成处）。
+剩下 ~23 个重复类型需要逐个看是不是同一模式。
+
+**用法**：改完 token 相关的东西跑一遍，`types_with_duplicates` 应当只下降不上升；
+配合 `source-check.py`（成员不丢）与 `lang-diff-all`（兼容收敛）构成三个信号。

@@ -1653,3 +1653,31 @@ net10 与 net48 的产物落在相邻/共享目录），**先于本次升级存�
 `dnSpy.sln` 需要重跑 1–4 次才拿到 0 错误。CI 接线时建议：
 ① 构建加 `-m:1` 或分目标构建；② 把 net48 门禁改成先单独构建各 ProjectReference。
 
+### 8.61 关闭 `OutVariables`：`out int x` → 先声明再 `out x`（2026-11-18，已修）
+
+**现象**：`MetroWindow.WndProc` 里
+```csharp
+// 2.3                                    // 3.2
+int dpiX;                                out int dpiX,
+int dpiY;                                out int dpiY,
+WindowUtilities.GetDpi(GetWindowHandle(),   WindowUtilities.GetDpi(GetWindowHandle(), out dpiX, out dpiY);
+         out dpiX, out dpiY);
+```
+3.2 用 C# 7 的 inline `out var`；2.3 先声明局部再传 `out`。
+`dnSpy.Contracts.DnSpy.dll` 上 `out <类型> <名字>` 计数：2.3 = 88（都是先声明的），
+3.2 = 163（内联）。
+
+**根因**：`DecompilerSettings.OutVariables` 默认 `true`（`DecompilerSettings.cs:621`）。
+2.3 基于 ILSpy 2.x，早于 C# 7，没有这个特性。
+
+**改动**：`DecompilerSettings32` 的「dnSpy 2.3 compatibility」块加
+`EngineSettings.OutVariables = false;`（与 `NullPropagation` / `QueryExpressions` /
+`UseImplicitMethodGroupConversion` 并列）。
+
+**验证**：`out <类型> <名字>` 163 → **7**；
+`dnSpy.Contracts.DnSpy.dll` C# `diffLines` 14153 → **14081**（−72，`identical` 900 → **901**）、
+精确 LCS 9458 → **9379**（−79）；`Logic` 7344 → **7290**（−54）；`Debugger` 2117 → **2115**。
+VB `Logic` LCS 8887 → **8881**，且 `_discard1`/`_discard2` 变成真实参数名
+（`framework` / `profile` / `bytesUsed` / `completed`），因为内联 `out` 变量此前被
+VB 转换当成 discard。`degraded=0`；`verify-all` `hardFail=0`。
+

@@ -2002,3 +2002,22 @@ if (cur.ILSpan.End < next.ILSpan.Start)       iLSpan = cur.ILSpan;
 凡是 3.2 更贴源码的，就从「兼容残留」里剔除。§8.67/§8.68 剩下那些
 （枚举常量命名、临时变量内联、`(uint)` cast、循环塑形、显式接口 token/顺序、
 lambda `this` sequence point）才是**两个引擎都错或 3.2 确实更差**的真残留。
+
+### 8.70 VB 侧实测（`MethodDebugInfoBuilder`，C# 63 行 / VB 68 行）
+
+用 `lang-diff` 同时取 C# 与 VB 输出对拍，源码在
+`dnSpy/dnSpy.Contracts.Logic/Decompiler/MethodDebugInfoBuilder.cs:72`：
+```csharp
+public MethodDebugInfoBuilder(int decompilerSettingsVersion, StateMachineKind stateMachineKind, MethodDef method, MethodDef? kickoffMethod) {
+    ...
+    if (method == kickoffMethod)
+```
+- **VB 参数被改名**：3.2 印 `stateMachineKind2`（因为和字段 `Me.stateMachineKind`
+  撞名），2.3 印 `stateMachineKind`（**与源码一致**）。C# 侧两边都没改名 →
+  改名只发生在 `CSharpToVBConverter32`。**真残留，3.2 更差。**
+- **`For` vs `While`**：2.3 印 `For i As Integer = 0 To Me.statements.Count - 1 - 1`，
+  3.2 印 `Dim i As Integer = 0` + `While i < Me.statements.Count - 1`。
+  3.2 更干净但不同 —— 属循环塑形（C# 侧同理，见 §8.68 提到的那类）。
+- 临时变量内联（同 §8.68）在 VB 侧同样存在。
+- VB 只有 `lang-diff` 一个抽样门（`-Soft`），**建议给 VB 也加整程序集语料门**，
+  否则这类差异只能靠抽样发现。

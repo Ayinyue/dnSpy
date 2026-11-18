@@ -2234,3 +2234,8 @@ i = wsi + 1 - index;
 
 **方法论**：判断残留归属必须逐类型看输出形态，不能只看 `diffLines` 大小 ——
 `diffLines` 最大的类型往往正是 2.3 崩掉的地方。
+
+**补充（同日）**：`goto IL_` 并不是普遍现象 —— 抽查 `SpanDataCollection\`1`(163)、
+`SpanData\`1`(44)、`CachedTextColorsCollection`(62) 三个大类型，两边的 `goto IL_`
+计数都是 0。所以 §8.78 是 `HtmlClipboardFormatWriter` 的个例，
+**不要据此推断「大 diffLines 类型都是 2.3 更差」**；逐个看输出形态仍然必要。

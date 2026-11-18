@@ -2048,3 +2048,39 @@ py baseline/source-check.py <dumpDir> <sourceDir>
 
 **用法**：改完枚举命名 / 临时变量内联这类改动后，先跑一遍这个脚本确认没有
 成员丢失，再跑 `lang-diff-all` 看兼容性 —— 两个信号一起才够。
+
+### 8.72 循环塑形定位：`HighLevelLoopTransform.MatchWhileLoop` 的 `MatchLeave(loop)` 失败（2026-11-18）
+
+**现象**：源码 `for (int i = 0; i < length;)`（`HtmlClipboardFormatWriter.cs:51`），
+2.3 印 `int i = 0; while (i < length) { … }`，3.2 印
+`int j = 0; while (true) { if (j >= length) break; … }`。**3.2 更差**（真残留）。
+
+**定位到具体判定**。`HighLevelLoopTransform.MatchWhileLoop`
+（`IL/Transforms/HighLevelLoopTransform.cs:52`）四个条件里，前三个都过，
+**卡在 `ifInstruction.TrueInst.MatchLeave(loop)`**。
+插桩实测（`PROBE_LOOP_DEBUG=1`，方法 `WriteString` token `060001AD`）：
+```
+[LOOP] instr0=IfInstruction count=4 final=Nop
+[LOOP] falseNop=True captured=False leave=True      ← 第一个循环，成功
+[LOOP] instr0=IfInstruction count=7 final=Nop
+[LOOP] falseNop=True captured=False leave=False     ← 第二个循环，失败
+```
+对应 ILAst（`ilast-verify … dump`）：
+```
+BlockContainer {
+Block IL_0000 (incoming: 1) {
+  stloc j(ldc.i4 0)
+  BlockContainer (while-true) {
+    Block IL_00f6 (incoming: 2) {
+      if (comp.signed(ldloc j >= ldloc length)) leave IL_0000 (nop)
+      …
+```
+即循环**入口处确实有条件 `if (j >= length)`**，但该 `leave` 的
+`TargetContainer` **不是循环容器本身**（`LoopDetection` 只把 `Branch` 改写成
+`Leave(loopContainer)`，管不到已经是 `Leave` 的出口）。于是 `MatchLeave(loop)` 为假，
+循环停留在 `while-true` 形态。
+
+**未修原因**：修它要决定「`leave` 指向祖先容器」时如何重构（把该 `leave` 变成
+循环的出口、并把条件反相成 `while (cond)`），会影响**所有**顶层循环的塑形；
+而且 `LoopDetection`/`DetectExitPoints` 的交互需要整体回归。属控制流核心，
+**本次只定位到判定**。

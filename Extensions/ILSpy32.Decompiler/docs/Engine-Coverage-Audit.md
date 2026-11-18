@@ -1867,3 +1867,37 @@ query 子句）；Release 构建下不崩，但 sequence point 会被写错。
 **判定**：属「显式接口实现的 token 标注 + 成员排序」，机制指向 `TypeSystemAstBuilder`/
 `InsertTokenComments` 的 `Annotation<MethodDef>()` 归属，改动面在核心 binder，**本次只定位**。
 token 注释是可选显示项（`ShowTokenAndRvaComments`），优先级低于代码本体差异。
+
+### 8.66 `readonly get;` 被降级成 `[IsReadOnly] get;`（2026-11-18，已修）
+
+**现象**：`ToolWindowContentInfo`（struct）里 2.3 印
+```csharp
+public Guid Guid { readonly get; set; }
+```
+3.2 印
+```csharp
+public Guid Guid
+{
+    [IsReadOnly]
+    get;
+    set;
+}
+```
+外加一行 `using System.Runtime.CompilerServices;`。
+
+**根因两处**：
+1. `TypeSystemAstBuilder.ConvertAccessor` 把访问器上的
+   `System.Runtime.CompilerServices.IsReadOnlyAttribute` 原样输出。2.3 把它翻成
+   C# 8.0 的 `readonly` 访问器修饰符。
+2. `CSharpOutputVisitor.VisitPropertyDeclaration` 的**单行自动属性折叠分支**
+   （`ForceOneLine` 且两个访问器都无函数体）是**手写** `get;`/`set;` 的，
+   **不写访问器修饰符** —— 所以即使加了 `Modifiers.Readonly` 也不会输出。
+
+**两处都改**：`ConvertAccessor` 检测到 `IsReadOnlyAttribute` 时置
+`Modifiers.Readonly` 并跳过该属性；折叠分支补 `WriteModifiers(((Accessor)node).ModifierTokens)`。
+
+**验证**：`ToolWindowContentInfo` `diffLines` 65 → **1**（剩下那条是
+`double.MaxValue` vs `1.797...E+308`，源码写的是 `double.MaxValue`，**3.2 更贴源码**，不对齐）。
+语料：`DnSpy.dll` 12193 → **11937**（`identical` 966 → **968**）、
+`Logic` 6793 → **6774**、`Debugger` 1666 → **1338**（`identical` 237 → **238**）。
+`degraded=0`；`verify-all` `hardFail=0`。

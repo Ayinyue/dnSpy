@@ -2303,3 +2303,20 @@ decl pit=IEnumerator<IDsDocument>  /  IEnumerator
 与被实现方法同名，`wantsQualified` 下找不到带 `.` 的元数据名，回退到 plain 名 → 同 token）；
 ② `BookmarksService`（RID 6760/6762/6765 各两次）等**属性/事件**的多份 token，
 需再单独查（可能是 backing field 的 token 归属）。
+
+### 8.81 重载签名把 `T[]` 归一成 `T`，导致构造函数绑错（2026-11-18，已修）
+
+`ExportBookmarkLocationFormatterProviderAttribute` 的两个构造函数印同一个 token：
+```
+// Token: 0x06001A49 RID: 6729   public Attribute(string type) { … }
+// Token: 0x06001A49 RID: 6729   public Attribute(string[] types) { … }
+```
+根因：`NormalizeParameterTypeName` 里 `TrimEnd('&','*','(',')','[',']','?')` **把 `[]` 也剥掉**，
+于是 `(string)` 与 `(string[])` 归一成同一个 "String"，`ParameterTypesMatch` 判定两者同签名，
+重载解析退化，两个 `.ctor` 绑到同一个 `MethodDef`。
+
+**修法**：先把 VB 的数组拼写 `()` 映射成 `[]`，再只 `TrimEnd('&','*','?')` ——
+保留数组性，C#/VB 的数组拼写仍然统一。
+
+**验证**：token 重复 56 → **49**；`DnSpy.dll` C# `diffLines` 11625 → **11215**（−410）、
+`Debugger` 1338 → **1264**（−74）、`Logic` 6772 不变；`degraded=0`；`verify-all` `hardFail=0`。

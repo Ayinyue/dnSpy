@@ -640,7 +640,11 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		};
 
 		internal static string NormalizeParameterTypeName(string name) {
-			var result = name.TrimEnd('&', '*', '(', ')', '[', ']', '?');
+			// 统一 VB 的数组拼写（Byte()）与元数据/C# 的 Byte[]，但不能把 [] 也剥掉 ——
+			// 否则 (string) 与 (string[]) 会被当成同一个签名，重载绑定到同一个 MethodDef，
+			// 于是两个构造函数印同一个 token（audit 8.81）。
+			var result = name.Replace("()", "[]");
+			result = result.TrimEnd('&', '*', '?');
 			// Arrays ("Byte[]" in metadata, "Byte()" in VB) and Nullable ("T?" / Nullable`1)
 			// normalize to their element type; the trim above already handled the spellings.
 			// A generic argument contains dots and an arity suffix of its own, so cut the arguments

@@ -2143,3 +2143,30 @@ Block IL_0000 (incoming: 1) {
 但它在一个已经缺成员的 `Methods` 集合里找 —— 先修解析，再谈匹配。
 **建议**：给 `Attach` 加一道断言（`typeDef.Methods.Count` 与源码声明数同量级），
 或先给 token 注释加抽检门。
+
+### 8.75 泛型/非泛型同名类型的 token 绑定错（2026-11-18，已修）
+
+**根因**（§8.74 的后续）：源码 `Menus/MenuItemBase.cs` 同时声明了
+`internal abstract class MenuItemBase` 和 `internal abstract class MenuItemBase<TContext>`。
+`AstAnnotationBinder` 的解析按**不带 arity 的短名**查：
+- `knownTypes[typeDeclaration.Name]`，而 `TypeDeclaration.Name` 是 `MenuItemBase`
+  （arity 在 `TypeParameters` 里），元数据 `TypeDef.Name` 却是 `MenuItemBase\`1`；
+- 回退路径 `GetFullTypeName` 又主动 `StripTypeArity`，把泛型名剥成 `MenuItemBase`，
+  撞上同名的非泛型类型。
+
+结果 `MenuItemBase<TContext>` 被绑到**非泛型的 `MenuItemBase`**（只有 8 个方法），
+于是：`CreateContext`/`GetCachedContext` 拿不到 token；显式实现和公共方法
+**同名 `Execute` 都匹配到同一个 `MethodDef`**（§8.73 的重复 token）。
+
+**修法**（`Common/AstAnnotationBinder.cs`）：
+1. `knownTypes` 查询键补 arity：`name + "`" + TypeParameters.Count`；
+2. `GetFullTypeName` 输出**元数据拼写**（含 arity 与类型参数名，如
+   `MenuItemBase\`1[TContext]`），这样 `BuildIndex` 的第一循环键能命中；
+   剥离 arity 的条目退化为无同名兄弟时的回退。
+
+**验证**：`MenuItemBase\`1` 的 token 从 `0x06000832`(重复) 变回
+`0x0600083A / 0x0600083B / … / 0x0600083D`（与 2.3 逐个一致），
+`diffLines` 146 → 144。
+语料：`DnSpy.dll` 11937 → **11653**（−284，`identical` 968 → **971**）、
+`Logic` 6774 → **6772**、`Debugger` 1338 → **1338**。`degraded=0`；
+`verify-all` `hardFail=0`。

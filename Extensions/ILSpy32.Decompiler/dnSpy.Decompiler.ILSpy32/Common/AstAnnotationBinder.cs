@@ -112,10 +112,16 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			var methodNames = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
 			foreach (var typeDeclaration in tree.Descendants.OfType<ICSharpCode.Decompiler.CSharp.Syntax.TypeDeclaration>()) {
 				TypeDef? typeDef = null;
-				if (knownTypes is not null && typeDeclaration.Name is not null &&
-						knownTypes.TryGetValue(typeDeclaration.Name, out var known))
-					typeDef = known;
-				else {
+				if (knownTypes is not null && typeDeclaration.Name is not null) {
+					// The syntax tree omits the arity; the metadata TypeDef.Name carries it
+					// ("MenuItemBase" vs "MenuItemBase`1"). The bare-name lookup made a generic
+					// type bind to a non-generic sibling of the same name.
+					var key = typeDeclaration.Name;
+					if (typeDeclaration.TypeParameters.Count > 0)
+						key = key + "`" + typeDeclaration.TypeParameters.Count;
+					knownTypes.TryGetValue(key, out typeDef);
+				}
+				if (typeDef is null) {
 					var fullName = GetFullTypeName(typeDeclaration);
 					if (fullName is null || !types.TryGetValue(fullName, out typeDef)) {
 						if (!bySimpleName.TryGetValue(typeDeclaration.Name, out typeDef) || ambiguousNames.Contains(typeDeclaration.Name))
@@ -259,6 +265,12 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			if (nested.Count == 0)
 				return null;
 			var typeName = string.Join("/", nested);
+			// The metadata full name carries the arity and the type parameter names
+			// ("MenuItemBase`1[TContext]"); the syntax tree only carries "MenuItemBase".
+			// Without the arity a generic type collides with a non-generic sibling of the
+			// same name (MenuItemBase / MenuItemBase<TContext>) and binds to the wrong TypeDef.
+			if (declaration.TypeParameters.Count > 0)
+				typeName += "`" + declaration.TypeParameters.Count + "[" + string.Join(",", declaration.TypeParameters.Select(tp => tp.Name)) + "]";
 			return string.IsNullOrEmpty(ns) ? typeName : ns + "." + typeName;
 		}
 

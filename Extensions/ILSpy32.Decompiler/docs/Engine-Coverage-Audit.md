@@ -1679,29 +1679,6 @@ net10 与 net48 的产物落在相邻/共享目录），**先于本次升级存�
 `dnSpy.sln` 需要重跑 1–4 次才拿到 0 错误。CI 接线时建议：
 ① 构建加 `-m:1` 或分目标构建；② 把 net48 门禁改成先单独构建各 ProjectReference。
 
-**复发与定位（同日稍晚）**：改完文档后 `verify-all -NoBuild` 变成 `softFail=4` ——
-**三个 C# 语料门全部** `exit=-2146232797`，栈顶是
-`SequencePointBuilder.AddToSequencePoint(ILInstruction):255` 的
-`Debug.Assert(current.Function == null || current.Function == function)`。
-而在这之前的同一个提交上，同样的门禁是 `hardFail=0`。
-
-两次之间唯一的动作是跑了 `dotnet build dnSpy.sln -c Release`（还跑了两次）。
-**把引擎与扩展按手工命令重构建一次后，C# 语料门立刻恢复**：
-`types=1310 identical=962 diffLines=12207 errors=0`。
-
-**结论（更强）**：`dotnet build dnSpy.sln` 产出的引擎 DLL 与手工
-`dotnet build ICSharpCode.Decompiler.csproj -c Release` 产出的**行为不同** ——
-前者的 `Debug.Assert` 是激活的（否则 `Debug.Assert` 在 .NET Core 下会直接终止进程，
-门禁不可能是 `exit=-2146232797`）。所以：
-- 门禁**必须**用「手工重构建引擎+扩展，再 `verify-all -NoBuild`」这两步；
-- 只要跑过 `dnSpy.sln`，就必须重构建，否则拿到的是假失败；
-- 这条不只在 CI 里成立，本地换着构建方式也会踩到。
-
-**另注**：`SequencePointBuilder` 那条不变量本身值得单独查 —— 它说明存在
-「AST 节点携带的 IL 指令属于另一个 `ILFunction`」的情形（大概率与 lambda/局部函数
-或短路重建节点有关）。Release 构建下它不崩，但会**静默产生错误的 sequence point**，
-所以不是纯 debug-only 问题。已记入待办。
-
 ### 8.61 关闭 `OutVariables`：`out int x` → 先声明再 `out x`（2026-11-18，已修）
 
 **现象**：`MetroWindow.WndProc` 里
@@ -1779,6 +1756,50 @@ Process terminated. Assertion failed.
 2. 门禁固定用「先手工重构建引擎+扩展，再 `verify-all -NoBuild`」两步，别依赖 `verify-all` 的
    自动构建产物；
 3. 加一条 `bench` 与语料门的 `degraded/errors` 断言，崩溃要显式失败而不是静默 `exit=-2146232797`。
+
+**复发与定位（同日稍晚）**：改完文档后 `verify-all -NoBuild` 变成 `softFail=4` ——
+**三个 C# 语料门全部** `exit=-2146232797`，栈顶是
+`SequencePointBuilder.AddToSequencePoint(ILInstruction):255` 的
+`Debug.Assert(current.Function == null || current.Function == function)`。
+而在这之前的同一个提交上，同样的门禁是 `hardFail=0`。
+
+两次之间唯一的动作是跑了 `dotnet build dnSpy.sln -c Release`（还跑了两次）。
+**把引擎与扩展按手工命令重构建一次后，C# 语料门立刻恢复**：
+`types=1310 identical=962 diffLines=12207 errors=0`。
+
+**结论（更强）**：`dotnet build dnSpy.sln` 产出的引擎 DLL 与手工
+`dotnet build ICSharpCode.Decompiler.csproj -c Release` 产出的**行为不同** ——
+前者的 `Debug.Assert` 是激活的（否则 `Debug.Assert` 在 .NET Core 下会直接终止进程，
+门禁不可能是 `exit=-2146232797`）。所以：
+- 门禁**必须**用「手工重构建引擎+扩展，再 `verify-all -NoBuild`」这两步；
+- 只要跑过 `dnSpy.sln`，就必须重构建，否则拿到的是假失败；
+- 这条不只在 CI 里成立，本地换着构建方式也会踩到。
+
+**另注**：`SequencePointBuilder` 那条不变量本身值得单独查 —— 它说明存在
+「AST 节点携带的 IL 指令属于另一个 `ILFunction`」的情形。Release 构建下它不崩，
+但会**静默产生错误的 sequence point**，所以不是纯 debug-only 问题。
+
+**已定位（同日，Debug 引擎实测）**：把引擎按 `-c Debug` 构建后必崩，
+`lang-diff-all` 逐个类型跑，崩在 **`dnSpy.Contracts.MVVM.GridViewColumnSorter`**。
+栈是
+```
+SequencePointBuilder.AddToSequencePoint(ILInstruction):255   (Debug.Assert)
+ ← AddToSequencePoint(AstNode) ← VisitChildren
+ ← VisitThisReferenceExpression ← VisitMemberReferenceExpression
+ ← VisitIndexerExpression ← VisitQuerySelectClause
+```
+对应源码 `descsProvider.Descs.Columns = columns.Select(a => toDesc[a]).ToArray();`
+—— **lambda 里的 `this.toDesc`**：`ThisReferenceExpression` 带的是**外层方法**的 IL 指令，
+而当前 sequence point 属于 lambda 的 `ILFunction`，于是不变量被打破。
+
+**这条是 3.2 既有缺陷，不是本次改动引入的**（本次没碰 `ThisReferenceExpression` /
+query 子句）；Release 构建下不崩，但 sequence point 会被写错。
+**未修**：修它要改 `AddToSequencePoint` 的语义（跳过跨函数指令），
+会影响 PDB/sequence point 映射，而现有门禁**不校验 sequence point**，
+无法验证 —— 故只定位，等补上门禁再做。
+
+**诊断工具**：`baseline/probe` 的 `LangDiffAll` 现在支持
+`PROBE_TRACE_TYPES=1`，逐个打印正在反编译的类型名，崩溃时最后一条即肇事类型。
 
 ### 8.64 数组初始化器 `{ 2, 1 }` 缺左空格（2026-11-18，已修）
 

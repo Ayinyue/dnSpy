@@ -275,6 +275,8 @@ class Probe {
 				if (type.Name!.StartsWith("<"))
 					continue;
 				types++;
+				if (System.Environment.GetEnvironmentVariable("PROBE_TRACE_TYPES") == "1")
+					Console.Error.WriteLine("[T] " + type.FullName);
 				string? a = null, b = null;
 				try { a = DecompileLanguage(l23.Item2, module, type.FullName); }
 				catch { errors++; }

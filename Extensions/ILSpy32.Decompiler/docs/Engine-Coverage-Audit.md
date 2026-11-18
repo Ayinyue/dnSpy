@@ -2335,3 +2335,12 @@ decl pit=IEnumerator<IDsDocument>  /  IEnumerator
 **教训**：§8.79 那次「净零」不是方向错，而是**同一批重复里混着两种成因**（接口匹配 +
 合成转发），只修一种时总数被另一种补上，看起来像没效果。**聚合指标要配合按类型集合
 diff 才能得出结论**。
+
+**剩余 14 处的成因**（抽查 `EditableValueImpl`）：两个**构造函数**同 token ——
+```
+EditableValueImpl(Func<string> getText, Action<string> setText, ...)
+EditableValueImpl(Func<EditableValueTextInfo> getText, Action<string> setText, ...)
+```
+`NormalizeParameterTypeName` 为了消除 `ValueTuple` 这类「自带 `.` 与 arity 后缀」的干扰，
+把 `<...>` 整段切掉，于是 `Func<string>` 与 `Func<EditableValueTextInfo>` 都归一成
+"Func"，重载解析又分不开了。修它要**保留并递归比较泛型实参**，是独立的一项。

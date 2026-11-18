@@ -1556,3 +1556,28 @@ G 子项（临时变量 117 等）、B 类显式转换（143 行）。
 （2.3 为 272 / 615）。三个程序集 C# dump `degraded=0`；VB `Logic` 降级数与修前一致（2）。
 `verify-all` `hardFail=0`。
 
+### 8.58 自动事件不再复制 `[method: Nullable(...)]`（2026-11-18，已修）
+
+**现象**：`MetroWindow` 的字段式事件
+```csharp
+[Nullable(new byte[] {2, 1})]
+[method: Nullable(new byte[] {2, 1})]   // ← 3.2 多出这一行
+internal static event EventHandler<MetroWindowCreatedEventArgs> MetroWindowCreated;
+```
+2.3 只印事件级那一行。全语料 `[method: Nullable(new byte[] …)]` 计数：2.3 = **0**，3.2 = **28**。
+
+**根因**：`PatternStatementTransform.TransformAutomaticEvents`（`:762`）把 add 访问器上的属性
+搬到事件声明并加 `AttributeTarget = "method"`；`attributeTypesToRemoveFromAutoEvents` 的
+过滤名单里没有 `System.Runtime.CompilerServices.NullableAttribute`
+（`NullableContextAttribute` 不在名单里，所以 2.3 的 13 处 `[method: NullableContext(2)]` 保留）。
+
+**改动**：把 `System.Runtime.CompilerServices.NullableAttribute` 加进
+`attributeTypesToRemoveFromAutoEvents`。事件级 `[Nullable(...)]` 仍然保留，信息不丢。
+
+**验证**：`[method: Nullable(...)]` 28 → **0**（与 2.3 一致）；`dnSpy.Contracts.DnSpy.dll`
+按 LCS 精确 diff **9486 → 9458**（−28）；`Debugger` 的 `diffLines` 2155 → **2117**（−38）。
+`degraded=0`；VB `Logic` 输出逐字节不变。
+**注意**：`lang-diff-all` 的 `diffLines` 在 DnSpy 上反而 +2（14151→14153），
+因为 `DiffLineCount` 是不做 LCS 的「指针各进一位」算法，删掉一行会打乱后续对齐；
+以 LCS 口径为准（本报告 §8.48 已记录该口径缺陷）。
+

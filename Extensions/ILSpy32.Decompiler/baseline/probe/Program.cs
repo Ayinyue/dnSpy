@@ -110,7 +110,7 @@ class Probe {
 		}
 		if (args.Length > 0 && args[0] == "ilast-verify") {
 			InstallBinResolver(new[] { args[3] });
-			return ILAstVerify(args[1], args[2], args[3]);
+			return ILAstVerify(args[1], args[2], args[3], args.Length > 4 ? args[4] : null);
 		}
 		if (args.Length > 0 && args[0] == "ilprint-diff") {
 			InstallBinResolver(new[] { args[2] });
@@ -399,7 +399,7 @@ class Probe {
 	// ==== ilast-verify: the console's output discards custom data, so the only way to see the
 	// ILAst writer's brace pairs and debug info is a recording IDecompilerOutput. The language
 	// classes are internal to the extension, so they are created through reflection.
-	static int ILAstVerify(string targetDll, string tokenHex, string dnspyBin) {
+	static int ILAstVerify(string targetDll, string tokenHex, string dnspyBin, string dumpArg = null) {
 		var module = ModuleDefMD.Load(targetDll);
 		var token = int.Parse(tokenHex, System.Globalization.NumberStyles.HexNumber);
 		var method = module.ResolveToken(token) as MethodDef;
@@ -418,6 +418,8 @@ class Probe {
 		foreach (var b in output.Braces.Take(6))
 			Console.WriteLine("  " + b);
 		Console.WriteLine("debugInfo=" + (output.DebugInfo is null ? "none" : "statements=" + output.DebugInfo.Statements.Length));
+		if (dumpArg == "dump")
+			Console.WriteLine(output.Text);
 		return output.Braces.Count > 0 && output.DebugInfo is not null ? 0 : 1;
 	}
 

@@ -38,8 +38,9 @@ def main():
         text = open(path, encoding='utf-8-sig', errors='ignore').read()
         seen = {}
         for m in TOKEN_RE.finditer(text):
-            rid = m.group(2)
-            seen[rid] = seen.get(rid, 0) + 1
+            # 必须用完整 token：0x06000001（方法）与 0x04000001（字段）RID 相同但不是一个东西。
+            token = m.group(1)
+            seen[token] = seen.get(token, 0) + 1
         dups = {rid: n for rid, n in seen.items() if n > 1}
         if not dups:
             continue
@@ -50,8 +51,8 @@ def main():
 
     for name, dups in examples:
         print('=== %s' % name)
-        for rid, n in sorted(dups.items(), key=lambda kv: -kv[1]):
-            print('   RID %s printed %d times' % (rid, n))
+        for token, n in sorted(dups.items(), key=lambda kv: -kv[1]):
+            print('   Token %s printed %d times' % (token, n))
     print('types_with_duplicates=%d' % bad)
     return 1 if bad else 0
 

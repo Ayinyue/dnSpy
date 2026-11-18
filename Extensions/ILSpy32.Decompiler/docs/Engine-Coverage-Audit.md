@@ -2378,3 +2378,17 @@ plain 的 `GetEnumerator`（返回 `IEnumerator<T>`）排在显式实现之前�
 
 **验证**：token 重复 13 → **8**；`DnSpy.dll` C# 11214 → **11199**（`identical` 972 → **973**）；
 `Logic` 6556、`Debugger` 1247 不变；`degraded=0 errors=0`。
+
+### 8.85 `token-check.py` 必须比完整 token，不能只比 RID（2026-11-18，已修）
+
+原检查只取 `RID:`，而 RID 在**不同表之间会重复**：`0x06000001`（方法）与
+`0x04000001`（字段）RID 都是 1。`DelayedAction` 有 RID 1/2/3 各重复一次，全是这类
+**假阳性**（方法 RID 1 与字段 RID 1）。改成比 `0x…` 完整 token 后，剩余从 8 降到 **5**。
+
+**重要修正**：之前几轮报的「58 → 49 → 13」里，有一部分是这类跨表假阳性，
+**不是真实重复**；但接口匹配（§8.80）、数组签名（§8.81）、`.override` 转发（§8.82）、
+泛型实参（§8.83）、qualified 优先（§8.84）五项修复本身都各自带来语料下降，结论不受影响。
+
+**剩余 5 处**：`ComplexData` 一处**两个引擎都重复**（2.3 也有），不算 3.2 的账；
+其余 4 处（`EditableValueImpl`、`HexAdornmentLayer`、`HexBytes`×2、`IDsToolWindowService`）
+是 3.2 独有，待查。

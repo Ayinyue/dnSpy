@@ -2012,9 +2012,12 @@ public MethodDebugInfoBuilder(int decompilerSettingsVersion, StateMachineKind st
     ...
     if (method == kickoffMethod)
 ```
-- **VB 参数被改名**：3.2 印 `stateMachineKind2`（因为和字段 `Me.stateMachineKind`
-  撞名），2.3 印 `stateMachineKind`（**与源码一致**）。C# 侧两边都没改名 →
-  改名只发生在 `CSharpToVBConverter32`。**真残留，3.2 更差。**
+- **VB 参数改名是必要的，3.2 正确**（初判写反了，已更正）：源码参数是
+  `StateMachineKind stateMachineKind` —— 参数名与类型名**只差大小写**。VB 不区分
+  大小写，直接印 `stateMachineKind As StateMachineKind` **根本编译不过**，所以
+  `CSharpToVBConverter32.RegisterParameterName`（`:455`）会改名成
+  `stateMachineKind2`。2.3 印原名 → **产出无效 VB**。**属 §8.69 那类「2.3 更差」，
+  不要对齐。**
 - **`For` vs `While`**：2.3 印 `For i As Integer = 0 To Me.statements.Count - 1 - 1`，
   3.2 印 `Dim i As Integer = 0` + `While i < Me.statements.Count - 1`。
   3.2 更干净但不同 —— 属循环塑形（C# 侧同理，见 §8.68 提到的那类）。

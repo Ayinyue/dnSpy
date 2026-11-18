@@ -2344,3 +2344,21 @@ EditableValueImpl(Func<EditableValueTextInfo> getText, Action<string> setText, .
 `NormalizeParameterTypeName` 为了消除 `ValueTuple` 这类「自带 `.` 与 arity 后缀」的干扰，
 把 `<...>` 整段切掉，于是 `Func<string>` 与 `Func<EditableValueTextInfo>` 都归一成
 "Func"，重载解析又分不开了。修它要**保留并递归比较泛型实参**，是独立的一项。
+
+### 8.83 泛型实参参与重载匹配（2026-11-18，已修）
+
+§8.82 剩余 14 处的成因：`NormalizeParameterTypeName` 为了消除 `ValueTuple` 这类干扰把 `<...>`
+整段切掉，于是 `(Func<string>)` 与 `(Func<EditableValueTextInfo>)` 都归一成 "Func"，
+`EditableValueImpl` 的两个构造函数绑到同一个 `MethodDef`。
+
+**修法（只加不改）**：保留原名字比较，额外加一条 `GenericArgumentsMatch` ——
+元数据侧取 `GenericInstSig.GenericArguments`，语法侧从 `AstType.ToString()` 里切出
+`<...>`，递归比较每个实参的简单名。
+
+**一个被实测否证的版本**：直接重写 `NormalizeParameterTypeName` 保留泛型实参 →
+token 重复 14 → 53、`identical` 971 → **955**（语料 +231）。原因是语法侧的
+`AstType.ToString()` 对 `int` 之类给的是关键字拼写，与元数据名对不上，把大量普通重载
+匹配打坏了。**所以只能「额外加一条比较」，不能改名字归一本身。**
+
+**验证**：token 重复 14 → **13**；`DnSpy.dll` C# 11215 → **11214**（`identical` 971 → **972**）、
+`Logic` 6772 → **6556**（−216）、`Debugger` 1264 → **1247**；`degraded=0`。

@@ -628,8 +628,87 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 				// the syntax node, so it must not decide the match.
 				if (!string.Equals(NormalizeParameterTypeName(expected), NormalizeParameterTypeName(actual), StringComparison.OrdinalIgnoreCase))
 					return false;
+				// 名字比较会把泛型实参切掉，所以 (Func<string>) 与 (Func<EditableValueTextInfo>)
+				// 会撞车；泛型实参必须单独比一遍（audit 8.82）。
+				if (!GenericArgumentsMatch(parameters[i].Type, declarationParameters.ElementAt(i).Type))
+					return false;
 			}
 			return true;
+		}
+
+		/// <summary>
+		/// 泛型实参也要一致：否则 <c>(Func&lt;string&gt;)</c> 与 <c>(Func&lt;EditableValueTextInfo&gt;)</c>
+		/// 的简单名都归一成 "Func"，两个重载绑到同一个 MethodDef（token 重复）。
+		/// 只加不改：名字比较保持原样，这条是额外的必要条件。
+		/// </summary>
+		static bool GenericArgumentsMatch(TypeSig metadataType, ICSharpCode.Decompiler.CSharp.Syntax.AstType syntaxType) {
+			var metaArgs = (metadataType as GenericInstSig)?.GenericArguments;
+			var text = syntaxType.ToString();
+			var lt = text.IndexOf('<');
+			var synArgs = lt >= 0 ? SplitGenericArguments(text.Substring(lt + 1, text.LastIndexOf('>') - lt - 1)) : null;
+			if (metaArgs == null || synArgs == null)
+				return (metaArgs == null) == (synArgs == null);
+			if (metaArgs.Count != synArgs.Count)
+				return false;
+			for (int i = 0; i < metaArgs.Count; i++) {
+				var m = metaArgs[i].ToString();
+				var s = synArgs[i];
+				if (!string.Equals(SimpleTypeName(m), SimpleTypeName(s), StringComparison.OrdinalIgnoreCase))
+					return false;
+				if (!GenericArgumentsTextMatch(m, s))
+					return false;
+			}
+			return true;
+		}
+
+		static bool GenericArgumentsTextMatch(string meta, string syntax) {
+			var ml = meta.IndexOf('<');
+			var sl = syntax.IndexOf('<');
+			var mArgs = ml >= 0 ? SplitGenericArguments(meta.Substring(ml + 1, meta.LastIndexOf('>') - ml - 1)) : null;
+			var sArgs = sl >= 0 ? SplitGenericArguments(syntax.Substring(sl + 1, syntax.LastIndexOf('>') - sl - 1)) : null;
+			if (mArgs == null || sArgs == null)
+				return (mArgs == null) == (sArgs == null);
+			if (mArgs.Count != sArgs.Count)
+				return false;
+			for (int i = 0; i < mArgs.Count; i++) {
+				if (!string.Equals(SimpleTypeName(mArgs[i]), SimpleTypeName(sArgs[i]), StringComparison.OrdinalIgnoreCase))
+					return false;
+				if (!GenericArgumentsTextMatch(mArgs[i], sArgs[i]))
+					return false;
+			}
+			return true;
+		}
+
+		/// <summary>取类型名的简单名（去掉命名空间、泛型实参与 arity 后缀）。</summary>
+		static string SimpleTypeName(string name) {
+			var lt = name.IndexOf('<');
+			var end = lt >= 0 ? lt : name.Length;
+			var tick = name.IndexOf('`');
+			if (tick >= 0 && tick < end)
+				end = tick;
+			var dot = name.LastIndexOf('.', end - 1);
+			return (dot < 0 ? name.Substring(0, end) : name.Substring(dot + 1, end - dot - 1)).Trim();
+		}
+
+		/// <summary>把顶层逗号分开（尊重 <&gt; 嵌套），用于拆分泛型实参。</summary>
+		static List<string> SplitGenericArguments(string text) {
+			var result = new List<string>();
+			int depth = 0;
+			int start = 0;
+			for (int i = 0; i < text.Length; i++) {
+				switch (text[i]) {
+					case '<': depth++; break;
+					case '>': depth--; break;
+					case ',':
+						if (depth == 0) {
+							result.Add(text.Substring(start, i - start));
+							start = i + 1;
+						}
+						break;
+				}
+			}
+			result.Add(text.Substring(start));
+			return result;
 		}
 
 		/// <summary>VB keyword spellings of the BCL primitives, for name-only comparisons.</summary>
@@ -649,7 +728,7 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			// 于是两个构造函数印同一个 token（audit 8.81）。
 			var result = name.Replace("()", "[]");
 			result = result.TrimEnd('&', '*', '?');
-			// Arrays ("Byte[]" in metadata, "Byte()" in VB) and Nullable ("T?" / Nullable`1)
+			// Arrays ("Byte[]" in metadata, "Byte()" in VB) and Nullable ("T?" / Nullable`1")
 			// normalize to their element type; the trim above already handled the spellings.
 			// A generic argument contains dots and an arity suffix of its own, so cut the arguments
 			// off first: "System.ValueTuple`3<A.B, C.D>" must compare as "ValueTuple". The VB

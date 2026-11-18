@@ -1648,6 +1648,16 @@ Block IL_0000 (incoming: 1) {
 **遗留**：还剩 14 个 `&&` / 20 个 `||` / 30 个 `return false;` / 17 个 `return true;`
 未合并（`trueExpr` 非布尔、条件带副作用、或尾部常量不是 0/1 的变体）。
 
+**补充（同日）**：再加一个方向 —— `if (c) return false; return B;` ≡ `return !c && B;`
+（2.3 在 `UIUtilities.GetElementFromEvent` 里就是这么印的：
+`return e.ChangedButton == null && UIUtilities.GetItem<T>(...) != null;`）。
+`dnSpy.Contracts.DnSpy.dll` 12446 → **12207**、`Logic` 6808 → **6794**、
+`Debugger` 1709 → **1689**，`identical` 961 → 962。
+
+**负结果（同一次实验）**：把 `if (c) return true; return B;` ≡ `return c || B;` 也合并
+是**净亏** —— `Logic` +77（6794 → 6871）、`DnSpy` 仅 −3。2.3 在这个朝向上保留
+if 形态，所以**不做**。四个朝向里只实现三个。
+
 ### 8.60 既有缺陷：`dotnet build dnSpy.sln` 的 net48 目标会偶发引用错配（与本次改动无关）
 
 **现象**：同一个提交上连续跑 `dotnet build dnSpy.sln -c Release`，错误数在 **0 / 2 / 8 / 10** 之间跳：

@@ -1581,7 +1581,7 @@ internal static event EventHandler<MetroWindowCreatedEventArgs> MetroWindowCreat
 因为 `DiffLineCount` 是不做 LCS 的「指针各进一位」算法，删掉一行会打乱后续对齐；
 以 LCS 口径为准（本报告 §8.48 已记录该口径缺陷）。
 
-### 8.59 `return a && b` 被拆成 `if (a) return b; return false;`（2026-11-18，**未修**，已定位）
+### 8.59 `return a && b` 被拆成 `if (a) return b; return false;`（2026-11-18，已修）
 
 **现象**：`NodeFormatter.IsExe`（token `060015CD`）
 ```csharp
@@ -1622,15 +1622,25 @@ Block IL_0000 (incoming: 1) {
 在语句层就处理掉了这个 `if`（`StatementBuilder.VisitIfInstruction`，`:110`），
 只有 `if` 处于表达式/条件槽位时才会走 `ExpressionBuilder`。
 
-**两条候选修法**（都还没做，属于「控制流塑形」大类，风险较高）：
-1. 让 ILAst 优化产出 `if (a) X else ldc.i4 0`（把尾部 `leave(0)` 收进 `FalseInst`），
-   使现有 `MatchLogicAnd` 直接命中；
-2. 在 `StatementBuilder` 层加一条语句级重建：`if (a) return B; return false;`
-   → `return a && B;`（以及 `if (a) return B; return true;` → `return !a || B;`）。
-   这条会影响 `aggressivelyDuplicateReturnBlocks` 的去重路径，需整体回归。
+**修法（已实现）**：在 `StatementBuilder.ConvertBlockContainer` 的指令循环里加一条前瞻：
+当 `Instructions[i]` 是 `IfInstruction`、`Instructions[i+1]` 是 `Leave(ldc.i4 0)` 时，
+把两条语句合并成 `return cond && B;`（`TryTranslateShortCircuitReturn`）。
+两个语义等价的守卫必须都成立（都是实测踩出来的）：
+- **`FalseInst` 可以是 `Nop`**：3.2 的 ILAst 把「无 else」表示成 `FalseInst = Nop`
+  而不是 `null`（`Block.WriteTo` 不打 `else` 是因为它认 `Nop`）。只判 `== null`
+  时一处都命中不到（`&&` 计数 290 不变）。
+- 尾部 `leave` 必须**不是** final leave（`IsFinalLeave`，即 `Value.MatchNop()`）：
+  `ConvertBlockContainer` 会跳过 final leave 让它自然跌出块外，那种情况不会产生
+  `return false;`，不能合并。
 
-**取舍**：收益约 66 处/单程序集（≈200–300 diff 行，占 DnSpy C# 语料 14151 的 2%），
-但改动落在控制流核心，回归面大，故本次只定位不实现。
+**验证**：`dnSpy.Contracts.DnSpy.dll` C# `diffLines` 14081 → **12778**（−1303）、
+`identical` 901 → **906**；`Logic` 7290 → **6838**（−452）；`Debugger` 2115 → **1772**（−343）。
+`&&` 290 → **342**（2.3 = 356），`return false;` 256 → **204**（2.3 = 173）。
+三个程序集 C# dump `degraded=0 errors=0`；IL 语料仍 **1310 / 303 / 114 全一致**；
+`verify-all` `hardFail=0`，`bench` 最慢 75 ms（比修前更快）。
+
+**遗留**：还有 14 个 `&&` / 31 个 `return false;` 未合并（多为 `return true;` 的
+`||` 变体，需要 `LogicNot(cond)`，本次未做）。
 
 ### 8.60 既有缺陷：`dotnet build dnSpy.sln` 的 net48 目标会偶发引用错配（与本次改动无关）
 

@@ -1997,11 +1997,14 @@ if (cur.ILSpan.End < next.ILSpan.Start)       iLSpan = cur.ILSpan;
 | LINQ 扩展方法 | `Enumerable.Select<ITreeNode, TreeNodeData>(…)` 静态形式 | `self.TreeNode.Descendants().Select(…)` |
 | 静态构造器 | 把字段初始化式塞回 `static X() { … }` + `// Note: …beforefieldinit` | `static readonly X Empty = new X(…)`（贴源码） |
 | `if (!x) return false; return y;` 的短路 | —— | 3.2 合并成 `return !x && y`（`return true` 那个朝向除外，见 §8.59 负结果） |
+| `(uint)hi < (uint)array.Length` | `hi < array.Length`（**丢掉源码里的显式转换**，语义都变了） | `(uint)hi < (uint)array.Length`（与 `SpanDataCollection.cs:89` 一致） |
 
 **判据**：一律以**源码**为准（仓库里有 `dnSpy/*.cs`），不是以 2.3 为准。
 凡是 3.2 更贴源码的，就从「兼容残留」里剔除。§8.67/§8.68 剩下那些
-（枚举常量命名、临时变量内联、`(uint)` cast、循环塑形、显式接口 token/顺序、
+（枚举常量命名、临时变量内联、循环塑形、显式接口 token/顺序、
 lambda `this` sequence point）才是**两个引擎都错或 3.2 确实更差**的真残留。
+（`(uint)` cast 一项经查源码 `SpanDataCollection.cs:89` 就是 `(uint)hi < (uint)array.Length`，
+属 2.3 丢转换，已移到上表。）
 
 ### 8.70 VB 侧实测（`MethodDebugInfoBuilder`，C# 63 行 / VB 68 行）
 

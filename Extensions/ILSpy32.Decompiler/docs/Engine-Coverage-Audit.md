@@ -2189,3 +2189,17 @@ Block IL_0000 (incoming: 1) {
 **结论**：要修就得实现**按支配关系的逐使用点复制传播**（per-use copy propagation），
 这是 ILAst 层的实质改动，会影响所有多定义临时变量。**未修**，需要单独的回归方案
 （现有门禁无法证明语义等价，尤其异常位置）。
+
+### 8.77 循环塑形：`leave` 的 TargetContainer 既不是循环也不是它的父容器（2026-11-18）
+
+§8.72 的进一步定位。给 `MatchLeave` 调用点插桩（打印对象哈希）：
+```
+[LOOP] leaveTarget=52409928 loop=52409928 loopParent=55896391   ← 第一个循环，相等，转换成功
+[LOOP] leaveTarget=16630301 loop=10240431 loopParent=14867327   ← 第二个循环，三者互不相同
+```
+即失败那个循环的出口 `leave` 指向**第三个容器** —— 既不是循环本身，也不是循环的父容器。
+所以这不是「放宽成祖先即可」的问题：那个 `leave` 的语义是退出另一个容器，直接拿来当
+`while` 的出口会跳过该容器的其余部分。要修必须先弄清这个 ILAst 结构是怎么产生的
+（`LoopDetection` 的 `exitTargetBlock` 计算 vs `DetectExitPoints` 的重写顺序）。
+
+**未修**，且**不建议**在没弄清结构前放宽 `MatchLeave` —— 会得到语义错误的循环。

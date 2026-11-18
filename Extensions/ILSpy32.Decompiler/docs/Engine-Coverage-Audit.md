@@ -1747,3 +1747,34 @@ Process terminated. Assertion failed.
    自动构建产物；
 3. 加一条 `bench` 与语料门的 `degraded/errors` 断言，崩溃要显式失败而不是静默 `exit=-2146232797`。
 
+### 8.64 数组初始化器 `{ 2, 1 }` 缺左空格（2026-11-18，已修）
+
+**现象**：属性上的可空特性参数
+```csharp
+// 2.3                              // 3.2
+[Nullable(new byte[] { 2, 1 })]   [Nullable(new byte[] {2, 1 })]
+```
+全语料 `{ ` 计数：2.3 = **2244**，3.2 = **2008**（差 236）。反编译输出里数组初始化器
+只出现在特性实参上，所以这是唯一受影响的位置。
+
+**根因**：`CSharpOutputVisitor.PrintInitializerElements` 的单行分支
+（`CSharpOutputVisitor.cs:646`）写 `{` 后直接跟元素，只有 `}` 前有 `Space()`。
+2.3（NRefactory）两侧都有空格。
+
+**一个必须绕开的坑**：在 `{` 之后调 `Space()` **无效** —— 实测输出仍是 `{|2, 1 }`
+（用 `{|` 做标记验证过该分支确实被走到）。token-writer 链里 `Space()` 对紧随其后的
+**基本类型字面量**不生效，而对其后的 `WriteToken` 生效（`}` 前那个空格就正常）。
+所以把左空格直接写进 token 文本：`writer.WriteToken(Roles.LBrace, "{ ")`。
+
+**验证**：`{ ` 2008 → **2247**（2.3 = 2244）。
+`dnSpy.Contracts.DnSpy.dll` C# `diffLines` 12637 → **12446**（−191），
+`identical` 906 → **961**（**55 个类型变得完全一致**）；
+`Logic` 6829 → **6808**；`Debugger` 1773 → **1709**。
+`degraded=0`；`verify-all` `hardFail=0`，IL 语料仍 1310/303/114 全一致。
+
+**附带修正的方法论问题**：§8.62 的逐模式普查是按**文件索引**配对两个 dump 的，
+而两个引擎的类型枚举顺序不同（索引会错位），所以那张表的**逐类型归因不可靠**，
+聚合总量近似可用。正确做法是按**类型名**配对（去掉文件名前缀的 `^\d+_`），
+见 `baseline/out/_topdiff.py`。按类型名重算后真实总量是
+**LCS 9093 行 / 479 个类型**（`lang-diff-all` 的 `diffLines` 口径为 12637）。
+

@@ -2280,3 +2280,26 @@ decl pit=IEnumerator<IDsDocument>  /  IEnumerator
 **结论：这个方向是对的（重复确实来自接口匹配），但改完会连带弄丢字段 token，净效果是远离 2.3。
 已还原。** 要做得同时改 `MatchField`（`<Current>k__BackingField` 也有同样的泛型/非泛型碰撞），
 并且用 `token-check.py` + `lang-diff-all` 双向验证 —— 单看 token 重复数会漏掉丢失。
+
+### 8.80 接口成员匹配按「接口简单名 + 泛型性」区分（2026-11-18，已修）
+
+§8.79 定位到 `MatchProperty`/`MatchMethod` 只按 `".成员名"` 后缀匹配。元数据里
+`IEnumerator<IDsDocument>.Current` 与 `IEnumerator.Current`（以及
+`IEnumerable<IDsDocument>.GetEnumerator` / `IEnumerable.GetEnumerator`）**都以后缀
+`.Current` / `.GetEnumerator` 结尾**，于是两个声明都绑到第一个候选，token 重复。
+
+**修法**：匹配时要求接口段一致 —— `GetSimpleName(privateImplementationType)` 与
+`IsGeneric(privateImplementationType)`，再与元数据名里的接口段比对
+（`InterfaceMatches`）。**一个必须注意的坑**：泛型实参里可能含 `.`
+（`IEnumerator<dnSpy.Contracts.Documents.IDsDocument>`），所以找「最后一个 `.`」时
+必须限定在 `'<'` 之前，否则会切到实参里去 —— 第一版就是这么错的，导致属性**两条 token
+注释全丢**（语料 +323）。
+
+**验证**：token 重复 58 → **56**；`DnSpy.dll` C# `diffLines` 11653 → **11625**（−28）；
+`Logic` 6772、`Debugger` 1338 不变；`degraded=0`；`verify-all` `hardFail=0`。
+
+**剩余 56 处**：抽查显示分两类 ——
+① async 状态机（`__GetDirectories_d__13` 等）的 `MoveNext`（`.override` 合成的转发方法
+与被实现方法同名，`wantsQualified` 下找不到带 `.` 的元数据名，回退到 plain 名 → 同 token）；
+② `BookmarksService`（RID 6760/6762/6765 各两次）等**属性/事件**的多份 token，
+需再单独查（可能是 backing field 的 token 归属）。

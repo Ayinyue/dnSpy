@@ -459,16 +459,55 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		static PropertyDef MatchProperty(TypeDef typeDef, string name, int parameterCount,
 				ICSharpCode.Decompiler.CSharp.Syntax.AstType privateImplementationType) {
 			bool wantsQualified = privateImplementationType is { IsNull: false };
+			// 元数据里显式实现的属性名是「接口全名.成员名」，可能同时存在
+			// IEnumerator<IDsDocument>.Current 与 IEnumerator.Current 这种只差泛型/非泛型的
+			// 同名成员。只按 ".成员名" 匹配会把两者绑到同一个 PropertyDef 上（token 重复）。
+			var ifaceName = wantsQualified ? GetSimpleName(privateImplementationType) : null;
+			bool ifaceIsGeneric = wantsQualified && IsGeneric(privateImplementationType);
 			PropertyDef exact = null, suffix = null;
 			foreach (var property in typeDef.Properties) {
 				if (property.PropertySig.Params.Count != parameterCount)
 					continue;
 				if (property.Name == name)
 					exact ??= property;
-				else if (property.Name.EndsWith("." + name, StringComparison.Ordinal))
+				else if (property.Name.EndsWith("." + name, StringComparison.Ordinal)) {
+					if (ifaceName != null && !InterfaceMatches(property.Name, name, ifaceName, ifaceIsGeneric))
+						continue;
 					suffix ??= property;
+				}
 			}
 			return wantsQualified ? suffix ?? exact : exact ?? suffix;
+		}
+
+		/// <summary>
+		/// 取语法类型（如 <c>IEnumerator&lt;IDsDocument&gt;</c>）的接口简单名与是否泛型。
+		/// 用 <see cref="object.ToString"/> 解析，避开语法树里各种 AstType 子类的名字解析差异。
+		/// </summary>
+		static string GetSimpleName(ICSharpCode.Decompiler.CSharp.Syntax.AstType type) {
+			var s = type.ToString();
+			var lt = s.IndexOf('<');
+			var dot = s.LastIndexOf('.', lt >= 0 ? lt : s.Length - 1);
+			return lt >= 0 ? s.Substring(dot + 1, lt - dot - 1) : s.Substring(dot + 1);
+		}
+
+		static bool IsGeneric(ICSharpCode.Decompiler.CSharp.Syntax.AstType type) {
+			return type.ToString().IndexOf('<') >= 0;
+		}
+
+		/// <summary>
+		/// 元数据名形如 <c>Ns.IEnumerator&lt;Args&gt;.Current</c>：接口段的简单名与泛型性必须与
+		/// 语法类型一致，否则会把 <c>IEnumerator.Current</c> 错配给
+		/// <c>IEnumerator&lt;T&gt;.Current</c>。
+		/// </summary>
+		static bool InterfaceMatches(string metadataName, string name, string ifaceName, bool ifaceIsGeneric) {
+			var iface = metadataName.Substring(0, metadataName.Length - name.Length - 1);
+			// 泛型实参里可能含 '.'（如 IEnumerator<dnSpy.Contracts.Documents.IDsDocument>），
+			// 所以要在 '<' 之前找最后一个 '.'，不能直接 LastIndexOf('.')。
+			var lt = iface.IndexOf('<');
+			var end = lt >= 0 ? lt : iface.Length;
+			var dot = iface.LastIndexOf('.', end - 1);
+			var simple = iface.Substring(dot + 1, end - dot - 1);
+			return simple == ifaceName && (lt >= 0) == ifaceIsGeneric;
 		}
 
 		/// <summary>
@@ -499,12 +538,19 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		/// </summary>
 		static MethodDef MatchMethod(TypeDef typeDef, ICSharpCode.Decompiler.CSharp.Syntax.MethodDeclaration declaration) {
 			bool wantsQualified = declaration.PrivateImplementationType is { IsNull: false };
+			// 同 MatchProperty：元数据里 IEnumerable<IDsDocument>.GetEnumerator 与
+			// IEnumerable.GetEnumerator 都以 ".GetEnumerator" 结尾，只按后缀匹配会把两者
+			// 绑到同一个 MethodDef 上（token 重复）。接口的简单名与泛型性必须一致。
+			var ifaceName = wantsQualified ? GetSimpleName(declaration.PrivateImplementationType) : null;
+			bool ifaceIsGeneric = wantsQualified && IsGeneric(declaration.PrivateImplementationType);
 			MethodDef fallback = null;
 			MethodDef parameterMatch = null;
 			foreach (var method in typeDef.Methods) {
 				bool qualified = method.Name.IndexOf('.') >= 0;
 				if (qualified) {
 					if (!wantsQualified || !method.Name.EndsWith("." + declaration.Name, StringComparison.Ordinal))
+						continue;
+					if (ifaceName != null && !InterfaceMatches(method.Name, declaration.Name, ifaceName, ifaceIsGeneric))
 						continue;
 				}
 				else if (method.Name != declaration.Name) {

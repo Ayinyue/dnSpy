@@ -1632,3 +1632,24 @@ Block IL_0000 (incoming: 1) {
 **取舍**：收益约 66 处/单程序集（≈200–300 diff 行，占 DnSpy C# 语料 14151 的 2%），
 但改动落在控制流核心，回归面大，故本次只定位不实现。
 
+### 8.60 既有缺陷：`dotnet build dnSpy.sln` 的 net48 目标会偶发引用错配（与本次改动无关）
+
+**现象**：同一个提交上连续跑 `dotnet build dnSpy.sln -c Release`，错误数在 **0 / 2 / 8 / 10** 之间跳：
+```
+CSharpToVBConverter32.cs(871,3): error CS0012: 类型“Enum”在未引用的程序集中定义。
+  必须添加对程序集“System.Runtime, Version=10.0.0.0, ...”的引用。 […::TargetFramework=net48]
+Microsoft.WinFX.targets(281,9): error MC2000: … Could not find assembly
+  'System.Runtime, Version=10.0.0.0' …
+```
+即 net48 的编译/标记编译偶尔拿到 **net10 的 `System.Runtime`**。
+
+**已排除是本次改动引起**：把引擎 checkout 到本次会话开始前的 `6eaaecbcb`，
+同样连续构建得到 `0 / 8 / 0`；只构建 `dnSpy.Decompiler.ILSpy32 -f net48` 则稳定 0 错误。
+所以是解决方案级并行构建的引用解析竞争（`dnSpy.Decompiler` 等项目的
+`OutputPath` 不带 `$(TargetFramework)`、`AppendTargetFrameworkToOutputPath=false`，
+net10 与 net48 的产物落在相邻/共享目录），**先于本次升级存在**。
+
+**影响**：`verify-all`（只构建引擎 + net10 扩展 + probe）稳定 `hardFail=0`；
+`dnSpy.sln` 需要重跑 1–4 次才拿到 0 错误。CI 接线时建议：
+① 构建加 `-m:1` 或分目标构建；② 把 net48 门禁改成先单独构建各 ProjectReference。
+

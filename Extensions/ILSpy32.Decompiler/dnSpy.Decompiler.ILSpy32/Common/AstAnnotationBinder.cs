@@ -640,6 +640,15 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 				var actual = GetAstTypeName(declarationParameters.ElementAt(i).Type);
 				if (string.IsNullOrEmpty(expected) || string.IsNullOrEmpty(actual))
 					continue;
+				// 元数据侧可能只给 'Nullable`1'（不带实参），而语法侧给元素类型
+				// ('HexBufferSpan') —— 此时名字无从比较，交给 GenericArgumentsMatch 决定。
+				bool metaIsBareNullable = expected.StartsWith("Nullable`1", StringComparison.Ordinal);
+				bool astIsBareNullable = actual.StartsWith("Nullable`1", StringComparison.Ordinal);
+				if (metaIsBareNullable != astIsBareNullable) {
+					if (!GenericArgumentsMatch(parameters[i].Type, declarationParameters.ElementAt(i).Type))
+						return false;
+					continue;
+				}
 				// 'ref/out' shows up as a trailing '&' in the metadata name but as a modifier on
 				// the syntax node, so it must not decide the match.
 				if (!string.Equals(NormalizeParameterTypeName(expected), NormalizeParameterTypeName(actual), StringComparison.OrdinalIgnoreCase))
@@ -660,8 +669,13 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		static bool GenericArgumentsMatch(TypeSig metadataType, ICSharpCode.Decompiler.CSharp.Syntax.AstType syntaxType) {
 			var metaArgs = (metadataType as GenericInstSig)?.GenericArguments;
 			var text = syntaxType.ToString();
+			// 语法侧的 'T?' 对应元数据侧的 Nullable<T>：去掉 '?' 再比。
 			var lt = text.IndexOf('<');
+			var bare = text.TrimEnd('?');
 			var synArgs = lt >= 0 ? SplitGenericArguments(text.Substring(lt + 1, text.LastIndexOf('>') - lt - 1)) : null;
+			if (metaArgs != null && metaArgs.Count == 1 && synArgs == null) {
+				return string.Equals(SimpleTypeName(metaArgs[0].ToString()), SimpleTypeName(bare), StringComparison.OrdinalIgnoreCase);
+			}
 			if (metaArgs == null || synArgs == null)
 				return (metaArgs == null) == (synArgs == null);
 			if (metaArgs.Count != synArgs.Count)

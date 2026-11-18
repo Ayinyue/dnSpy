@@ -2392,3 +2392,22 @@ plain 的 `GetEnumerator`（返回 `IEnumerator<T>`）排在显式实现之前�
 **剩余 5 处**：`ComplexData` 一处**两个引擎都重复**（2.3 也有），不算 3.2 的账；
 其余 4 处（`EditableValueImpl`、`HexAdornmentLayer`、`HexBytes`×2、`IDsToolWindowService`）
 是 3.2 独有，待查。
+
+### 8.86 `Nullable<T>` 的名字归一缺口（2026-11-18，已修）
+
+§8.85 之后剩 4 处，插桩给出**确定性的失败对**：
+```
+[FAIL] n=5 i=1 meta=Nullable`1 ast=HexBufferSpan   ← 抽象声明匹配不上自己的元数据方法
+```
+根因：`HexBufferSpan?` 的**语法侧**名字是 `HexBufferSpan`，而**元数据侧** `TypeName` 给的是
+`Nullable`1`（不带实参）。名字比较因此失败，`plainMatch` 为空，落到 fallback，
+把具体重载的 token 印到抽象声明上。
+
+**修法（两处，缺一不可）**：
+1. `ParameterTypesMatch`：一侧以 `Nullable`1` 开头而另一侧不是时，**跳过名字比较**，
+   交给 `GenericArgumentsMatch` 决定；
+2. `GenericArgumentsMatch`：`Nullable<T>`（1 个实参）对语法侧的裸 `T` / `T?` 时，
+   按元素类型比较。
+
+**验证**：token 重复 4 → **3**；`DnSpy.dll` C# 11199 → **11093**（−106），
+`identical` 973 → **974**；`Logic` 6556、`Debugger` 1247 不变；`degraded=0`。

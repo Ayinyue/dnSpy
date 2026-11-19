@@ -81,7 +81,9 @@ if (-not $NoBuild) {
 	$buildSteps = @(
 		@("$extDir\ICSharpCode.Decompiler\ICSharpCode.Decompiler\ICSharpCode.Decompiler.csproj", '-c', $Configuration),
 		@("$extDir\dnSpy.Decompiler.ILSpy32\dnSpy.Decompiler.ILSpy32.csproj", '-c', $Configuration, '-f', 'net10.0-windows'),
-		@("$probeDir\m3probe.csproj", '-c', $Configuration)
+		@("$probeDir\m3probe.csproj", '-c', $Configuration),
+		# engine-tests 需要这个测试程序集；它的 bin 输出不入库，CI 干净环境必须现场构建。
+		@("$probeDir\sp-test\SpTest.csproj", '-c', 'Debug')
 	)
 	foreach ($step in $buildSteps) {
 		$proj = $step[0]

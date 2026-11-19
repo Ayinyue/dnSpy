@@ -57,7 +57,14 @@ jobs:
       # 不带 -NoBuild：verify-all 会按手工命令重建引擎 + net10 扩展 + probe，
       # 这正是 §8.63 要求的「门禁前干净重构建」，避免复用到被 dnSpy.sln 污染的产物。
       - name: verify-all (corpus + IL + bench)
-        run: Extensions/ILSpy32.Decompiler/baseline/verify-all.ps1
+        run: |
+          Extensions/ILSpy32.Decompiler/baseline/verify-all.ps1
+          $code = $LASTEXITCODE
+          # 失败时把报告正文打出来：日志下载需要 admin，step 输出网页可见。
+          $r = Get-ChildItem Extensions/ILSpy32.Decompiler/baseline/out/verify-*.txt -ErrorAction SilentlyContinue |
+               Sort-Object LastWriteTime | Select-Object -Last 1
+          if ($r) { Write-Host "=== verify report: $($r.Name) ==="; Get-Content $r.FullName }
+          exit $code
 
       # 辅助信号：成员不丢（源码对拍）、token 不重复
       - name: source-check / token-check

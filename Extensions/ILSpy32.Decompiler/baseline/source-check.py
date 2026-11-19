@@ -64,8 +64,11 @@ def build_source_index(source_dir):
 
 
 def find_sources(index, key):
+    """只取“声明了该类型”的源文件。按文件名/任意子串匹配会把同名片段
+    （注释、其他类型的工具方法、命名空间）也算进来，产生误报。"""
     short = key.split('.')[-1]
-    return [text for text in index.values() if short in text]
+    pat = re.compile(r'\b(?:class|struct|interface|enum|record)\s+' + re.escape(short) + r'\b')
+    return [text for text in index.values() if pat.search(text)]
 
 
 def main():
@@ -106,6 +109,9 @@ def main():
                     continue
                 # using 指令（含别名）不是成员
                 if stripped.startswith('using '):
+                    continue
+                # 命名空间声明不是成员
+                if stripped.startswith('namespace '):
                     continue
                 m = MEMBER_RE.match(line)
                 if not m:

@@ -1,0 +1,46 @@
+=== verify-all  2026-11-19 13:45:14  configuration=Release ===
+--- build ---
+build ICSharpCode.Decompiler.csproj
+build dnSpy.Decompiler.ILSpy32.csproj
+build m3probe.csproj
+build SpTest.csproj
+DIAG bin dnlib.dll 4.5.0.0
+DIAG bin dnSpy.Contracts.Logic.dll 6.6.0.0
+DIAG bin dnSpy.Contracts.DnSpy.dll 6.6.0.0
+DIAG bin dnSpy.Decompiler.ILSpy32.x.dll 6.6.0.0
+DIAG bin Mono.Cecil.dll 0.11.6.0
+--- gates ---
+2.3 comparison asset: D:\a\dnSpy\dnSpy\Extensions\ILSpy32.Decompiler\baseline\ilspy23
+  >> dotnet m3probe.dll engine-tests D:\a\dnSpy\dnSpy\Extensions\ILSpy32.Decompiler\baseline\probe\sp-test\bin\Debug\net10.0\SpTestAssembly.dll D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows
+PASS engine-tests (3,048 ms) : PASS 9b all WriteLine sites share one reference instance (1 distinct) | PASS 9c dnlib SigComparer matches two structurally identical synthesized MemberRefs | PASS 9d SigComparer distinguishes synthesized overloads | ENGINE-TESTS: ALL PASS
+  >> dotnet m3probe.dll settings-wiring D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows
+PASS settings-wiring (101 ms) : migrated23ShowILBytes=True | migrated23ShowXmlDocumentation=True | migrated23ShowPdbInfo=True | persistedSections=6
+  >> dotnet m3probe.dll ilast-verify D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows\dnSpy.Contracts.Logic.dll 0600024D D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows
+PASS ilast-verify (1,199 ms) :   2672..2731 CurlyBraces |   1684..2736 LoopBraces |   2997..3349 CurlyBraces | debugInfo=statements=30
+  >> dotnet m3probe.dll mixed-verify D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows\dnSpy.Contracts.Logic.dll 0600024D D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows
+PASS mixed-verify (1,617 ms) :   [XmlDocCommentAttributeValue] "codeSize" |   [XmlDocCommentName]  /> |   [XmlDocCommentText] . The 2.3 engine's |   [XmlDocCommentDelimiter] ///
+  >> dotnet m3probe.dll bench D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows\dnSpy.Contracts.Logic.dll D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows 20
+PASS bench (4,361 ms) :   slow     32 ms  dnSpy.Contracts.Decompiler.XmlDoc.XmlDocRenderer  cecilCalls=0 fails=0 |   slow     21 ms  dnSpy.Contracts.MVVM.ViewModelBase  cecilCalls=0 fails=0 |   slow      8 ms  dnSpy.Contracts.Decompiler.IdentifierEscaper  cecilCalls=0 fails=0 |   slow      7 ms  dnSpy.Contracts.Decompiler.IDecompiler  cecilCalls=0 fails=0
+  >> dotnet m3probe.dll lang-diff D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows\dnSpy.Contracts.Logic.dll dnSpy.Contracts.Decompiler.MethodDebugInfoBuilder D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows D:\a\dnSpy\dnSpy\Extensions\ILSpy32.Decompiler\baseline\ilspy23
+FAIL lang-diff (vs 2.3) (exit=1) : Visual Basic (ILSpy 3.2) chars 23=7543 32=7949 diffLines=68 | IL (ILSpy 3.2)           chars 23=51608 32=51608 diffLines=0 | SKIP ILAst (ILSpy 3.2) (no 2.3 counterpart) | IL with C# (ILSpy 3.2)   chars 23=55055 32=56196 diffLines=870
+  >> dotnet m3probe.dll lang-diff-all D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows/dnSpy.Contracts.DnSpy.dll D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows D:\a\dnSpy\dnSpy\Extensions\ILSpy32.Decompiler\baseline\ilspy23 IL (
+PASS corpus IL: dnSpy.Contracts.DnSpy.dll (8,186 ms) : IL (ILSpy 3.2)           types=1310 identical=1310 diffLines=0 errors=0
+  >> dotnet m3probe.dll lang-diff-all D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows/dnSpy.Contracts.DnSpy.dll D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows D:\a\dnSpy\dnSpy\Extensions\ILSpy32.Decompiler\baseline\ilspy23 C#
+PASS corpus C#: dnSpy.Contracts.DnSpy.dll (20,798 ms) :     dnSpy.Contracts.Text.Editor.LogEditorOptions (1) |     dnSpy.Contracts.Text.Editor.ReplEditorOptions (2) |     dnSpy.Contracts.Text.Editor.ReplEditorUtils (1) |     dnSpy.Contracts.Text.Editor.OptionsExtensionMethods.DefaultDsOptionsExtensions (1)
+  >> dotnet m3probe.dll lang-diff-all D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows/dnSpy.Contracts.DnSpy.dll D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows D:\a\dnSpy\dnSpy\Extensions\ILSpy32.Decompiler\baseline\ilspy23 Visual
+PASS corpus VB: dnSpy.Contracts.DnSpy.dll (26,352 ms) :     dnSpy.Contracts.ToolBars.IToolBarService (1) |     dnSpy.Contracts.ToolBars.ToolBarButtonBase (6) |     dnSpy.Contracts.ToolBars.ToolBarButtonCommand (1) |     dnSpy.Contracts.ToolBars.ToolBarObjectBase (2)
+  >> dotnet m3probe.dll lang-diff-all D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows/dnSpy.Contracts.Debugger.dll D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows D:\a\dnSpy\dnSpy\Extensions\ILSpy32.Decompiler\baseline\ilspy23 IL (
+PASS corpus IL: dnSpy.Contracts.Debugger.dll (1,962 ms) : IL (ILSpy 3.2)           types=303 identical=303 diffLines=0 errors=0
+  >> dotnet m3probe.dll lang-diff-all D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows/dnSpy.Contracts.Debugger.dll D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows D:\a\dnSpy\dnSpy\Extensions\ILSpy32.Decompiler\baseline\ilspy23 C#
+PASS corpus C#: dnSpy.Contracts.Debugger.dll (4,967 ms) :     dnSpy.Contracts.Debugger.Exceptions.DbgExceptionDefinition (8) |     dnSpy.Contracts.Debugger.Exceptions.ExportDbgExceptionDefinitionProviderAttribute (1) |     dnSpy.Contracts.Debugger.Exceptions.ExportDbgExceptionFormatterAttribute (1) |     dnSpy.Contracts.Debugger.Exceptions.DbgExceptionId (50)
+  >> dotnet m3probe.dll lang-diff-all D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows/dnSpy.Contracts.Debugger.dll D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows D:\a\dnSpy\dnSpy\Extensions\ILSpy32.Decompiler\baseline\ilspy23 Visual
+PASS corpus VB: dnSpy.Contracts.Debugger.dll (5,405 ms) :     dnSpy.Contracts.Debugger.Text.DnSpy.DbgTextClassifierTextColorWriter (27) |     dnSpy.Contracts.Debugger.Text.DnSpy.DbgTextColorWriter (4) |     dnSpy.Contracts.Debugger.Steppers.DbgStepper (1) |     dnSpy.Contracts.Debugger.StartDebugging.DbgProcessStarter (2)
+  >> dotnet m3probe.dll lang-diff-all D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows/dnSpy.Contracts.Logic.dll D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows D:\a\dnSpy\dnSpy\Extensions\ILSpy32.Decompiler\baseline\ilspy23 IL (
+PASS corpus IL: dnSpy.Contracts.Logic.dll (2,063 ms) : IL (ILSpy 3.2)           types=114 identical=114 diffLines=0 errors=0
+  >> dotnet m3probe.dll lang-diff-all D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows/dnSpy.Contracts.Logic.dll D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows D:\a\dnSpy\dnSpy\Extensions\ILSpy32.Decompiler\baseline\ilspy23 C#
+PASS corpus C#: dnSpy.Contracts.Logic.dll (6,887 ms) :     dnSpy.Contracts.Decompiler.GenericArgumentResolver (253) |     dnSpy.Contracts.Decompiler.DecompilerOutputExtensions (8) |     dnSpy.Contracts.Decompiler.IdentifierEscaper (64) |     dnSpy.Contracts.Decompiler.ILSpan (121)
+  >> dotnet m3probe.dll lang-diff-all D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows/dnSpy.Contracts.Logic.dll D:\a\dnSpy\dnSpy\dnSpy\dnSpy\bin\Release\net10.0-windows D:\a\dnSpy\dnSpy\Extensions\ILSpy32.Decompiler\baseline\ilspy23 Visual
+PASS corpus VB: dnSpy.Contracts.Logic.dll (7,773 ms) :     dnSpy.Contracts.Decompiler.DecompilationContext (78) |     dnSpy.Contracts.Decompiler.DecompilerSettingsBase (8) |     dnSpy.Contracts.Decompiler.Extensions (219) |     dnSpy.Contracts.Decompiler.GenericArgumentResolver (198)
+PASS solution build (-m:1)
+=== summary: hardFail=0 softFail=1 skip=0 ===
+report: D:\a\dnSpy\dnSpy\Extensions\ILSpy32.Decompiler\baseline\out\verify-20261119-134514.txt

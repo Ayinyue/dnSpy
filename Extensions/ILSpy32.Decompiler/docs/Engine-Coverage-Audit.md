@@ -2411,3 +2411,20 @@ plain 的 `GetEnumerator`（返回 `IEnumerator<T>`）排在显式实现之前�
 
 **验证**：token 重复 4 → **3**；`DnSpy.dll` C# 11199 → **11093**（−106），
 `identical` 973 → **974**；`Logic` 6556、`Debugger` 1247 不变；`degraded=0`。
+
+### 8.87 索引器只按「名字 + 参数个数」匹配（2026-11-18，已修）
+
+`HexBytes` 同时有 `this[int index]` 与 `this[long index]`，两者的 `// Token:` 与
+`(get) Token:` 完全相同。根因：
+```csharp
+MatchProperty(typeDef, "Item", indexer.Parameters.Count, indexer.PrivateImplementationType);
+```
+而 `MatchProperty` 只比 `property.PropertySig.Params.Count != parameterCount`，
+**不比参数类型** → 两个索引器都绑到第一个 `Item` 属性。
+
+**修法**：给 `MatchProperty` 加 `parameterTypeNames`，逐参数用
+`NormalizeParameterTypeName` 归一后比较；无类型相符候选时退回只按名字+个数
+（泛型参数 `T` 与 `!T` 拼不上时兜底）。
+
+**验证**：token 重复 3 → **1**（`HexBytes`、`ComplexData` 修好）；
+`DnSpy.dll` C# `diffLines` 11093 → **11092**；`degraded=0`。

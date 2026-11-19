@@ -16,14 +16,15 @@
     <Compile Include="SettingsMigrationTests.cs" />
   </ItemGroup>
   <ItemGroup>
-    <!-- All references are compile-only (Private=false): at runtime every engine and
-         dependency must resolve through the AssemblyResolve handler to the authoritative
-         dnSpy bin directory, otherwise stale CopyLocal copies in the app base win the
-         default-context probe and the probe silently runs old engine builds. -->
-    <Reference Include="dnlib">
-      <HintPath>..\..\..\..\dnSpy\dnSpy\bin\Release\net10.0-windows\dnlib.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
+    <!-- 2.3 引擎按名称引用 dnlib 4.5.0.0。干净构建的 dnSpy bin 里没有 dnlib.dll
+         （本地那份是历史遗留），AssemblyResolve 目录也就找不到它 —— CI 上
+         lang-diff / corpus 门全部崩在 FileNotFoundException。probe 自带一份即可，
+         版本与 dnSpy 的 $(DnlibVersion) 一致。 -->
+    <PackageReference Include="dnlib" Version="4.5.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 其余引用仍是 compile-only (Private=false)：运行时经 AssemblyResolve 指向
+         权威的 dnSpy bin，避免 app base 里的陈旧副本静默胜出。 -->
     <Reference Include="dnSpy.Contracts.Logic">
       <HintPath>..\..\..\..\dnSpy\dnSpy\bin\Release\net10.0-windows\dnSpy.Contracts.Logic.dll</HintPath>
       <Private>false</Private>

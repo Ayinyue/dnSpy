@@ -2,5 +2,3 @@ bin/
 obj/
 out/
 
-# Rebuilt 2.3 extension, only used as a comparison asset by probe lang-diff.
-ilspy23/

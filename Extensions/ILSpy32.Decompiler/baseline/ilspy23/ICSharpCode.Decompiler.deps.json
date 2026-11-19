@@ -1,0 +1,204 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v10.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v10.0": {
+      "ICSharpCode.Decompiler/2.4.0.0": {
+        "dependencies": {
+          "ICSharpCode.NRefactory": "1.0.0",
+          "ICSharpCode.NRefactory.CSharp": "1.0.0",
+          "dnSpy.Contracts.Logic": "6.6.0"
+        },
+        "runtime": {
+          "ICSharpCode.Decompiler.dll": {}
+        }
+      },
+      "dnlib/4.5.0": {
+        "runtime": {
+          "lib/net6.0/dnlib.dll": {
+            "assemblyVersion": "4.5.0.0",
+            "fileVersion": "4.5.0.0"
+          }
+        }
+      },
+      "NuGet.Common/7.9.0": {
+        "dependencies": {
+          "NuGet.Frameworks": "7.9.0"
+        },
+        "runtime": {
+          "lib/net8.0/NuGet.Common.dll": {
+            "assemblyVersion": "7.9.0.0",
+            "fileVersion": "7.9.0.83"
+          }
+        }
+      },
+      "NuGet.Configuration/7.9.0": {
+        "dependencies": {
+          "NuGet.Common": "7.9.0",
+          "System.Security.Cryptography.ProtectedData": "8.0.0"
+        },
+        "runtime": {
+          "lib/net8.0/NuGet.Configuration.dll": {
+            "assemblyVersion": "7.9.0.0",
+            "fileVersion": "7.9.0.83"
+          }
+        }
+      },
+      "NuGet.Frameworks/7.9.0": {
+        "runtime": {
+          "lib/net8.0/NuGet.Frameworks.dll": {
+            "assemblyVersion": "7.9.0.0",
+            "fileVersion": "7.9.0.83"
+          }
+        }
+      },
+      "System.Security.Cryptography.ProtectedData/8.0.0": {
+        "runtime": {
+          "lib/net8.0/System.Security.Cryptography.ProtectedData.dll": {
+            "assemblyVersion": "8.0.0.0",
+            "fileVersion": "8.0.23.53103"
+          }
+        }
+      },
+      "dnSpy.Contracts.Logic/6.6.0": {
+        "dependencies": {
+          "NuGet.Configuration": "7.9.0",
+          "dnlib": "4.5.0"
+        },
+        "runtime": {
+          "dnSpy.Contracts.Logic.dll": {
+            "assemblyVersion": "6.6.0.0",
+            "fileVersion": "6.6.0.0"
+          }
+        },
+        "resources": {
+          "cs/dnSpy.Contracts.Logic.resources.dll": {
+            "locale": "cs"
+          },
+          "de/dnSpy.Contracts.Logic.resources.dll": {
+            "locale": "de"
+          },
+          "es-ES/dnSpy.Contracts.Logic.resources.dll": {
+            "locale": "es-ES"
+          },
+          "fa/dnSpy.Contracts.Logic.resources.dll": {
+            "locale": "fa"
+          },
+          "fr/dnSpy.Contracts.Logic.resources.dll": {
+            "locale": "fr"
+          },
+          "hu/dnSpy.Contracts.Logic.resources.dll": {
+            "locale": "hu"
+          },
+          "it/dnSpy.Contracts.Logic.resources.dll": {
+            "locale": "it"
+          },
+          "pt-BR/dnSpy.Contracts.Logic.resources.dll": {
+            "locale": "pt-BR"
+          },
+          "pt-PT/dnSpy.Contracts.Logic.resources.dll": {
+            "locale": "pt-PT"
+          },
+          "ru/dnSpy.Contracts.Logic.resources.dll": {
+            "locale": "ru"
+          },
+          "tr/dnSpy.Contracts.Logic.resources.dll": {
+            "locale": "tr"
+          },
+          "uk/dnSpy.Contracts.Logic.resources.dll": {
+            "locale": "uk"
+          },
+          "vi/dnSpy.Contracts.Logic.resources.dll": {
+            "locale": "vi"
+          },
+          "zh-CN/dnSpy.Contracts.Logic.resources.dll": {
+            "locale": "zh-CN"
+          }
+        }
+      },
+      "ICSharpCode.NRefactory/1.0.0": {
+        "dependencies": {
+          "dnlib": "4.5.0"
+        },
+        "runtime": {
+          "ICSharpCode.NRefactory.dll": {
+            "assemblyVersion": "5.0.0.0",
+            "fileVersion": "5.5.1.0"
+          }
+        }
+      },
+      "ICSharpCode.NRefactory.CSharp/1.0.0": {
+        "dependencies": {
+          "ICSharpCode.NRefactory": "1.0.0",
+          "dnSpy.Contracts.Logic": "6.6.0"
+        },
+        "runtime": {
+          "ICSharpCode.NRefactory.CSharp.dll": {
+            "assemblyVersion": "5.0.0.0",
+            "fileVersion": "5.5.1.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "ICSharpCode.Decompiler/2.4.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "dnlib/4.5.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-YkwstIbjyiJ12uGIAN8oSmImgVFkPHit7MJXPHvJqeKV1DMNqxZWszjHfykgiSs4Y/XmjnZts7pI2/AYme5/uA==",
+      "path": "dnlib/4.5.0",
+      "hashPath": "dnlib.4.5.0.nupkg.sha512"
+    },
+    "NuGet.Common/7.9.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-OWFEzHpwvgzSaHYmWzfbyTm6oBOy/BFSFEDk73zM9jiJaxdopYZ/DrqIQogaM3F+ZGTppBJffmzu5adetEI/YA==",
+      "path": "nuget.common/7.9.0",
+      "hashPath": "nuget.common.7.9.0.nupkg.sha512"
+    },
+    "NuGet.Configuration/7.9.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-oY9XZp+TWjOmiGmU4R4JWBRY3F4TAVo7tqPr/z7MOsFcEpdYHMryjNSscoLBxUTR3WmFmYgO0Gvu4eRbz6pzOg==",
+      "path": "nuget.configuration/7.9.0",
+      "hashPath": "nuget.configuration.7.9.0.nupkg.sha512"
+    },
+    "NuGet.Frameworks/7.9.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-w2adPmgUafmW9ON1MzDjuHmViN0vtiPV48Dz3OE6px8BiGSqrnWHOjwFEPOEPAZx20J1c7bxp90Hxo9l4xGWtw==",
+      "path": "nuget.frameworks/7.9.0",
+      "hashPath": "nuget.frameworks.7.9.0.nupkg.sha512"
+    },
+    "System.Security.Cryptography.ProtectedData/8.0.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-+TUFINV2q2ifyXauQXRwy4CiBhqvDEDZeVJU7qfxya4aRYOKzVBpN+4acx25VcPB9ywUN6C0n8drWl110PhZEg==",
+      "path": "system.security.cryptography.protecteddata/8.0.0",
+      "hashPath": "system.security.cryptography.protecteddata.8.0.0.nupkg.sha512"
+    },
+    "dnSpy.Contracts.Logic/6.6.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "ICSharpCode.NRefactory/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "ICSharpCode.NRefactory.CSharp/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

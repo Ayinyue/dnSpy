@@ -2209,6 +2209,7 @@ Block IL_0000 (incoming: 1) {
 （`LoopDetection` 的 `exitTargetBlock` 计算 vs `DetectExitPoints` 的重写顺序）。
 
 **未修**，且**不建议**在没弄清结构前放宽 `MatchLeave` —— 会得到语义错误的循环。
+（结构成因已于 §8.92 查清：是 `SimplifyBranchChains` 的 leave 折叠抹掉了 CFG 边。）
 
 ### 8.78 `HtmlClipboardFormatWriter` 也是「2.3 更差」（2026-11-18）
 
@@ -2491,3 +2492,74 @@ fallback，即 `ParameterTypesMatch` 对泛型参数**全部失败**。
 
 结论：3.2 的命名更稳健（避免与参数/作用域冲突），对齐 2.3 只会把输出变差（参 §8.67/§8.70
 的判据）。保留为 soft，不作对齐。
+
+### 8.92 循环塑形的根因：`SimplifyBranchChains` 的 leave 折叠抹掉了 CFG 边（2026-11-20，**未修**）
+
+§8.72/§8.77 的彻底定位。结论：**不是 `MatchLeave` 的判据问题，而是循环出口点选错了**。
+
+**机制**。`WriteString`（token `060001AD`）的循环头 `IL_00F6` 在
+`ControlFlowSimplification.SimplifyBranchChains`（`IL/ControlFlow/ControlFlowSimplification.cs:132`）
+里被这样折叠：
+
+```csharp
+} else if (targetBlock.Instructions.Count == 1 && targetBlock.Instructions[0] is Leave leave && leave.Value.MatchNop()) {
+    context.Step("Replace branch to leave with leave", branch);
+    branch.ReplaceWith(leave.Clone());      // ← br retBlock 变成 leave(root)
+}
+```
+
+折叠本身语义等价，但它**删掉了 `IL_00F6 → ret块` 这条 CFG 边**（`SimplifyBranchChains` 末尾
+还把 `IncomingEdgeCount == 0` 的 `ret` 块清空、由 `CleanUpEmptyBlocks` 删除）。于是
+`LoopDetection.FindExitPoint` 的 Case 1（`!HasReachableExit(loopHead)`）里，
+`PickExitPoint` 只在 `loopHead.DominatorTreeChildren` 里挑「IL 偏移最大且无可达出口」的块，
+而 `ret` 块已不可达、**不在支配树里**，于是退而求其次选中了 `Append` 块（`IL_001D`）。
+`ConstructLoop` 只改写 `Branch`（`TargetBlock == exitTargetBlock` → `Leave(loopContainer)`），
+**管不到已经是 `Leave` 的出口**，所以循环头的 `Leave(root)` 原样留在循环里，
+`MatchWhileLoop` 的 `MatchLeave(loop)` 为假 → 停在 `while-true`。
+
+**A/B 实证**（把折叠做成 env 开关 `PROBE_NO_LEAVE_FOLD`，同一 DLL 切换）：
+
+| `PROBE_NO_LEAVE_FOLD` | 循环容器形态 |
+| --- | --- |
+| 未设（现状） | `BlockContainer (while-true)` |
+| `1`（完全不折叠） | `BlockContainer (while)`，`Append` 回到循环内、`break` 变 `leave` |
+
+即：只要不折叠，3.2 就与 2.3 一致。
+
+**但不能简单关掉折叠**。语料 A/B（`lang-diff-all`，`DnSpy.dll`，C#，基线 `identical=974 / diffLines=11091`）：
+
+| 模式 | identical | diffLines | 逐类型变化 |
+| --- | --- | --- | --- |
+| 基线 | 974 | 11091 | — |
+| `1` 全关 | 975 | 11055 | `HtmlClipboardFormatWriter` −1、`AsyncNodeProvider` −3、**`ProfileOptimizationHelper` +15** |
+| `2` 只有关「块尾分支→函数级 leave」 | 974 | 11073 | 同上（`ProfileOptimizationHelper` +15） |
+| `3` 再加「前一条是 IfInstruction」 | 974 | 11099 | `AsyncNodeProvider` −3、**`ProfileOptimizationHelper` +12** |
+
+`ProfileOptimizationHelper.StartProfile` 的回归是真实退化：`if (hasInitialized.Contains(type)) return;`
+退化成 `goto IL_0036; … goto IL_0046; IL_0036: …`，`diffLines` 2 → 17。
+
+**为什么无法在折叠处窄化**。给每个折叠点插桩（`PROBE_FOLD_LOG=1`）后对比两者：
+
+```
+# WriteString（要修的）
+[FOLD] brBlock=IL_0127 brIdx=6 brLast=True prevIf=True leaveFunc=True tgt=IL_0134 tgtIncoming=2
+# StartProfile（不能动的）
+[FOLD] brBlock=IL_0009 brIdx=9 brLast=True prevIf=True leaveFunc=True tgt=IL_004f tgtIncoming=2
+```
+
+两者在折叠点的**语法形态完全一样**（都是「`if (cond) goto X; br ret块`」，块尾分支、前一条
+是 `IfInstruction`、目标是函数级 leave、目标块入度 2）。区别只在语义角色：`WriteString` 那处
+`if` 的目标是**循环体**（回边），`StartProfile` 那处 `if` 的目标是 `if` 之后的直线代码。
+`SimplifyBranchChains` 是函数级变换、没有 CFG，**无法区分**。
+
+**尝试过的循环感知修法（未成）**。在 `LoopDetection` 里识别「循环头最后一条是函数级
+`Leave`」，把它移进一个新建的 continuation 块、循环头改写成 `Leave(loopContainer)`，并把该
+continuation 块强制为循环出口（这样 `break` 的目标 `Append` 会被 `ExtendLoop` 收回循环内）。
+方向正确（ILAst 已呈现 `while` + 循环内 `Append`），但接连踩到
+`BlockContainer.CheckInvariant`（新块缺 `EndPointUnreachable`）与 `Branch.CheckInvariant`
+（`targetBlock.Parent.Children[ChildIndex]`）两道断言，说明这条路径上块的连接/索引约定比
+预想微妙。**已回滚**。
+
+**结论**：这是一个**循环感知**的重构（要么让 `SimplifyBranchChains` 拿到 CFG 并识别循环头，
+要么把出口点选择修得更鲁棒），不是判据放宽。已确认「放宽 `MatchLeave`」会得到语义错误的循环
+（`Append` 会在条件失败路径上执行），§8.77 的判断成立。**未修**，需要单独的回归方案。

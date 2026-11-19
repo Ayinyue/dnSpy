@@ -46,6 +46,13 @@ jobs:
           dotnet restore Extensions/ILSpy32.Decompiler/ICSharpCode.Decompiler/ICSharpCode.Decompiler.csproj
           dotnet restore Extensions/ILSpy32.Decompiler/dnSpy.Decompiler.ILSpy32/dnSpy.Decompiler.ILSpy32.csproj
 
+      # 先构建解决方案：probe 的 compile-only 引用（dnlib / dnSpy.Contracts.* /
+      # Mono.Cecil）都以 dnSpy bin 下的产物为 HintPath，必须先有那份产物。
+      # 必须 -m:1：dnSpy.sln 会激活引擎 DLL 里的 Debug.Assert（§8.63），并行构建
+      # 还会偶发把 net10 的 System.Runtime 解析进 net48 编译（§8.60）。
+      - name: Build solution (-m:1)
+        run: dotnet build dnSpy.sln -c Release -m:1 --nologo -v q
+
       # 语料门：9 道（IL 全一致 / C#+VB 三程序集 / bench 性能）。
       # 不带 -NoBuild：verify-all 会按手工命令重建引擎 + net10 扩展 + probe，
       # 这正是 §8.63 要求的「门禁前干净重构建」，避免复用到被 dnSpy.sln 污染的产物。
@@ -59,7 +66,3 @@ jobs:
           dotnet run -c Release --project Extensions/ILSpy32.Decompiler/baseline -- dump --asm "dnSpy/dnSpy/bin/Release/net10.0-windows/dnSpy.Contracts.DnSpy.dll" --impl ilspy32 --lang cs --out $dump --dnspy-dir "dnSpy/dnSpy/bin/Release/net10.0-windows" --all
           py Extensions/ILSpy32.Decompiler/baseline/source-check.py $dump "Extensions/ILSpy32.Decompiler/../../dnSpy/dnSpy.Contracts.DnSpy"
           py Extensions/ILSpy32.Decompiler/baseline/token-check.py $dump
-
-      # 双 TFM 门禁。必须 -m:1，且必须放在最后（见文件头注释）
-      - name: Dual-TFM solution build (-m:1)
-        run: dotnet build dnSpy.sln -c Release -m:1 --nologo -v q

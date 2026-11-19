@@ -1816,9 +1816,15 @@ SequencePointBuilder.AddToSequencePoint(ILInstruction):255   (Debug.Assert)
 
 **这条是 3.2 既有缺陷，不是本次改动引入的**（本次没碰 `ThisReferenceExpression` /
 query 子句）；Release 构建下不崩，但 sequence point 会被写错。
-**未修**：修它要改 `AddToSequencePoint` 的语义（跳过跨函数指令），
-会影响 PDB/sequence point 映射，而现有门禁**不校验 sequence point**，
-无法验证 —— 故只定位，等补上门禁再做。
+**已修（2026-11-19）**：Debug 引擎实测确认机制与初判相反：`ThisReferenceExpression`
+带的 `ldarg.0` 属于 **lambda 自己的** `ILFunction`，而当前 sequence point 属于**外层**
+方法 —— `IntroduceQueryExpressions` 把 `Select(a => this.…)` 降级成 query 子句后，
+lambda 体（含 `this` 加载）的注解指令随子句表达式一起被外层语句的 sequence point 访问。
+原实现把 `current.Function` 覆盖成 lambda 函数，该 statement 的 SP 记到 lambda 名下
+（未渲染、被丢弃），外层 statement 的 ILSpan 起始被改成 lambda 指令的偏移。
+修复：`AddToSequencePoint` 跳过属于其他 `ILFunction` 的指令（连同其子指令）。
+门禁：`engine-tests` 11a/11b/11c（`sp-test` 的 `StatementVariety.LambdaThis`
+多语句样例，断言语句 ILSpan 不重叠且第二句是 query）。
 
 **诊断工具**：`baseline/probe` 的 `LangDiffAll` 现在支持
 `PROBE_TRACE_TYPES=1`，逐个打印正在反编译的类型名，崩溃时最后一条即肇事类型。
@@ -2001,8 +2007,8 @@ if (cur.ILSpan.End < next.ILSpan.Start)       iLSpan = cur.ILSpan;
 
 **判据**：一律以**源码**为准（仓库里有 `dnSpy/*.cs`），不是以 2.3 为准。
 凡是 3.2 更贴源码的，就从「兼容残留」里剔除。§8.67/§8.68 剩下那些
-（枚举常量命名、临时变量内联、循环塑形、显式接口 token/顺序、
-lambda `this` sequence point）才是**两个引擎都错或 3.2 确实更差**的真残留。
+（枚举常量命名、临时变量内联、循环塑形、显式接口 token/顺序）才是
+**两个引擎都错或 3.2 确实更差**的真残留（lambda `this` sequence point 已修，见 §8.63 末）。
 （`(uint)` cast 一项经查源码 `SpanDataCollection.cs:89` 就是 `(uint)hi < (uint)array.Length`，
 属 2.3 丢转换，已移到上表。）
 

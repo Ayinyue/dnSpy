@@ -1122,6 +1122,26 @@ class Probe {
 			Check(!comparer.Equals(siteA, siteC), "9d SigComparer distinguishes synthesized overloads");
 		}
 
+		// 11. Query-lowered lambda 'this' (audit §8.63 末「复发与定位」): IntroduceQueryExpressions moves
+		// the lambda body into the query clause, so the lambda's IL instructions are visited
+		// while the outer statement's sequence point is being built. The builder must skip those
+		// cross-function instructions; otherwise the statement's ILSpan starts inside the
+		// previous statement's range (the lambda's 'this' load offset leaks into the outer SP).
+		DumpStatements(dec32cs, statementVariety, "LambdaThis", mdi => {
+			var stmts = mdi!.Statements;
+			Check(stmts.Length == 4, $"11a C# LambdaThis statement count ({stmts.Length})");
+			var overlap = false;
+			for (int i = 1; i < stmts.Length; i++) {
+				if (stmts[i].ILSpan.Start < stmts[i - 1].ILSpan.End)
+					overlap = true;
+			}
+			Check(!overlap, "11b C# LambdaThis statement ILSpans are non-overlapping");
+			var text = Decompile(dec32cs, statementVariety, true).ToString();
+			var rStmt = stmts.Length > 1 ? stmts[1] : default;
+			var excerpt = rStmt.TextSpan.Length > 0 ? text.Substring(rStmt.TextSpan.Start, Math.Min(rStmt.TextSpan.Length, 40)) : "";
+			Check(excerpt.Contains("from a in columns"), $"11c C# LambdaThis second statement is the query ('{excerpt.Replace("\r", "").Replace("\n", " ")}')");
+		});
+
 		Console.WriteLine(failures == 0 ? "ENGINE-TESTS: ALL PASS" : $"ENGINE-TESTS: {failures} FAILURES");
 		return failures == 0 ? 0 : 1;
 	}

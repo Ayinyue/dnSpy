@@ -85,5 +85,15 @@ namespace SpTestNamespace
 				Console.WriteLine(item);
 			}
 		}
+
+		// Regression sample for the sequence-point builder: the lambda body references the
+		// implicit 'this' (counter), so IntroduceQueryExpressions moves the lambda's IL
+		// instructions into the outer statement's sequence point. See audit §8.63/§8.74.
+		public int[] LambdaThis(int[] columns) {
+			int x = 1;
+			var r = columns.Select(a => counter + a).ToArray();
+			x++;
+			return r;
+		}
 	}
 }

@@ -95,6 +95,16 @@ if (-not $NoBuild) {
 			$script:hard++
 		}
 	}
+	# 诊断：CI 与本地行为差异的定位信息（干净 checkout 的 dnSpy bin 产物集）。
+	foreach ($f in @('dnlib.dll', 'dnSpy.Contracts.Logic.dll', 'dnSpy.Contracts.DnSpy.dll', 'dnSpy.Decompiler.ILSpy32.x.dll', 'Mono.Cecil.dll')) {
+		$p = Join-Path $dnspyBin $f
+		if (Test-Path $p) {
+			try { Write-Report ("DIAG bin {0} {1}" -f $f, [System.Reflection.AssemblyName]::GetAssemblyName($p).Version) }
+			catch { Write-Report ("DIAG bin {0} (version unreadable)" -f $f) }
+		} else {
+			Write-Report ("DIAG bin {0} MISSING" -f $f)
+		}
+	}
 }
 else {
 	Write-Report "--- build skipped (-NoBuild) ---"

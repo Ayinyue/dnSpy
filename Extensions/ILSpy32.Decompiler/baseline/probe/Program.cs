@@ -140,6 +140,19 @@ class Probe {
 		};
 	}
 
+	// 2.3 引擎是用 Assembly.LoadFrom 从 path23 加载的：它的依赖（dnSpy.Contracts.Logic /
+	// DnSpy，强名称 6.6.0.0）在 LoadFrom 上下文里解析，CI 上曾直接抛
+	// FileNotFoundException（本地靠历史遗留的 dnSpy bin 才偶然通过）。提前 LoadFrom
+	// 契约程序集，让 2.3 引擎的引用命中已加载的程序集。文件缺失时静默跳过。
+	static void PreloadContracts(string dnspyBin) {
+		foreach (var n in new[] { "dnSpy.Contracts.Logic", "dnSpy.Contracts.DnSpy" }) {
+			var p = Path.Combine(dnspyBin, n + ".dll");
+			if (!File.Exists(p))
+				continue;
+			try { System.Reflection.Assembly.LoadFrom(p); } catch { }
+		}
+	}
+
 	// ==== settings-wiring: walk the MEF composition path (DecompilerCreator with the persisted
 	// settings singletons) and assert the languages got the persisted instances, that the Mixed
 	// view shares the IL settings with the IL view (as in 2.3), and that the 2.3 IL options were
@@ -260,6 +273,7 @@ class Probe {
 	//   lang-diff-all <targetDll> <dnspyBin> <path23> [langFilter]
 	static int LangDiffAll(string targetDll, string dnspyBin, string path23, string? langFilter = null) {
 		InstallBinResolver(new[] { dnspyBin, path23 });
+		PreloadContracts(dnspyBin);
 		var module = ModuleDefMD.Load(targetDll);
 		var languages23 = LoadProviders(Path.Combine(path23, "dnSpy.Decompiler.ILSpy.Core.dll"));
 		var languages32 = LoadProviders(Path.Combine(dnspyBin, "dnSpy.Decompiler.ILSpy32.x.dll"));
@@ -305,6 +319,7 @@ class Probe {
 	//   lang-diff <targetDll> <0xToken|TypeName> <dnspyBin> <path23Core>
 	static int LangDiff(string targetDll, string tokenOrTypeName, string dnspyBin, string path23, string? out23 = null, string? out32 = null, string? langFilter = null) {
 		InstallBinResolver(new[] { dnspyBin, path23 });
+		PreloadContracts(dnspyBin);
 		var module = ModuleDefMD.Load(targetDll);
 		var languages23 = LoadProviders(Path.Combine(path23, "dnSpy.Decompiler.ILSpy.Core.dll"));
 		var languages32 = LoadProviders(Path.Combine(dnspyBin, "dnSpy.Decompiler.ILSpy32.x.dll"));

@@ -316,7 +316,8 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			}
 
 			foreach (var indexer in declaration.Members.OfType<ICSharpCode.Decompiler.CSharp.Syntax.IndexerDeclaration>()) {
-				var propertyDef = MatchProperty(typeDef, "Item", indexer.Parameters.Count, indexer.PrivateImplementationType);
+				var paramNames = indexer.Parameters.Select(p => NormalizeParameterTypeName(GetAstTypeName(p.Type) ?? p.Type.ToString())).ToList();
+				var propertyDef = MatchProperty(typeDef, "Item", indexer.Parameters.Count, indexer.PrivateImplementationType, paramNames);
 				if (propertyDef != null)
 					indexer.AddAnnotation(propertyDef);
 			}
@@ -461,7 +462,8 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		/// name, their plain-named twin must not be picked for them.
 		/// </summary>
 		static PropertyDef MatchProperty(TypeDef typeDef, string name, int parameterCount,
-				ICSharpCode.Decompiler.CSharp.Syntax.AstType privateImplementationType) {
+				ICSharpCode.Decompiler.CSharp.Syntax.AstType privateImplementationType,
+				List<string> parameterTypeNames = null) {
 			bool wantsQualified = privateImplementationType is { IsNull: false };
 			// 元数据里显式实现的属性名是「接口全名.成员名」，可能同时存在
 			// IEnumerator<IDsDocument>.Current 与 IEnumerator.Current 这种只差泛型/非泛型的
@@ -472,6 +474,10 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			foreach (var property in typeDef.Properties) {
 				if (property.PropertySig.Params.Count != parameterCount)
 					continue;
+				// 索引器（Item）必须连参数类型一起比：this[int] 与 this[long] 个数相同，
+				// 只看个数会把两者绑到同一个 PropertyDef（audit 8.87）。
+				if (parameterTypeNames != null && !PropertyParameterTypesMatch(property, parameterTypeNames))
+					continue;
 				if (property.Name == name)
 					exact ??= property;
 				else if (property.Name.EndsWith("." + name, StringComparison.Ordinal)) {
@@ -480,7 +486,22 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 					suffix ??= property;
 				}
 			}
-			return wantsQualified ? suffix ?? exact : exact ?? suffix;
+			var result = wantsQualified ? suffix ?? exact : exact ?? suffix;
+			if (result == null && parameterTypeNames != null) {
+				// 没有类型相符的候选时退回只按名字+个数匹配（例如泛型参数 T 对 !T 拼不上）。
+				return MatchProperty(typeDef, name, parameterCount, privateImplementationType);
+			}
+			return result;
+		}
+
+		/// <summary>索引器的参数类型是否与语法声明一致（用 <see cref="NormalizeParameterTypeName"/> 归一）。</summary>
+		static bool PropertyParameterTypesMatch(PropertyDef property, List<string> syntaxNames) {
+			for (int i = 0; i < syntaxNames.Count; i++) {
+				var meta = property.PropertySig.Params[i]?.ToString();
+				if (!string.Equals(NormalizeParameterTypeName(meta), syntaxNames[i], StringComparison.OrdinalIgnoreCase))
+					return false;
+			}
+			return true;
 		}
 
 		/// <summary>

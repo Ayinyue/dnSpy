@@ -23,23 +23,25 @@
     <PackageReference Include="dnlib" Version="4.5.0" />
   </ItemGroup>
   <ItemGroup>
-    <!-- 其余引用仍是 compile-only (Private=false)：运行时经 AssemblyResolve 指向
-         权威的 dnSpy bin，避免 app base 里的陈旧副本静默胜出。 -->
+    <!-- 契约程序集随 probe 一起复制到 app base：2.3 引擎是用 Assembly.LoadFrom 从
+         path23 加载的，它的强名称依赖在 LoadFrom 上下文里解析，AppDomain.AssemblyResolve
+         并不可靠（CI run 14/15 全崩在 dnSpy.Contracts.Logic 6.6.0.0）。probe 自带后，
+         默认上下文直接从 app base 命中，不再依赖 handler。-->
     <Reference Include="dnSpy.Contracts.Logic">
       <HintPath>..\..\..\..\dnSpy\dnSpy\bin\Release\net10.0-windows\dnSpy.Contracts.Logic.dll</HintPath>
-      <Private>false</Private>
+      <Private>true</Private>
     </Reference>
     <Reference Include="dnSpy.Decompiler.ILSpy32.x">
       <HintPath>..\..\..\..\dnSpy\dnSpy\bin\Release\net10.0-windows\dnSpy.Decompiler.ILSpy32.x.dll</HintPath>
-      <Private>false</Private>
+      <Private>true</Private>
     </Reference>
     <Reference Include="dnSpy.Contracts.DnSpy">
       <HintPath>..\..\..\..\dnSpy\dnSpy\bin\Release\net10.0-windows\dnSpy.Contracts.DnSpy.dll</HintPath>
-      <Private>false</Private>
+      <Private>true</Private>
     </Reference>
     <Reference Include="Mono.Cecil">
       <HintPath>..\..\..\..\dnSpy\dnSpy\bin\Release\net10.0-windows\Mono.Cecil.dll</HintPath>
-      <Private>false</Private>
+      <Private>true</Private>
     </Reference>
   </ItemGroup>
 </Project>

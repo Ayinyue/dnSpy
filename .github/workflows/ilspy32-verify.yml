@@ -18,6 +18,10 @@ on:
     branches: [feature/ilspy32, master]
   workflow_dispatch:
 
+# 报告发布步骤要把报告推到 ci-reports 分支。
+permissions:
+  contents: write
+
 jobs:
   verify:
     name: Decompiler corpus gates
@@ -74,6 +78,39 @@ jobs:
           name: ilspy32-verify-report
           path: Extensions/ILSpy32.Decompiler/baseline/out/verify-*.txt
           if-no-files-found: ignore
+
+      # 日志下载需要 admin，artifact 下载也需要认证；把报告推到独立分支，
+      # raw.githubusercontent.com 可直接读。该分支不在 on.branches 里，不会触发本工作流。
+      - name: publish verify report
+        if: ${{ always() && github.event_name != 'pull_request' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $r = Get-ChildItem Extensions/ILSpy32.Decompiler/baseline/out/verify-*.txt -ErrorAction SilentlyContinue |
+               Sort-Object LastWriteTime | Select-Object -Last 1
+          if (-not $r) { Write-Host 'no verify report'; exit 0 }
+          $dst = Join-Path $env:TEMP 'ilspy32-reports'
+          Remove-Item -Recurse -Force $dst -ErrorAction SilentlyContinue
+          $url = "https://x-access-token:$env:GITHUB_TOKEN@github.com/Ayinyue/dnSpy.git"
+          git clone --quiet --depth 1 --branch ci-reports --single-branch $url $dst 2>&1 | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            New-Item -ItemType Directory -Force $dst | Out-Null
+            Set-Location $dst
+            git init -q
+            git checkout -q -b ci-reports
+            git remote add origin $url
+          } else {
+            Set-Location $dst
+          }
+          New-Item -ItemType Directory -Force (Join-Path $dst 'reports') | Out-Null
+          $name = $r.Name
+          Copy-Item $r.FullName (Join-Path $dst "reports/$name") -Force
+          git config user.email 'ilspy32-ci@local'
+          git config user.name 'ilspy32-ci'
+          git add -A
+          git commit -q -m "verify report $name"
+          git push -q -u origin ci-reports
+          Write-Host "published: https://raw.githubusercontent.com/Ayinyue/dnSpy/ci-reports/reports/$name"
 
       # 辅助信号：成员不丢（源码对拍）、token 不重复
       - name: source-check / token-check

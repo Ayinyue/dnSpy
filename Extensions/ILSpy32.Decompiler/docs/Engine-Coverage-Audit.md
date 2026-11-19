@@ -1926,37 +1926,44 @@ public Guid Guid
 `Logic` 6793 → **6774**、`Debugger` 1666 → **1338**（`identical` 237 → **238**）。
 `degraded=0`；`verify-all` `hardFail=0`。
 
-### 8.67 枚举常量的算术语境：`ColorType.FirstNR` → `16384`（2026-11-18，**未修**）
+### 8.67 枚举常量的算术语境：`ColorType.FirstNR` → `16384`（2026-11-18 发现；2026-11-20 改判：2.3 更差，不对齐）
 
 **源码**（`Themes/ExtensionMethods.cs:32`）：
 ```csharp
 public static ColorType ToColorType(this TextColor self) => (uint)self + ColorType.FirstNR;
 ```
-**2.3**：`return self + ColorType.Text;`（丢了 `(uint)` 转换，但保留了枚举成员名）
-**3.2**：`return (ColorType)((int)self + 16384);`（转换运算符选成 `int`，常量退化成数字）
+**2.3**：`return self + ColorType.Text;`
+**3.2**：`return (ColorType)((int)self + 16384);`
 
-**两处 3.2 弱点**：
-1. `TypeSystemAstBuilder.ConvertConstantValue` 的 `GetIntegralClrType` 只认 8 种整型
-   （`KnownTypeCode.SByte..UInt64`），**枚举返回 null** → 直接落到
-   `new PrimitiveExpression(constantValue)`，于是枚举常量印成数字。
-   2.3 会印成员名（`FirstNR == Text`，取第一个名字 `Text`）。
-2. `HandleBinaryNumeric` 只对**位运算**做枚举处理
-   （`ExpressionBuilder.cs:1139` 的 `op.IsBitwise()`）；`+`/`-` 会把操作数降到底层类型，
-   常量也就回不到枚举类型。
+**结论修正（2026-11-20）**：原判断「2.3 保留了枚举成员名、是 3.2 的弱点」是**错的**。
+2.3 那行**根本编译不过**——实测（临时 net10.0 项目，照日子集合与 ColorType/TextColor 定义）：
+```
+error CS0019: 运算符“+”无法应用于“TextColor”和“ColorType”类型的操作数
+```
+C# 的枚举加法只定义了 `E operator +(E x, U y)` / `E operator +(U x, E y)`（U 是 E 的底层类型），
+`TextColor + ColorType` 没有对应算子。3.2 的输出虽然丑，但**能编译**，也更贴源码
+（源码的返回表达式确实是 `(uint)self + ColorType.FirstNR`，结果类型就是 ColorType）。
+**本项因此移入 §8.69 的「2.3 更差、不该对齐」清单，不要去改 3.2 对齐 2.3。**
 
-**未修原因**：修 1 需要给 `ConvertConstantValue` 加枚举成员命名（含 `[Flags]` 组合值
-的拆分），修 2 要动 `HandleBinaryNumeric` 的操作数定型 —— 两者都会影响所有枚举运算，
-而门禁只有「与 2.3 的 diff」，没有「与源码的 diff」。**建议先补一个源码对拍门禁**
-（仓库里就有 dnSpy 自己的源码），否则这类改动无法验证对错。
+**3.2 的真实机制（插桩实测，`HandleBinaryNumeric`）**：`add` 的两个操作数是
+`ldarg.0`（TextColor，底层 int32）和 `ldc.i4 16384`（int32）。
+1. `preRr = ResolveBinaryOperator(Add, TextColor, int32)` 命中 `TextColor operator +(TextColor, int)`
+   —— 因为 `int32` 恰好是 TextColor 的底层类型，属**精确匹配**，所以算子结果类型被定成
+   `TextColor`，而不是源码里的 `ColorType`。
+2. `TypeOperandToResultType(right, preRr.Type)` 把常量重定为 `ConstantResolveResult(TextColor, 16384)`，
+   `ConvertEnumValue(TextColor, 16384)` 在 TextColor 里找不到 16384（Text=0、Operator=1…），退回数字字面量
+   —— **名字就是在这里丢的**。
+3. 随后 `ResolveBinaryOperator(Add, TextColor, TextColor)` 失败，走兜底分支把两边都转成 int32，
+   枚举定性被彻底丢掉，于是打印 `(int)self + 16384`，再由 return 的目标类型补上 `(ColorType)`。
 
-**顺带**：同族的 `(uint)self` 被印成 `(int)self`（显式转换运算符选错符号），
-也归到 2。
+**为什么 2.3 能印出 `ColorType.Text`**：2.3 把算子结果类型定成 `ColorType`（源码的转换目标），
+常量因此按 ColorType 查名（`Text = 0x4000` 是第一个名字），但 `self` 没转成 `uint`，
+于是得到非法的 `TextColor + ColorType`。也就是说 2.3 是**为了印出名字而牺牲了合法性**。
 
-**负结果（同日实验）**：把 `HandleBinaryNumeric` 的枚举分支从 `op.IsBitwise()`
-放宽到也含 `Add`/`Subtract`，**语料零变化**（11937/6774/1338 一个数都没动）。
-原因是常量先被 `PrepareArithmeticArgument`/`ResolveBinaryOperator` 定型成
-`uint`，`AdjustConstantExpressionToType(right, left.Type)` 的目标已经是 `uint`
-而不是枚举 —— 光放宽谓词没用，得改操作数定型本身。已还原。
+**3.2 要完全贴源码**（`(uint)self + ColorType.FirstNR`），需要把 return 的目标类型（ColorType）
+作为期望类型传进算术表达式构建，让算子解析在 `TextColor +(TextColor,int)` 与
+`ColorType +(uint,ColorType)` 之间选后者 —— 这是**期望类型传播**，不是局部改动；
+在缺少「与源码对拍」的门禁之前不做。
 
 ### 8.68 最大残留模式：ILAst 临时局部变量不内联（2026-11-18，**未修**）
 
@@ -2004,10 +2011,11 @@ if (cur.ILSpan.End < next.ILSpan.Start)       iLSpan = cur.ILSpan;
 | 静态构造器 | 把字段初始化式塞回 `static X() { … }` + `// Note: …beforefieldinit` | `static readonly X Empty = new X(…)`（贴源码） |
 | `if (!x) return false; return y;` 的短路 | —— | 3.2 合并成 `return !x && y`（`return true` 那个朝向除外，见 §8.59 负结果） |
 | `(uint)hi < (uint)array.Length` | `hi < array.Length`（**丢掉源码里的显式转换**，语义都变了） | `(uint)hi < (uint)array.Length`（与 `SpanDataCollection.cs:89` 一致） |
+| 枚举常量的算术语境（`ToColorType`） | `self + ColorType.Text`（**CS0019，根本编译不过**） | `(ColorType)((int)self + 16384)`（能编译，但丢了成员名与 `(uint)` 符号，详 §8.67） |
 
 **判据**：一律以**源码**为准（仓库里有 `dnSpy/*.cs`），不是以 2.3 为准。
-凡是 3.2 更贴源码的，就从「兼容残留」里剔除。§8.67/§8.68 剩下那些
-（枚举常量命名、临时变量内联、循环塑形、显式接口 token/顺序）才是
+凡是 3.2 更贴源码的，就从「兼容残留」里剔除。§8.68 剩下那些
+（临时变量内联、循环塑形、显式接口 token/顺序）才是
 **两个引擎都错或 3.2 确实更差**的真残留（lambda `this` sequence point 已修，见 §8.63 末）。
 （`(uint)` cast 一项经查源码 `SpanDataCollection.cs:89` 就是 `(uint)hi < (uint)array.Length`，
 属 2.3 丢转换，已移到上表。）
@@ -2054,6 +2062,10 @@ py baseline/source-check.py <dumpDir> <sourceDir>
 
 **用法**：改完枚举命名 / 临时变量内联这类改动后，先跑一遍这个脚本确认没有
 成员丢失，再跑 `lang-diff-all` 看兼容性 —— 两个信号一起才够。
+
+**更强的判据是「能不能编译」**（§8.67 已实战）：把反编译输出塞回一个临时项目编译，
+出错就是硬信号。2.3 在 `ToColorType` 上就报 `CS0019（TextColor + ColorType）。
+后续再遉项时，先拿这个测试小项目试一下，比凭印象猜“是不是 3.2 更差”靠谱。
 
 ### 8.72 循环塑形定位：`HighLevelLoopTransform.MatchWhileLoop` 的 `MatchLeave(loop)` 失败（2026-11-18）
 

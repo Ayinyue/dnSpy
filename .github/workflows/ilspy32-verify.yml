@@ -66,6 +66,15 @@ jobs:
           if ($r) { Write-Host "=== verify report: $($r.Name) ==="; Get-Content $r.FullName }
           exit $code
 
+      # 报告不随 job 清理；失败时便于直接下载，不必申请日志下载权限。
+      - name: verify report artifact
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: ilspy32-verify-report
+          path: Extensions/ILSpy32.Decompiler/baseline/out/verify-*.txt
+          if-no-files-found: ignore
+
       # 辅助信号：成员不丢（源码对拍）、token 不重复
       - name: source-check / token-check
         run: |

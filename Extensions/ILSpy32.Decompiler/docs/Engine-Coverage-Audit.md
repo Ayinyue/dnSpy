@@ -2428,3 +2428,60 @@ MatchProperty(typeDef, "Item", indexer.Parameters.Count, indexer.PrivateImplemen
 
 **验证**：token 重复 3 → **1**（`HexBytes`、`ComplexData` 修好）；
 `DnSpy.dll` C# `diffLines` 11093 → **11092**；`degraded=0`。
+
+### 8.88 CI 门禁接线：七处「本地绿、CI 红」的环境差异（2026-11-19，已修）
+
+`ilspy32-verify.yml` 连续 7 次失败，每次都卡在「本地能过」的环节。逐条定位：
+
+1. **Mono.Cecil 入库位置**：DLL 提交到 `ICSharpCode.Decompiler/ICSharpCode.Decompiler/lib/`，
+   而 csproj 在 `ICSharpCode.Decompiler/` → `$(MSBuildThisFileDirectory)lib\...` 指向不存在的
+   路径（`MSB3245` + 492×`CS0246`）。移到 csproj 同级（引擎 `38569d21c`）。
+2. **扩展/测试项目的 Cecil 指向外部克隆**：`ILSPY\ILSPY\ICSharpCode.ILSpyCmd` 只在本地存在，
+   CI 干净环境没有 → 改指仓内 DLL（上层 `c0584dd6f`、引擎 `c93b61221`）。
+3. **verify-all 不构建 sp-test**：`SpTestAssembly.dll` 的 bin 不入库，CI 首门即崩 →
+   把 `SpTest.csproj` 加进 build 步骤（上层 `e52b7bfdf`）。
+4. **probe 缺 dnlib**：干净构建的 dnSpy bin 不含 `dnlib.dll`（本地那份是 2025-05 遗留），
+   2.3 引擎按名引用 `dnlib 4.5.0.0` → probe 改自带 `PackageReference`（上层 `008329092`）。
+5. **2.3 引擎的契约解析**：引擎用 `Assembly.LoadFrom(path23)`，其强名称依赖
+   （`dnSpy.Contracts.Logic 6.6.0.0`）在 LoadFrom 上下文里解析，`AssemblyResolve` 不可靠
+   → 契约程序集随 probe 复制（`Private=true`，上层 `b4cd84f5f`）。
+6. **可观测性**：日志下载要 admin、artifact 下载要认证 → 失败报告发布到 `ci-reports`
+   分支（`raw.githubusercontent.com` 可读，`62dd515dc`/`7d784d2fd`）。
+7. **辅助信号误设门禁**：`source-check`/`token-check` 是诊断而非门禁 → `continue-on-error`
+   并保留输出（`49d11ba46`）。
+
+**验证**：run #17（`49d11ba46`）首次 job success；本地同口径 hardFail=0、双 TFM 0 错误。
+
+### 8.89 泛型实参的 C# 关键字未归一 → 重载绑定错乱（2026-11-19，已修）
+
+`token-check` 报 `EditableValueImpl` 两个 ctor 都印 `0x06001995`（元数据实为
+`06001995`/`06001996`）。加临时诊断后确认：`MatchConstructor` 对**两个**重载都走
+fallback，即 `ParameterTypesMatch` 对泛型参数**全部失败**。
+
+根因在 `SimpleTypeName`：泛型实参的语法侧是 C# 关键字（`bool`），元数据侧是 BCL 名
+（`System.Boolean`），两者直接 `OrdinalIgnoreCase` 比较 → `bool != Boolean` →
+`Func<bool>` 与 `Func<System.Boolean>` 判不等 → 所有含基本类型实参的泛型参数匹配失败，
+重载全部落到「同个数」fallback。
+
+**修法**：`SimpleTypeName` 末尾经 `PrimitiveTypeName` 归一（`bool→Boolean`、`int→Int32`…）。
+**验证**：`token-check` 1 → **0**；`degraded=0`。
+
+### 8.90 source-check 的启发式误报（2026-11-19，已修）
+
+`source-check` 报 2 个文件，均为误报：
+- `find_sources` 用「短类型名出现在文件任意位置」匹配 → `Resources.Designer.cs`、
+  `WpfUnicodeUtils.cs` 混入候选集；
+- `MEMBER_RE` 把 `namespace WpfUnicode {` 当成成员声明。
+
+**修法**：改为匹配 `class|struct|interface|enum|record <name>` 的类型声明，并跳过
+`namespace` 行。**验证**：`flagged 2 → 0`，`checked=1278` 不变（覆盖不缩）。
+
+### 8.91 VB 抽样差异是命名策略，不是语义缺陷（2026-11-19，判定保留）
+
+`lang-diff` 单方法（`MethodDebugInfoBuilder`）VB `diffLines=68`、3.2 侧多 406 字符。
+逐行对比：3.2 的局部变量带**唯一后缀**（`stateMachineKind2`、`i2`、`list2`、`[end]`），
+2.3 用简单名（`stateMachineKind`、`i`、`list`、`end`）。两个 ctor 都在，语义一致；
+`corpus VB` 三程序集门 PASS（IL 全一致、`errors=0`）。
+
+结论：3.2 的命名更稳健（避免与参数/作用域冲突），对齐 2.3 只会把输出变差（参 §8.67/§8.70
+的判据）。保留为 soft，不作对齐。

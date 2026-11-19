@@ -39,6 +39,13 @@ jobs:
         with:
           python-version: '3.x'
 
+      # CI 上必须先 restore：新 checkout 没有 obj/project.assets.json，
+      # 否则 Mono.Cecil 解析不到（warning MSB3245 + CS0246 'Mono'）。
+      - name: Restore
+        run: |
+          dotnet restore Extensions/ILSpy32.Decompiler/ICSharpCode.Decompiler/ICSharpCode.Decompiler.csproj
+          dotnet restore Extensions/ILSpy32.Decompiler/dnSpy.Decompiler.ILSpy32/dnSpy.Decompiler.ILSpy32.csproj
+
       # 语料门：9 道（IL 全一致 / C#+VB 三程序集 / bench 性能）。
       # 不带 -NoBuild：verify-all 会按手工命令重建引擎 + net10 扩展 + probe，
       # 这正是 §8.63 要求的「门禁前干净重构建」，避免复用到被 dnSpy.sln 污染的产物。

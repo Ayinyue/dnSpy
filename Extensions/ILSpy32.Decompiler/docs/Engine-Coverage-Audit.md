@@ -1858,7 +1858,7 @@ lambda 体（含 `this` 加载）的注解指令随子句表达式一起被外�
 类型枚举顺序不同（索引会错位），而且 `dotnet build dnSpy.sln` 重建目标程序集后 token 注释
 会整体位移。详见 §8.65；下面的数字**以 `lang-diff-all` 为准**。
 
-### 8.65 dump 对比不可靠 + 显式接口实现的 token/顺序差异（2026-11-18，**未修**）
+### 8.65 dump 对比不可靠（2026-11-18）+ 显式接口实现的 token/顺序差异（2026-11-20 已修）
 
 **dump 对比的可靠性问题**（影响 §8.62 那张表）：`baseline dump` 的两个引擎产物
 **不能**直接配对做逐类型/逐模式统计，原因有三：
@@ -1882,9 +1882,15 @@ lambda 体（含 `this` 加载）的注解指令随子句表达式一起被外�
 - 类型自身 token 也差 1（2.3 `0x020001AD` vs 3.2 `0x020001AC`），但 `UIUtilities`、
   `SpanDataCollection` 等类型的 token 完全一致 → 不是全局偏移，是**特定成员**的标注问题。
 
+**复验（2026-11-20）：以上三条已不复现。** 同一命令重跑，2.3 与 3.2 的 18 条 token 注释
+逐行相同（含类型自身 token `0x020001AD`）、成员顺序一致，`token-check.py` 报 0 重复。
+成因与修复见 §8.73/§8.74。**留档**：比对必须用同一份二进制（见本节第 2 条），
+否则 token 位移会让旧结论整体失效 —— 这也是「dump 对比不可靠」的又一例。
+
 **判定**：属「显式接口实现的 token 标注 + 成员排序」，机制指向 `TypeSystemAstBuilder`/
 `InsertTokenComments` 的 `Annotation<MethodDef>()` 归属，改动面在核心 binder，**本次只定位**。
 token 注释是可选显示项（`ShowTokenAndRvaComments`），优先级低于代码本体差异。
+（2026-11-20：该差异**已修**，见上「复验」；下面的负结果仍有效。）
 
 **负结果（同日实验）**：`CachedTextColorsCollection` 里 3.2 比 2.3 多一行
 `// (get) Token: …`（索引器的访问器注释），看着像「索引器不该打访问器注释」。
@@ -2015,8 +2021,9 @@ if (cur.ILSpan.End < next.ILSpan.Start)       iLSpan = cur.ILSpan;
 
 **判据**：一律以**源码**为准（仓库里有 `dnSpy/*.cs`），不是以 2.3 为准。
 凡是 3.2 更贴源码的，就从「兼容残留」里剔除。§8.68 剩下那些
-（临时变量内联、循环塑形、显式接口 token/顺序）才是
-**两个引擎都错或 3.2 确实更差**的真残留（lambda `this` sequence point 已修，见 §8.63 末）。
+（临时变量内联、循环塑形）才是**两个引擎都错或 3.2 确实更差**的真残留
+（lambda `this` sequence point 已修，见 §8.63 末）。
+「显式接口 token/顺序」原列在此，2026-11-20 复验已消失，见 §8.73/§8.74。
 （`(uint)` cast 一项经查源码 `SpanDataCollection.cs:89` 就是 `(uint)hi < (uint)array.Length`，
 属 2.3 丢转换，已移到上表。）
 
@@ -2065,7 +2072,7 @@ py baseline/source-check.py <dumpDir> <sourceDir>
 
 **更强的判据是「能不能编译」**（§8.67 已实战）：把反编译输出塞回一个临时项目编译，
 出错就是硬信号。2.3 在 `ToColorType` 上就报 `CS0019（TextColor + ColorType）。
-后续再遉项时，先拿这个测试小项目试一下，比凭印象猜“是不是 3.2 更差”靠谱。
+后续再遇候选时，先拿这个测试小项目试一下，比凭印象猜“是不是 3.2 更差”靠谱。
 
 ### 8.72 循环塑形定位：`HighLevelLoopTransform.MatchWhileLoop` 的 `MatchLeave(loop)` 失败（2026-11-18）
 
@@ -2103,9 +2110,18 @@ Block IL_0000 (incoming: 1) {
 而且 `LoopDetection`/`DetectExitPoints` 的交互需要整体回归。属控制流核心，
 **本次只定位到判定**。
 
-### 8.73 显式接口实现：3.2 成对排列且**两行共用同一个 token**（2026-11-18，**未修**）
+### 8.73 显式接口实现：成对排列与共用 token（2026-11-18 发现；2026-11-20 改判：已修，症状不再复现）
 
-`MenuItemBase\`1` 实测（`lang-diff`，`C# diffLines=146`）：
+> **结论先行（2026-11-20 复验）**：这条**已不复现**，不需要再修。
+> `MenuItemBase\`1` 上 2.3 与 3.2 的 token 注释**逐行相同**：各 18 条，RID/RVA 全同、
+> 出现顺序全同（`0x0600083A` … `0x0600084A`）；成员顺序也一致（2.3 侧的 RID 与
+> 2026-11-18 的记录相同 → 变化发生在 3.2 侧，不是换二进制）。
+> `baseline/token-check.py` 对这两份产物报 `types_with_duplicates=0`。
+> 按 LCS 精确 diff 只剩 **7 行**差异，全部是闭包/临时变量内联（§8.68），
+> 且 3.2 的写法更贴源码（2.3 印 `CS$<>8__locals1.<>4__this`，3.2 直接 `context`）。
+> 机制与修复见 §8.74 末段（§8.80 / §8.82 / §8.83 / §8.84）。
+
+**发现时的实测（2026-11-18）**：`MenuItemBase\`1`（`lang-diff`，`C# diffLines=146`）：
 
 **2.3**（纯元数据序，token 各不相同）
 ```
@@ -2132,11 +2148,12 @@ Block IL_0000 (incoming: 1) {
 本身；但输出里公共方法也拿到了显式实现的 token，说明
 `Annotation<MethodDef>()` 的解析/归属在显式实现场景下串了。
 
-**未修**：改它要动核心 binder 的成员标注与排序，且**没有门禁校验 token 注释**
-（`ShowTokenAndRvaComments` 可关），改错不会被发现。建议先给 token 注释加一道
-抽检门（随机抽 N 个成员，断言 `MetadataToken` 与该成员在源码中的声明一致）。
+**当时的判定**：改它要动核心 binder 的成员标注与排序，且**没有门禁校验 token 注释**
+（`ShowTokenAndRvaComments` 可关），改错不会被发现 —— 建议先加抽检门。
+**后续**：抽检门已落地（§8.79 `baseline/token-check.py`），并据此修完
+§8.80 / §8.82 / §8.83 / §8.84，症状消失（见上「结论先行」）。
 
-### 8.74 显式接口 token 的机制：`AttachMembers` 拿到的 `typeDef.Methods` 不含显式实现（2026-11-18）
+### 8.74 显式接口 token 的机制（2026-11-18 定位；2026-11-20 已修，见 §8.80 / §8.82 / §8.84）
 
 给 `AstAnnotationBinder.AttachMembers`（`Common/AstAnnotationBinder.cs:265`）插桩后，
 `MenuItemBase\`1` 的实况是：
@@ -2157,10 +2174,23 @@ Block IL_0000 (incoming: 1) {
 `knownType` 是 dnSpy 传进来的 `TypeDef`，`typeDeclaration.Name` 对泛型类型
 （`MenuItemBase`）与 `TypeDef.Name`（`MenuItemBase\`1`）对不上时会走全名回退。
 
-**未修**：`MatchMethod` 的 `qualified` 判据（`method.Name.IndexOf('.')`）本身是对的，
+**当时的判定**：`MatchMethod` 的 `qualified` 判据（`method.Name.IndexOf('.')`）本身是对的，
 但它在一个已经缺成员的 `Methods` 集合里找 —— 先修解析，再谈匹配。
-**建议**：给 `Attach` 加一道断言（`typeDef.Methods.Count` 与源码声明数同量级），
-或先给 token 注释加抽检门。
+
+**已修（2026-11-20 复验）**：上面那份 `[BIND]` 插桩是 2026-11-18 的状态，现在不再成立。
+- **解析**：`Attach` 用 dnSpy 传入的 `knownType` 直绑（含嵌套类型），名字带 arity
+  （`MenuItemBase\`1`）不再与非泛型同名类型碰撞，也不再走简单名兜底
+  （`826a3a78c`，§8.75）。
+- **标注**：`.override` 合成的转发方法由引擎打 `SyntheticExplicitImplementationMarker`
+  （engine `8e9631440`），`AttachMembers` 见标记即跳过 `MatchMethod`（app `9d41a7b99`，§8.82）
+  —— 这正是「两个 `Execute` 绑到同一个 `MethodDef`」那一条。
+- **匹配**：接口成员按「接口简单名 + 泛型性」区分（`093b018f1`，§8.80）、
+  显式实现优先取「带接口名」的候选（`2755c3369`，§8.84）、泛型实参参与重载匹配
+  （`212e140c3`，§8.83）、`Nullable<T>` 名字归一（`2b2a688ae`，§8.86）。
+
+**验证口径（重要）**：不必再插桩。声明印出的 token 就是它所绑 `MethodDef` 的 token，
+所以「2.3 与 3.2 的 token 注释逐行相同」等价于「3.2 的绑定结果与 2.3（引擎内建绑定）
+无差别」。`MenuItemBase\`1` 上 18/18 相同，`token-check.py` 报 0 重复（§8.73）。
 
 ### 8.75 泛型/非泛型同名类型的 token 绑定错（2026-11-18，已修）
 

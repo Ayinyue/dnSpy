@@ -37,7 +37,9 @@
 
   <ItemGroup>
     <Reference Include="Mono.Cecil">
-      <HintPath>$(MSBuildThisFileDirectory)..\..\..\..\..\ILSPY\ILSPY\ICSharpCode.ILSpyCmd\bin\Release\net10.0\Mono.Cecil.dll</HintPath>
+      <!-- In-repo copy next to the engine csproj; the external ILSPY\ILSPY clone is not
+           available on CI, and the dnSpy bin output does not exist on a clean build. -->
+      <HintPath>$(MSBuildThisFileDirectory)..\ICSharpCode.Decompiler\ICSharpCode.Decompiler\lib\Mono.Cecil.dll</HintPath>
       <Private>true</Private>
     </Reference>
   </ItemGroup>

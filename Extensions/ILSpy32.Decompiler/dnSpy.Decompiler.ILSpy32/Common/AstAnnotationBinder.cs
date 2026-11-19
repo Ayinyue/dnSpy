@@ -738,7 +738,11 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			if (tick >= 0 && tick < end)
 				end = tick;
 			var dot = name.LastIndexOf('.', end - 1);
-			return (dot < 0 ? name.Substring(0, end) : name.Substring(dot + 1, end - dot - 1)).Trim();
+			var result = (dot < 0 ? name.Substring(0, end) : name.Substring(dot + 1, end - dot - 1)).Trim();
+			// 泛型实参的语法侧是 C# 关键字（bool/int/...），元数据侧是 BCL 名
+			// （System.Boolean/System.Int32/...）。不归一的话 Func<bool> 与
+			// Func<System.Boolean> 判不等，重载全落到 fallback（token 重复，audit 8.82）。
+			return PrimitiveTypeName(result) ?? result;
 		}
 
 		/// <summary>把顶层逗号分开（尊重 <&gt; 嵌套），用于拆分泛型实参。</summary>

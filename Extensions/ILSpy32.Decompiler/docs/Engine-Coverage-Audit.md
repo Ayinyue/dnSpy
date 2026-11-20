@@ -1284,24 +1284,30 @@ VB 11093→11089、Logic C# 6217→6216、VB 6276→6275、Debugger 全同）；
 diffLines 6216→6218；Debugger C# 1199→1200）。**结论：不采用**，除非先补上 2.3 那样的
 期望类型回溯。
 
-**2026-11-20 四续：期望类型下推（试验过，未采用）**。三续定位的根因是 3.2 没有
+**2026-11-20 四续：期望类型下推（已采用）**。三续定位的根因是 3.2 没有
 2.3 `ILAst TypeAnalysis` 那样的期望类型回溯。3.2 里其实已有一条现成的期望类型通路：
 `VisitStLoc` 把 `inst.Variable.Type` 作为 `TranslationContext.TypeHint` 传下去
 （`ExpressionBuilder.cs:591`），只是 `HandleBinaryNumeric`/`HandleShift` 都没用它。
 
-试过把它接上：`HandleBinaryNumeric` 把 `context.TypeHint` 传给左右操作数，`HandleShift`
-在 TypeHint 与 `inst.UnderlyingResultType` 栈类型一致时用它定左操作数类型。效果确实
-修好了目标行——`Utils.Read7BitEncodedInt32` 变成 `val |= (uint)(b & 127) << bits;`
-（`(int)val` 消失、`|=` 重建，与源码一致），`ILSpan.GetHashCode` 也更紧凑，
-`EditValueControl`/`HexBufferLine` 那类 `((int)x & (true ? 1 : 0)) != 0` 恢复成枚举
-比较 `(x & Flags.Mask) != Flags.None`。
+**修法**：`HandleBinaryNumeric` 把 `context.TypeHint` 传给左右操作数；`HandleShift`
+在 TypeHint 与 `inst.UnderlyingResultType` 栈类型一致、且是 32/64 位整型时用它定左
+操作数类型。逐站点实测：
 
-**但没采用**：同一改动会让若干站点的常量命名/枚举名跟着变（A/B 显示
-`AddressReference`/`ReferenceInfo`/`LocalGroupOptions` 的 `int.MinValue` 变成
-`-2147483648`、`ExtensionMethods` 的 `(int)ColorType.Text` 变成 `16384`），
-语料上 DnSpy VB 还 +1（11082→11083），编译报告虽相同但受影响的站点没能逐一查清。
-**结论：下推规则要更精细**（例如只沿 shift 链传、或只传「结果类型」而不是「目标
-类型」），留作后续。
+| 站点 | 改前 3.2 | 改后 3.2 | 源码 |
+|---|---|---|---|
+| `Utils.Read7BitEncodedInt32` | `val = (uint)((int)val \| ((b & 127) << bits));` | `val \|= (uint)(b & 127) << bits;` | 同改后 |
+| `ReferenceInfo` 构造 | `(…) ? -2147483648 : 0` | `(…) ? int.MinValue : 0` | `int.MinValue` |
+| `Extensions.GetSize` | `(int)instr.Offset + instr.GetSize()` | 同左 | 同左 |
+| `ILSpan.GetHashCode` | `(int)(start ^ ((end << 16) \| (end >> 16)))` | `(int)start ^ (((int)end << 16) \| ((int)end >> 16))` | `(int)(start ^ …)`（语义等价，风格略差） |
+
+**验证**：语料与改前基本持平（DnSpy C# 8943→8943、Logic 全同、identical 不变；
+DnSpy VB 11082→11083，+1）；C# 语义编译报告无新增诊断（190 文件 / 172 real
+errors，`CS0221` 未出现）；`verify-all` `hardFail=0 softFail=1`（剩余 soft 数字
+逐字节相同）；`source-check` 112/0。
+
+（过程记录：这一版第一次试验时因为 `Compare-Object` 的 `=>`/`<=` 方向判断错误，
+把 `ReferenceInfo` 的改进误读成「`int.MinValue` 被破坏」而回滚过一次；后来逐站点
+直接实测才定案——`Compare-Object` 的方向别用来判断版本新旧。）
 
 ### 8.45 局部声明的 `= default(...)`：已修（2026-11-18）
 

@@ -1198,7 +1198,7 @@ C# 视图对 `HexBytes` 看到 **170** 个 `CheckedUncheckedAnnotation`（VB 视
 **另两类已计数但未修**：`.Invoke()`（2.3 印 `handler.Invoke(...)`，3.2 省略，2.3 有 21 处/3.2 3 处）；
 `= default(...)` 局部初始化器（3.2 比 2.3 多 31 处，责任点 `DeclareVariables.cs:449`）。
 
-### 8.44 显式转换插入：2.3 明显更多（2026-11-18；2026-11-20 用源码仲裁，方向被推翻）
+### 8.44 显式转换插入：2.3 明显更多（2026-11-18；2026-11-20 源码仲裁方向被推翻，3.2 侧已修）
 
 `--all` 全量计数（`dnSpy.Contracts.DnSpy.dll`，1414 类型；2026-11-20 重测）：
 
@@ -1241,6 +1241,27 @@ C# 视图对 `HexBytes` 看到 **170** 个 `CheckedUncheckedAnnotation`（VB 视
 cast 数量不是对齐目标，不要按它改 3.2。真要挑 3.2 的毛病，应查它在 **byte 操作数上滥插
 `(int)`** 的入口（`Hex.Files.DotNet.Utils`：源码 `(b & 0x3F) << 8`，3.2 印
 `((int)b & 63) << 8`；`HexBytes` 的 `(int)d[...]` 源码里也没有）。
+
+**2026-11-20 续：该入口已找到并修掉**。3.2 给二元数值运算的**非常量**操作数补 cast 的
+入口是 `CSharp/ExpressionBuilder.cs` 的 `TypeOperandToResultType`（预解析阶段，`dfd9dca3f`
+为「对齐 2.3」而加）。但 2.3 也不是全补：`HexBytes.cs:171` 源码
+`d[index] | (d[index + 1] << 8)`，2.3 印 `(int)d[…] | ((int)d[…] << 8)`（每个窄操作数都补），
+3.2 只补第一个；而 `Hex.Files.DotNet.Utils.cs:27` 源码 `(b & 0x7F)`，2.3 不补、3.2 补
+`(int)b`。C# 对数值二元运算本就有隐式提升，这些 cast 纯属噪声。现在
+`TypeOperandToResultType` 只保留常量重定型（`index + 1L` 的后缀），非常量操作数不再补 cast：
+
+| 方法 | 源码 | 改前 3.2 | 改后 3.2 |
+|---|---|---|---|
+| `Utils.Read7BitEncodedInt32` | `val \|= (uint)(b & 0x7F) << bits;` | `val = (uint)((int)(long)val \| (long)(((int)b & 127) << bits));` | `val = (uint)((int)val \| ((b & 127) << bits));` |
+| `Utils.ReadCompressedUInt32` | `return (uint)((b & 0x3F) << 8) \| buffer.ReadByte(position++);` | `return (uint)((((int)b & 63) << 8) \| (int)buffer.ReadByte(position++));` | `return (uint)(((b & 63) << 8) \| buffer.ReadByte(position++));` |
+| `HexBytes.TryReadUInt16` | `return (ushort)(d[index] \| (d[index + 1] << 8));` | `(ushort)((int)d[…] \| (d[…] << 8))` | `(ushort)(d[…] \| (d[…] << 8))` |
+
+验证：`verify-all` `hardFail=0 softFail=1`（剩余 soft 仍是 §8.68 之前就存在的
+lang-diff `MethodDebugInfoBuilder`，数字逐字节相同）；语料 IL 仍 1310/303/114 全同，
+identical 基本持平（Logic C# 64→66）、diffLines 略降（DnSpy C# 8954→8953、
+VB 11093→11089、Logic C# 6217→6216、VB 6276→6275、Debugger 全同）；
+`source-check` 112/0；C# 语义编译报告与改前**逐项相同**（190 文件、172 real errors，
+各诊断计数一致）。
 
 ### 8.45 局部声明的 `= default(...)`：已修（2026-11-18）
 

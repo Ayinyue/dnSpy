@@ -320,7 +320,7 @@ C#/VB 残余差异中最大一类是局部名（2.3 有 PDB 名 `sharedPaths/inf
 | 类别 | 实例 | 状态 |
 |---|---|---|
 | **控制流塑形** | 2.3 `bool flag; try { flag = X; } catch { flag = false; } return flag;` vs 3.2 直接 `return`；`A \|\| !B` vs 提前返回 | 引擎 transform 层，**未修** |
-| **可空枚举比较** | 2.3 `e.ChangedButton == null` vs 3.2 `e.ChangedButton != 0` | 2.3 的 `MakeDefaultValue` 对 `Nullable<T>` 返回 `null`；比较路径未对齐，**未修** |
+| **可空枚举比较** | 2.3 `e.ChangedButton == null` vs 3.2 `e.ChangedButton == 0` | **2.3 更差**：`ChangedButton` 是非空 `MouseButton`，IL 是 `callvirt get_ChangedButton(); brfalse.s`（零值判断）；2.3 把它读成 null 判断，输出的 `== null` **无法编译**（CS0037）。3.2 的 `== 0` 正确。见 §8.94 |
 | **方法体内枚举命名** | 2.3 `TokenKind.Text` vs 3.2 `0` | 未解释（§8.25 的规则应当命名模块内枚举），**未修** |
 | **索引器语法** | 2.3 `word.get_Chars(0)` vs 3.2 `word[0]` | 语料约 27 处，**未修** |
 | **委托构造显式类型** | 2.3 `new Thread(new ThreadStart(this.M))` vs 3.2 省略 | 仅 `--all` 口径可见（325 处），需逐类型复核，**未修** |
@@ -2705,3 +2705,34 @@ C# 项从 63 降到 41 但仍非 0，所以门仍是 soft fail —— 这一项�
 C#/VB 结果与「只打 §8.68」时基本相同（如 DnSpy C# 976 vs 977，Logic VB 的 `Extensions`
 218 vs 220），`source-check`（`baseline dump --impl ilspy32 --lang cs --all` 后对
 `dnSpy.Contracts.Logic` 源码）`checked=112 flagged=0`。
+
+### 8.94 否定比较不化简：`!(a != b)` 未翻成 `a == b`（2026-11-20 发现并修复）
+
+`DotNetHeap.IsValidOffset` 源码是 `offset == 0 || offset < Span.Length`；2.3 印
+`return offset == 0U || offset < this.Span.Length;`，3.2 改前印
+`return !(offset != 0U) || (HexPosition)offset < this.Span.Length;`。
+同类还有 `GUIDHeap.IsValidTable`（`index == 0U`）、`MDTable.IsValidRow`、
+`UIUtilities.IsLeftDoubleClick`（`e.ChangedButton == 0`）。
+
+**根因**：`CSharp/ExpressionBuilder.cs` 的 `LogicNot` 只在比较右操作数是 `null` 字面量时翻转
+`==`/`!=`（那是为 `Nullable<T>.HasValue` 的否定加的）。2.3 的 ILAst
+`PeepholeTransform.SimplifyLogicNotArgument` 则会把 `logicnot` 下推
+`Ceq↔Cne`、`Cgt↔Cle`、`Cge↔Clt`（含 `_Un` 变体）——不过 2.3 自身也没做干净，
+语料里仍留有 18 处 `!(a ==/!= b)`（3.2 改前 19 处）。
+
+**修法**：`LogicNot` 对六种比较运算符都翻转（新增 `GetNegatedComparison`），并加两道护栏：
+
+- **lift 比较不翻**（`OperatorResolveResult.IsLiftedOperator`）——三值逻辑下
+  `!(a == b)` ≠ `a != b`（任一操作数为 null 时前者为真、后者为假）。
+- **浮点关系比较不翻**（`Single`/`Double`）——NaN 下 `!(a > b)` ≠ `a <= b`。
+  等值比较对浮点是安全的（C# 把 `!=` 定义为 `==` 的否定）。
+
+**验证**：语料 identical 不变、diffLines 略降（DnSpy C# 8953→8952、VB 11089→11088、
+Debugger C# 1200→1199、VB 1523→1522；Logic 与 IL 全同）；`verify-all`
+`hardFail=0 softFail=1`（剩余 soft 仍是 §8.68 之前就存在的 lang-diff
+`MethodDebugInfoBuilder`，四项数字逐字节相同）；C# 语义编译报告与改前逐项相同
+（190 文件 / 172 real errors）。
+
+**顺带**：§8.13 的「可空枚举比较」一行据此改判为「2.3 更差」——`ChangedButton` 是非空
+`MouseButton`，IL 是 `brfalse`（零值判断），2.3 输出的 `e.ChangedButton == null` 根本
+无法编译（CS0037）。

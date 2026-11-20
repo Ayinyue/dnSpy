@@ -2778,3 +2778,35 @@ Debugger C# 1200→1199、VB 1523→1522；Logic 与 IL 全同）；`verify-all`
 （`Cannot implicitly convert type 'int' to 'LayoutKind'`，十来处，随 `--refs` 参考集浮动）
 ——**2.3 的输出同样编译不过**，不是 3.2 独有的问题。真要修就是让 3.2 给外部枚举也命名
 （更贴源码、可编译），但会大幅偏离 2.3 基线，需单独评估。
+
+### 8.96 `ldc.i4`/`ldc.i8` 绕过整型极值命名（2026-11-20 发现并修复）
+
+2.3 的 `ILAstOptimizer`（`:500-593`）把 `ldc.i4`/`ldc.i8` 里等于
+`int.MinValue`/`int.MaxValue`/`long.MinValue`/`long.MaxValue` 的常量改写成对应
+`ldsfld`，输出 `int.MaxValue` 之类；3.2 只印数字字面量
+（`return SimpleTypeConverter.ToString(value, -9223372036854775808L, 9223372036854775807L, …)`）。
+
+**根因**：3.2 的 `TypeSystemAstBuilder` 本来就有同一张 `specialConstants` 表
+（`:769-807`，含 `int.MinValue/MaxValue`、`long.MinValue/MaxValue`、`byte.MaxValue`、
+`ulong.MaxValue` 等），但 `ExpressionBuilder.VisitLdcI4`/`VisitLdcI8` 直接
+`new PrimitiveExpression(inst.Value, ...)`，**没有查这张表**——只有字段初始化器、
+特性参数、case label 等走 `ConvertConstantValue` 的路径才生效，方法体内的
+`ldc.i4/i8` 全部漏掉。插桩确认过：`SimpleTypeConverter` 那次调用
+147 次进 `ConvertConstantValue`，里面根本没有那两个值。
+
+**修法**：`VisitLdcI4`/`VisitLdcI8` 在**非 hex 上下文**下先查 `IsSpecialConstant`
+（该方法相应改为 `internal`），命中则改走 `ConvertConstantValue`。
+
+**只取非负值**：`int.MinValue`/`long.MinValue` 这类负极值**暂时不能**改——
+`(ulong)long.MinValue` 属于常量表达式转换，C# 要求值落在目标类型内，会报
+`CS0221`（实测放宽后编译报告确实多出一条 `Constant value
+'-9223372036854775808' cannot be converted to a 'ulong'`）。2.3 能改是因为它的
+`ElementType.I8/U8` 推断知道该按哪种类型解释；3.2 没有等价上下文。
+`ulong.MaxValue`（IL 上是 `-1L`）同样有歧义，也不处理。
+所以现状是「安全的一半」：`long.MaxValue` 已修好，`long.MinValue` 仍是字面量。
+
+**验证**：语料 diffLines 下降（DnSpy C# 8952→8950、VB 11088→11085、
+Logic C# 6216→6214、VB 6275→6271；Debugger 与三套 IL 全同），identical 不变；
+C# 语义编译报告与改前**逐字节相同**（190 文件 / 172 real errors，除 `dir:` 行）；
+`verify-all` `hardFail=0 softFail=1`（剩余 soft 仍是 §8.68 之前就存在的 lang-diff
+`MethodDebugInfoBuilder`，数字逐字节相同）；`source-check` 112/0。

@@ -2797,16 +2797,20 @@ Debugger C# 1200→1199、VB 1523→1522；Logic 与 IL 全同）；`verify-all`
 **修法**：`VisitLdcI4`/`VisitLdcI8` 在**非 hex 上下文**下先查 `IsSpecialConstant`
 （该方法相应改为 `internal`），命中则改走 `ConvertConstantValue`。
 
-**只取非负值**：`int.MinValue`/`long.MinValue` 这类负极值**暂时不能**改——
-`(ulong)long.MinValue` 属于常量表达式转换，C# 要求值落在目标类型内，会报
-`CS0221`（实测放宽后编译报告确实多出一条 `Constant value
-'-9223372036854775808' cannot be converted to a 'ulong'`）。2.3 能改是因为它的
-`ElementType.I8/U8` 推断知道该按哪种类型解释；3.2 没有等价上下文。
-`ulong.MaxValue`（IL 上是 `-1L`）同样有歧义，也不处理。
-所以现状是「安全的一半」：`long.MaxValue` 已修好，`long.MinValue` 仍是字面量。
+**负极值用 `TypeHint` 守卫**：`int.MinValue`/`long.MinValue` 也能改，但只在
+`TranslationContext.TypeHint` 已知是**有符号**类型（Int64/Int32/Int16/SByte）时——
+`(uint)int.MinValue` / `(ulong)long.MinValue` 属于常量表达式转换，C# 要求值落在目标
+类型内，否则报 `CS0221`（实测放宽后编译报告确实多出一条
+`Constant value '-9223372036854775808' cannot be converted to a 'ulong'`）。
+插桩发现 `TypeHint` 只在**常量作为方法实参**（`parent=Call`）时才有值——
+`ToString(value, long.MinValue, long.MaxValue, …)` 拿到的就是 `System.Int64`；
+而在比较里它是 `UnknownType`（那里正是 `(ulong)long.MaxValue + 1` 被折叠成
+`0x8000000000000000` 的地方，改了就会报错）。`IsSafeExtreme` 因此只在有符号
+TypeHint 下放行负极值。`ulong.MaxValue`（IL 上是 `-1L`）有歧义，仍不处理。
 
-**验证**：语料 diffLines 下降（DnSpy C# 8952→8950、VB 11088→11085、
-Logic C# 6216→6214、VB 6275→6271；Debugger 与三套 IL 全同），identical 不变；
-C# 语义编译报告与改前**逐字节相同**（190 文件 / 172 real errors，除 `dir:` 行）；
+**验证**：语料 diffLines 下降（DnSpy C# 8952→8943、VB 11088→11082、
+Logic C# 6216→6212、VB 6275→6270；Debugger 与三套 IL 全同），identical 不变；
+C# 语义编译报告没有新增诊断（`CS0221` 已消除；`CS0266`/`CS0121` 的计数随
+`--refs` 参考集在 317/318 之间浮动，属环境噪声，见 §8.95）；
 `verify-all` `hardFail=0 softFail=1`（剩余 soft 仍是 §8.68 之前就存在的 lang-diff
-`MethodDebugInfoBuilder`，数字逐字节相同）；`source-check` 112/0。
+`MethodDebugInfoBuilder`，四项数字逐字节相同）；`source-check` 112/0。

@@ -321,7 +321,7 @@ C#/VB 残余差异中最大一类是局部名（2.3 有 PDB 名 `sharedPaths/inf
 |---|---|---|
 | **控制流塑形** | 2.3 `bool flag; try { flag = X; } catch { flag = false; } return flag;` vs 3.2 直接 `return`；`A \|\| !B` vs 提前返回 | 引擎 transform 层，**未修** |
 | **可空枚举比较** | 2.3 `e.ChangedButton == null` vs 3.2 `e.ChangedButton == 0` | **2.3 更差**：`ChangedButton` 是非空 `MouseButton`，IL 是 `callvirt get_ChangedButton(); brfalse.s`（零值判断）；2.3 把它读成 null 判断，输出的 `== null` **无法编译**（CS0037）。3.2 的 `== 0` 正确。见 §8.94 |
-| **方法体内枚举命名** | 2.3 `TokenKind.Text` vs 3.2 `0` | 未解释（§8.25 的规则应当命名模块内枚举），**未修** |
+| **方法体内枚举命名** | 2.3 `LayoutKind.Auto` vs 3.2 `3`？ | **两引擎一致，非 3.2 缺陷**：实测 2.3 与 3.2 都印 `layoutKind = 3;` / `charSet = 1;`（外部枚举），模块内枚举两边都命名（`SearchColumnCommandParser.TokenKind.Text`）。端口是刻意照 2.3 的规则实现的（`TypeSystemAstBuilder.cs:669`）。见 §8.95 |
 | **索引器语法** | 2.3 `word.get_Chars(0)` vs 3.2 `word[0]` | 语料约 27 处，**未修** |
 | **委托构造显式类型** | 2.3 `new Thread(new ThreadStart(this.M))` vs 3.2 省略 | 仅 `--all` 口径可见（325 处），需逐类型复核，**未修** |
 | **数组初始化器** | 2.3 `[Nullable(new byte[] { 2, 1 })]` 内联 | 见 §8.31，渲染路径未定位 |
@@ -1262,6 +1262,27 @@ identical 基本持平（Logic C# 64→66）、diffLines 略降（DnSpy C# 8954�
 VB 11093→11089、Logic C# 6217→6216、VB 6276→6275、Debugger 全同）；
 `source-check` 112/0；C# 语义编译报告与改前**逐项相同**（190 文件、172 real errors，
 各诊断计数一致）。
+
+**2026-11-20 三续：`(uint)` 挂错层与 `|=` 未重建（已定位，窄化修法尝试失败，未修）**。
+`Utils.Read7BitEncodedInt32` 源码是 `val |= (uint)(b & 0x7F) << bits;`，3.2 印
+`val = (uint)((int)val | ((b & 127) << bits));`。链条是：C# 里 `uint | int` 的运算符结果
+是 `long`，与 IL 栈类型 I4 不匹配 → `HandleBinaryNumeric` 走「转公共类型」分支 →
+`inst.Sign == Sign.None` 时它默认取 **signed** → `val` 被强转成 `(int)`，再在外层补
+`(uint)`。cast 因此挂在整条 `|` 外面，`HandleCompoundAssign` 也就认不出 `val = val | X`。
+
+**根因**：2.3 能把 `(uint)` 挂在 `(b & 127)` 上，靠的是 ILAst `TypeAnalysis`（`:620` 的
+`case ILCode.Shl`）把 `stloc val`（uint）的**期望类型回溯下推**给 `shl` 的左操作数；
+3.2 没有等价的回溯定型。
+
+**尝试过的窄化修法（未采用）**：在 `HandleBinaryNumeric` 的公共类型分支里，当
+`inst.Sign == Sign.None` 时改用操作数自身的符号（任一操作数为无符号则取无符号）。
+它确实把上面那行变成 `val |= (uint)((b & 127) << bits);`（`(int)val` 消失、`|=` 重建，
+比 2.3 的 `val |= (uint)((uint)(b & 127) << bits);` 还少一层冗余 cast），但**在别处
+偏离源码**：`Extensions.cs:166` 源码是 `return (int)instr.Offset + instr.GetSize();`，
+改后变成 `(int)(instr.Offset + (uint)instr.GetSize())`；`TokenReference.cs:74` 源码是
+`... ^ (int)Token;`，改后把 `(int)` 挪到外层。语料也变差（Logic C# identical 66→64、
+diffLines 6216→6218；Debugger C# 1199→1200）。**结论：不采用**，除非先补上 2.3 那样的
+期望类型回溯。
 
 ### 8.45 局部声明的 `= default(...)`：已修（2026-11-18）
 
@@ -2736,3 +2757,24 @@ Debugger C# 1200→1199、VB 1523→1522；Logic 与 IL 全同）；`verify-all`
 **顺带**：§8.13 的「可空枚举比较」一行据此改判为「2.3 更差」——`ChangedButton` 是非空
 `MouseButton`，IL 是 `brfalse`（零值判断），2.3 输出的 `e.ChangedButton == null` 根本
 无法编译（CS0037）。
+
+### 8.95 「方法体内枚举命名」改判：两引擎一致（2026-11-20）
+
+§8.13 曾记「2.3 `TokenKind.Text` vs 3.2 `0`，未解释」。2026-11-20 用双转储
+（`baseline dump --impl core|ilspy32 --lang cs --all`）逐类型核对，结论是**两引擎一致**：
+
+| 枚举 | 2.3 | 3.2 | 源码 |
+|---|---|---|---|
+| `LayoutKind`（`System.Runtime.InteropServices`，外部） | `layoutKind = 3;` | `layoutKind = 3;` | `layoutKind = LayoutKind.Explicit;` |
+| `CharSet`（同上，外部） | `charSet = 1;` | `charSet = 1;` | `charSet = CharSet.Ansi;` |
+| `SearchColumnCommandParser.TokenKind`（模块内） | `TokenKind.Text` | `TokenKind.Text` | 同 |
+
+即：**模块内枚举两边都命名，外部枚举两边都印底层数字**。3.2 的
+`TypeSystemAstBuilder.ConvertConstantValue`（`:669` 起）是**刻意**照 2.3 的规则实现的，
+注释写明「2.3 只解析被反编译模块内定义的枚举」。
+
+所以 §8.13 那一行判断方向错了，已改判为「两引擎共同缺陷，非 3.2 改进项」。
+副作用：`out/v32-cs-logic.compile.md` 里那批 `CS0266`
+（`Cannot implicitly convert type 'int' to 'LayoutKind'`，十来处，随 `--refs` 参考集浮动）
+——**2.3 的输出同样编译不过**，不是 3.2 独有的问题。真要修就是让 3.2 给外部枚举也命名
+（更贴源码、可编译），但会大幅偏离 2.3 基线，需单独评估。

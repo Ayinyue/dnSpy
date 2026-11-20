@@ -1,4 +1,4 @@
-# 2.3 → 3.2 引擎功能覆盖审计（逐模块接线差异清单）
+﻿# 2.3 → 3.2 引擎功能覆盖审计（逐模块接线差异清单）
 
 审计方法：全仓 grep 2.3 引擎符号（`LANGUAGE_CSHARP_ILSPY`/`LANGUAGE_VISUALBASIC_ILSPY`、
 `DecompilerConstants.*`、`IDecompiler`/`IMethodDebugService` 消费者、`UniqueGuid` 判断），
@@ -1971,9 +1971,9 @@ C# 的枚举加法只定义了 `E operator +(E x, U y)` / `E operator +(U x, E y
 `ColorType +(uint,ColorType)` 之间选后者 —— 这是**期望类型传播**，不是局部改动；
 在缺少「与源码对拍」的门禁之前不做。
 
-### 8.68 最大残留模式：ILAst 临时局部变量不内联（2026-11-18，**未修**）
+### 8.68 值类型溢出临时局部变量不内联（2026-11-18 发现；2026-11-20 已修，残余见末尾）
 
-**这是剩余 diffLines 里最大的一类**，样例（`MethodDebugInfoBuilder`，C# 63 行差）：
+**修复前，这是剩余 diffLines 里最大的一类**，样例（`MethodDebugInfoBuilder`，C# 63 行差）：
 ```csharp
 // 2.3（内联）                                // 3.2（保留临时变量）
 if (cur.ILSpan.End < next.ILSpan.Start)       iLSpan = cur.ILSpan;
@@ -1988,20 +1988,44 @@ if (cur.ILSpan.End < next.ILSpan.Start)       iLSpan = cur.ILSpan;
 同类还出现在 `SpanDataCollection`（163 行，`Span span = spanData.Span;`）、
 `CachedTextColorsCollection`（62 行）、`UIUtilities`（152 行的一部分）。
 
-**疑似根因（已被实验否证，待重查）**：原以为在 `IL/Transforms/CopyPropagation.cs` 的
-`CanPerformCopyPropagation` —— `StLoc` 的源是 `callvirt get_ILSpan` 这类纯属性 getter，
-落进 `default:` 分支后被 `value.Children.Count == 0` 否掉（`CallVirt` 有子节点）。
-**实测把判据放宽成「无子节点 或 `SemanticHelper.IsPure`」后语料几乎零变化**
-（`DnSpy` 11937 → **11941**，反而 +4）。所以内联**不是** `CopyPropagation` 干的，
-2.3 的差异来自别处（候选：`DeclareVariables` 的插入点选择、`SplitVariables`、
-或 2.3 的 ILAst 优化管线本身）。**根因未定位**，不要按上面的猜测改代码。
+**根因（2026-11-20 定位）**：不是 `CopyPropagation`。`X.Prop.M()`（`Prop` 是结构体属性、
+`M` 是实例方法）在 IL 里是 `stloc V(X.Prop); ldloca V; call get_M()`；2.3 的
+`ILAstBuilder.ConvertLocalVariables` 把「每个 `ldloca` 都被单个实例调用消费」的局部变量
+按定义拆开（`IsDeterministicLdloca`），拆完 `ILInlining` 才能用
+`IsGeneratedValueTypeTemporary` 把它内联回 `X.Prop.M()`。3.2 的
+`SplitVariables.AddressUsedOnlyForReading` 只允许读取型用途，`ldloca` 作为实例调用的
+`this` 指针不算读取 → **不拆分** → `CopyPropagation`/`ILInlining` 的
+`IsSingleDefinition` / `StoreCount == 1` 闸门永不打开，临时量就以命名局部变量
+（`iLSpan`、`span`）残留。
 
-**未修**：量级最大（影响所有结构体属性访问），且根因未明；现有门禁只有
-「与 2.3 的 diff」，没有「与源码的 diff」，即使找到改动点也无法证明改对 ——
-再次指向 §8.67 的建议。
+（旧的 `CopyPropagation` 猜测已被实验否证，保留记录：把 `CanPerformCopyPropagation` 的
+`default:` 判据放宽成「无子节点 或 `SemanticHelper.IsPure`」后语料几乎零变化，
+`DnSpy` 11937 → 11941，反而 +4。）
 
-**顺带**：`DeclareVariables` 只负责「声明」这些变量，不负责内联；
-`SplitVariables`/`RemoveDeadVariableInit` 也不是干这个的。
+**修法**：`SplitVariables.AddressUsedOnlyForReading` 的 `Call` / `CallVirt` 分支改用引擎
+已有的 `ILInlining.IsUsedAsThisPointerInCall(ldloca)`（要求 `ChildIndex == 0`、目标方法
+非 static、变量类型非引用类型），与 2.3 的判定一致。
+
+**验证**：`MethodDebugInfoBuilder` 里的 `iLSpan` 临时量消失，关键行与 2.3 逐字一致
+（`if (cur.ILSpan.End < next.ILSpan.Start)`）；该类型 C# diffLines **63 → 41**，残余只是
+`GetMethodDebugInfo` 里的守卫形状（`Count != 0` vs `Count == 0` + 提前返回、
+`Start != 0U` vs `Start > 0U`）与 `methodSpan` 的「三元 vs if/else」，属另一类。
+语料（`lang-diff-all`，identical / diffLines；改前为 2026-11-20 早间同一度量）：
+
+| 组件 | 语言 | 改前 | 改后 |
+|---|---|---|---|
+| DnSpy | IL | 1310 / 0 | 1310 / 0 |
+| DnSpy | C# | 556 / 32248 | 976 / 8954 |
+| DnSpy | VB | 607 / 25582 | 730 / 11093 |
+| Debugger | IL | 303 / 0 | 303 / 0 |
+| Debugger | C# | 108 / 5735 | 238 / 1200 |
+| Debugger | VB | 157 / 3240 | 203 / 1523 |
+| Logic | IL | 114 / 0 | 114 / 0 |
+| Logic | C# | 29 / 10021 | 64 / 6217 |
+| Logic | VB | 41 / 8508 | 54 / 6276 |
+
+`DeclareVariables` 只负责声明、`SplitVariables`/`RemoveDeadVariableInit` 也不负责内联，
+这一点仍然成立。
 
 ### 8.69 残留中「2.3 更差、不该对齐」的清单（2026-11-18）
 
@@ -2020,9 +2044,9 @@ if (cur.ILSpan.End < next.ILSpan.Start)       iLSpan = cur.ILSpan;
 | 枚举常量的算术语境（`ToColorType`） | `self + ColorType.Text`（**CS0019，根本编译不过**） | `(ColorType)((int)self + 16384)`（能编译，但丢了成员名与 `(uint)` 符号，详 §8.67） |
 
 **判据**：一律以**源码**为准（仓库里有 `dnSpy/*.cs`），不是以 2.3 为准。
-凡是 3.2 更贴源码的，就从「兼容残留」里剔除。§8.68 剩下那些
-（临时变量内联、循环塑形）才是**两个引擎都错或 3.2 确实更差**的真残留
-（lambda `this` sequence point 已修，见 §8.63 末）。
+凡是 3.2 更贴源码的，就从「兼容残留」里剔除。§8.68 的「临时变量内联」一类
+2026-11-20 已修（见 §8.68），剩下的是**两个引擎都错或 3.2 确实更差**的真残留
+（循环塑形，见 §8.92；lambda `this` sequence point 已修，见 §8.63 末）。
 「显式接口 token/顺序」原列在此，2026-11-20 复验已消失，见 §8.73/§8.74。
 （`(uint)` cast 一项经查源码 `SpanDataCollection.cs:89` 就是 `(uint)hi < (uint)array.Length`，
 属 2.3 丢转换，已移到上表。）
@@ -2044,8 +2068,8 @@ public MethodDebugInfoBuilder(int decompilerSettingsVersion, StateMachineKind st
   不要对齐。**
 - **`For` vs `While`**：2.3 印 `For i As Integer = 0 To Me.statements.Count - 1 - 1`，
   3.2 印 `Dim i As Integer = 0` + `While i < Me.statements.Count - 1`。
-  3.2 更干净但不同 —— 属循环塑形（C# 侧同理，见 §8.68 提到的那类）。
-- 临时变量内联（同 §8.68）在 VB 侧同样存在。
+  3.2 更干净但不同 —— 属循环塑形（§8.92）。
+- 临时变量内联（§8.68）在 VB 侧同样存在，已随 §8.68 一并修复。
 - VB 只有 `lang-diff` 一个抽样门（`-Soft`），**建议给 VB 也加整程序集语料门**，
   否则这类差异只能靠抽样发现。
 
@@ -2219,24 +2243,27 @@ Block IL_0000 (incoming: 1) {
 `Logic` 6774 → **6772**、`Debugger` 1338 → **1338**。`degraded=0`；
 `verify-all` `hardFail=0`。
 
-### 8.76 临时变量内联：又排除两条路径（2026-11-18）
+### 8.76 临时变量内联：排除记录（2026-11-18；结论已于 2026-11-20 推翻）
 
-在 §8.68 的基础上把能查的都查完，记录排除过程，避免重复劳动：
+以下排除过程仍然有效，但**结论已被 §8.68 推翻**：真因是 `SplitVariables` 不拆分值类型
+溢出临时量，不是「缺 per-use copy propagation」。
 
 1. **`DeclareVariables` 没有「不声明/内联」分支**：`Analyze`（`:120` 起）无条件为每个
    `ILVariable` 调 `DeclareVariable`；`FindInsertionPoints` 只负责选插入点。
-   所以「3.2 保留了临时变量」不是它主动的选择，而是**根本没走到内联**。
+   所以「3.2 保留了临时变量」不是它主动的选择，而是**根本没走到内联**。（仍成立）
 2. **`CopyPropagation` 的 `LdLoc` 分支要求 `IsSingleDefinition`**
-   （`IL/Transforms/CopyPropagation.cs:92`）。`SpanDataCollection<TData>.Find` 里的
+   （`IL/Transforms/CopyPropagation.cs:92`）。`SpanDataCollection<TData>` 里的
    `Span span` 在两个分支各赋值一次 → 不是单定义 → 不传播。
    （放松 `default:` 分支的实验已做，见 §8.67 负结果：语料零变化。）
-3. 实测对照：2.3 在**同一个类型**里既声明 `spanData`（`GetStartIndex`）又内联
-   `span`（`Find`）—— 说明 2.3 的判据是「按支配关系逐使用点传播」，而 3.2 的
-   `CopyPropagation` 只做全变量单定义传播。
+3. 实测对照：2.3 在**同一个类型**里既声明 `spanData`（`GetStartIndex`）又内联 `span`。
+   当时据此推断 2.3 是「按支配关系逐使用点传播」——**这个推断是错的**：2.3 先在 ILAst 层
+   用 `ConvertLocalVariables` 按定义拆分，再由 `ILInlining` 消费单定义临时量（§8.68）。
+   3.2 缺的是同一条拆分路径。
 
-**结论**：要修就得实现**按支配关系的逐使用点复制传播**（per-use copy propagation），
-这是 ILAst 层的实质改动，会影响所有多定义临时变量。**未修**，需要单独的回归方案
-（现有门禁无法证明语义等价，尤其异常位置）。
+**结论（已更新）**：不需要实现 per-use copy propagation。补上 §8.68 的 `SplitVariables`
+拆分后，`SpanDataCollection<TData>.FindFrom` 的语句数与 locals 数已与 2.3 一致
+（9 statements / locals=2）；`GetStartIndex` 的 `spanData` 在两个引擎里都声明，
+那本来就不是差异点。
 
 ### 8.77 循环塑形：`leave` 的 TargetContainer 既不是循环也不是它的父容器（2026-11-18）
 
@@ -2605,3 +2632,35 @@ continuation 块强制为循环出口（这样 `break` 的目标 `Append` 会被
 **结论**：这是一个**循环感知**的重构（要么让 `SimplifyBranchChains` 拿到 CFG 并识别循环头，
 要么把出口点选择修得更鲁棒），不是判据放宽。已确认「放宽 `MatchLeave`」会得到语义错误的循环
 （`Append` 会在条件失败路径上执行），§8.77 的判断成立。**未修**，需要单独的回归方案。
+
+### 8.93 拆分变量的命名被 `ILVariableEqualityComparer` 合并（2026-11-20 发现并修复）
+
+`verify-all` 的 `engine-tests` 3a 项（`SimpleStatements` 的局部名必须是 `num` / `sum`）
+在 2026-11-20 之前一直是红的，实际输出 `sum2,sum2`。
+
+**根因**：`SplitVariables.GetNewVariable` 复用原局部变量的槽位号
+（`new ILVariable(kind, type, stackType, inst.Variable.Index)`），拆出的两个活范围因此带
+同一个 `Index`。`AssignVariableNames.PerformAssignment` 第二遍「Now generate names」用
+`Dictionary<ILVariable, string>(ILVariableEqualityComparer.Instance)`，而该比较器只比
+`Function + Kind + Index`（`GetHashCode = Function ^ Kind ^ (Index << 8)`）—— 两个拆分变量
+被判为同一个，后走到的那个把名字覆盖成先走到的那个。第一遍给出 `sum` / `sum2`，
+第二遍统一成 `sum2`。
+
+**证据**：`DNSPY_ILSPY32_DIAG=1` 下
+`DBGLOCALS SimpleStatements vars=[…,Local#0:sum2,Local#0:sum2]`
+（`LambdaThis` 同样 `Local#0:x2,Local#1:r,Local#0:x2`）。对照 2.3 的 `spdump`：
+`locals=1`、名字 `sum`；3.2 是 `locals=2`、`sum2`（文本仍合法：`int sum2 = a + b; sum2 *= 2;`，
+但调试信息作用域里是两个同名局部）。换用不同哈希的引擎 dll（未打 §8.68 补丁 / 打了补丁）
+都复现 `sum2,sum2`，即与 §8.68 无关，属预存在缺陷。
+
+**修法**：该 `Dictionary` 改用引用相等（新增 `VariableReferenceEqualityComparer`），
+第一遍产生的 `sum` / `sum2` 不再互相覆盖。
+
+**验证**：`engine-tests` 全绿（`PASS 3a … (sum,sum2)`）；`verify-all` 由
+`hardFail=1 softFail=1` 变为 `hardFail=0 softFail=1`。剩下那个 softFail 是 `lang-diff` 的
+`MethodDebugInfoBuilder`：其中 VB 37 / IL 0 / IL-with-C# 879 三项**改前改后完全相同**，
+C# 项从 63 降到 41 但仍非 0，所以门仍是 soft fail —— 这一项在 §8.68 之前就存在，
+与本次两个改动都无关，不要再追。语料与 `source-check` 无回退：`lang-diff-all` 的
+C#/VB 结果与「只打 §8.68」时基本相同（如 DnSpy C# 976 vs 977，Logic VB 的 `Extensions`
+218 vs 220），`source-check`（`baseline dump --impl ilspy32 --lang cs --all` 后对
+`dnSpy.Contracts.Logic` 源码）`checked=112 flagged=0`。

@@ -1052,6 +1052,8 @@ corlib 未解析时落回 `get_Chars(...)`。改法：在 `HandleAccessorCall:78
 即 3.2 把 2.3 保留的显式转换/`checked` 省略了。**未修**，是 H 类里最大的一块。
 （复核说明：普查引用的 `checked((IntPtr)pos)` 例子在当前构建里两边都已消失，属旧转储；
 真正的 cast 类差异主要是下面的可空构造。）
+**2026-11-20 改判**：cast 轴经源码仲裁是**双向噪声**（2.3 既滥插也漏插，3.2 同理），
+不是「3.2 缺 cast」，详见 §8.44。
 
 ### 8.41 显式可空构造 `new T?(x)`：已修（2026-11-17）
 
@@ -1196,32 +1198,49 @@ C# 视图对 `HexBytes` 看到 **170** 个 `CheckedUncheckedAnnotation`（VB 视
 **另两类已计数但未修**：`.Invoke()`（2.3 印 `handler.Invoke(...)`，3.2 省略，2.3 有 21 处/3.2 3 处）；
 `= default(...)` 局部初始化器（3.2 比 2.3 多 31 处，责任点 `DeclareVariables.cs:449`）。
 
-### 8.44 显式转换插入：2.3 明显更多（2026-11-18，未修）
+### 8.44 显式转换插入：2.3 明显更多（2026-11-18；2026-11-20 用源码仲裁，方向被推翻）
 
-`--all` 全量计数（`dnSpy.Contracts.DnSpy.dll`，1414 类型）：
+`--all` 全量计数（`dnSpy.Contracts.DnSpy.dll`，1414 类型；2026-11-20 重测）：
 
 | 字面量 | 2.3 | 3.2 |
 |---|---|---|
-| `(int)` | **167** | 66 |
-| `(long)` | **104** | 22 |
-| `(byte)` | 24 | 51 |
+| `(int)` | **167** | 155 |
+| `(long)` | **104** | 30 |
+| `(byte)` | 24 | **51** |
+| `(uint)` | 56 | **92** |
+| `(ulong)` | 94 | 77 |
 
-即 **2.3 系统性保留更多显式转换**。实例：
-`SerializedImageUtilities` 里 2.3 印
-`if ((short)((int)rawData[0] | ((int)rawData[1] << 8)) != 7189)`，
-3.2 印 `if ((short)(rawData[0] | (rawData[1] << 8)) != 7189)` —— 每个 `byte` 元素都被 2.3 显式转 `(int)`。
+（旧记录的 3.2 `(int)=66 / (long)=22` 被本次重测取代；2.3 一列两次完全一致，说明度量方法没变。）
 
-**已排查**：2.3 的 `AstMethodBodyBuilder.cs:631` 对 `ldelem.*` 也只是 `arg1.Indexer(arg2)`（无转换）；
-`Indexer(...)` 是 NRefactory `Expression` 上的构造器，本身不加转换。
-所以 `(int)` 来自**别处**（很可能是 2.3 的 `TypeAnalysis`/`CastInsertion`：当 IL 栈类型（I4）与 C# 元素类型
-（`byte`）不一致时插入显式转换）。**未修**，这是「cast」类差异的主体，值得下一轮从
-「2.3 在何处插入 IL 栈类型→C# 类型的显式转换」入手。
+**2026-11-20 用源码仲裁**：对 |Δ| 最大的类型，把「源码文件的 cast 总数 / 2.3 / 3.2」并排
+（源码按类型短名在 `dnSpy/` 里索引；对部分类/嵌套类型这是近似值），多数贡献者是
+**3.2 贴源码、2.3 滥插**：
 
-**补充定位**：`(int)` 是**元素级**的 —— 2.3 有 `return (int)this.bytes[...]`（2 处），3.2 **0 处**；
-即 `ldelem.u1` 的结果被 2.3 显式转成 `int32`（IL 栈类型）。两侧都没有专门的 cast transform
-（`Ast/Transforms`、`CSharp/Transforms` 里都没有 `*Cast*`），2.3 的二元运算符构造
-（`AstMethodBodyBuilder.cs:496-552`）也不加转换。**结论：插入点在 2.3 的 ILAst→AST 阶段
-（`ldelem` 结果的类型提升），需要在 2.3 的 `ILAstOptimizer` 里找 `Ldelem` 相关的类型改写。**
+| 类型 | 源码 | 2.3 | 3.2 |
+|---|---|---|---|
+| `SerializationUtilities` | 23 | 0 | **23** |
+| `HexChangeImpl` | 2 | 15 | **2** |
+| MVVM 一族（`UInt32VM`/`NullableUInt32VM`/`UInt16VM`/`NullableUInt16VM`/`ByteVM`/`NullableByteVM`/`SByteVM`/`NullableSByteVM`） | 1 | 6 | **0~1** |
+| `DoubleLiteralSearchComparer` | 27 | 19 | **24** |
+| `CachedTextColorsCollection` | 4 | 0 | **4** |
+| `WpfUnicodeUtils` | 10 | 8 | **4** |
+| `IntegerLiteralSearchComparer` | 27 | **25** | 14 |
+| `ResourceElementNode` | 25 | **20** | 15 |
+| `HexBytes` | 62 | 146 | 135 |
+| `MetroWindow` | 14 | 22 | 26 |
+
+少数相反（`IntegerLiteralSearchComparer`、`ResourceElementNode` 是 2.3 贴源码）；
+`HexBytes`/`MetroWindow` 两边都滥插。
+
+**其中 `SerializationUtilities` 是 2.3 的语义缺陷**：源码 `writer.Write((byte)0x5)`，
+2.3 印 `writer.Write(5)` —— `BinaryWriter.Write` 同时有 `Write(byte)` 与 `Write(int)` 重载，
+`Write(5)` 会绑到 `Write(int)`（写 4 字节而非 1 字节），反编译结果与原程序行为不同。
+3.2 印 `writer.Write((byte)5)`，正确。
+
+**结论（已改判）**：原「3.2 不插入显式转换 → 应给 3.2 加 cast」的方向**不成立**，
+cast 数量不是对齐目标，不要按它改 3.2。真要挑 3.2 的毛病，应查它在 **byte 操作数上滥插
+`(int)`** 的入口（`Hex.Files.DotNet.Utils`：源码 `(b & 0x3F) << 8`，3.2 印
+`((int)b & 63) << 8`；`HexBytes` 的 `(int)d[...]` 源码里也没有）。
 
 ### 8.45 局部声明的 `= default(...)`：已修（2026-11-18）
 
@@ -1726,7 +1745,7 @@ VB 转换当成 discard。`degraded=0`；`verify-all` `hardFail=0`。
 | `goto` | 118 | 71 | −47 | **3.2 更好**，不对齐 |
 | `get_XXX()` | 45 | 0 | −45 | **3.2 更好**（`string.get_Chars(i)` → `s[i]`），不对齐 |
 | `switch` | 38 | 74 | +36 | 3.2 检测更激进；§8.53 已判定不对齐 |
-| `cast (T)x` | 755 | 794 | +39 | 显式转换偏多，未定位 |
+| `cast (T)x` | 755 | 794 | +39 | 2026-11-20 源码仲裁：cast 轴是双向噪声（2.3 也滥插、且会漏插源码里必需的），不是 3.2 单边缺口，见 §8.44 |
 | `??` | 79 | 104 | +25 | 多见于惰性初始化 `x ?? (x = () => new T())`，2.3 结构不同 |
 | `?:` | 405 | 427 | +22 | 未定位 |
 | `&&` / `\|\|` | 356 / 175 | 342 / 155 | −14 / −20 | §8.59 已修，剩余为 `if (c) { …; return B; }` 带额外语句的形态，无法合并 |
@@ -2040,7 +2059,8 @@ if (cur.ILSpan.End < next.ILSpan.Start)       iLSpan = cur.ILSpan;
 | LINQ 扩展方法 | `Enumerable.Select<ITreeNode, TreeNodeData>(…)` 静态形式 | `self.TreeNode.Descendants().Select(…)` |
 | 静态构造器 | 把字段初始化式塞回 `static X() { … }` + `// Note: …beforefieldinit` | `static readonly X Empty = new X(…)`（贴源码） |
 | `if (!x) return false; return y;` 的短路 | —— | 3.2 合并成 `return !x && y`（`return true` 那个朝向除外，见 §8.59 负结果） |
-| `(uint)hi < (uint)array.Length` | `hi < array.Length`（**丢掉源码里的显式转换**，语义都变了） | `(uint)hi < (uint)array.Length`（与 `SpanDataCollection.cs:89` 一致） |
+| 丢掉源码里的显式转换 | ①`(uint)hi < (uint)array.Length` → `hi < array.Length`；②`writer.Write((byte)0x5)` → `writer.Write(5)`（绑到 `Write(int)` 重载，写 4 字节而非 1 字节，见 §8.44） | ①`(uint)hi < (uint)array.Length`（与 `SpanDataCollection.cs:89` 一致）；②`writer.Write((byte)5)`（与 `SerializationUtilities.cs:75` 一致） |
+| 滥插冗余 cast | `(long)((ulong)x)`、`(long)x.LongLength`（源码里都没有，见 §8.44） | `x`、`x.LongLength`（贴源码） |
 | 枚举常量的算术语境（`ToColorType`） | `self + ColorType.Text`（**CS0019，根本编译不过**） | `(ColorType)((int)self + 16384)`（能编译，但丢了成员名与 `(uint)` 符号，详 §8.67） |
 
 **判据**：一律以**源码**为准（仓库里有 `dnSpy/*.cs`），不是以 2.3 为准。

@@ -2851,3 +2851,27 @@ C# 语义编译报告没有新增诊断（`CS0221` 已消除；`CS0266`/`CS0121`
 `--refs` 参考集在 317/318 之间浮动，属环境噪声，见 §8.95）；
 `verify-all` `hardFail=0 softFail=1`（剩余 soft 仍是 §8.68 之前就存在的 lang-diff
 `MethodDebugInfoBuilder`，四项数字逐字节相同）；`source-check` 112/0。
+
+### 8.97 `CastClass`/`IsInst` 缺类型推断（2026-11-20 发现并修复）
+
+`UIUtilities.selector_IsVisibleChanged` 源码是 `var selector = (Selector)sender!;`，
+但 Roslyn 把它优化成栈上的值（`dup`，没有 `stloc`），PDB 里没有局部名。2.3 印
+`Selector selector = (Selector)sender;`，3.2 只能给生成名 `obj`。
+
+**根因**：`ILTypeExtensions.InferType`（`IL/ILTypeExtensions.cs:141`）的 switch 里
+**没有 `CastClass` / `IsInst`**。于是 `AssignVariableNames.GuessType`（`:451`）在栈槽
+声明的类型是 `object` 时拿不到推断，回退成 `object` → `obj`。插桩实测：
+`STACKSLOT type=System.Object stores=StLoc values=CastClass -> System.Object`
+（同一次运行里 `LdObj -> System.Action` 是能推断的，说明推断机制本身没坏）。
+
+**修法**：`InferType` 补两个 case——`CastClass → Type`、`IsInst → Type`
+（`castclass T` 之后栈上就是 `T`；`isinst T` 是 `T` 或 null）。
+
+**验证**：`UIUtilities` 现在印 `Selector selector = (Selector)sender;`，与 2.3 一致。
+语料 C# 改善（DnSpy 8943→8938，identical 976→978；Debugger/Logic 全同）；
+VB 11083→11092（+9），经查全部来自 `XamlGeneratedNamespace.GeneratedInternalTypeHelper`：
+3.2 把参数名 `type`/`propertyInfo`/`eventInfo` 变成 `type2`/`propertyInfo2`/`eventInfo2`
+——**这是改进**（`Type` 是 VB 关键字，2.3 的 `type` 作为参数名编译不过），外加
+`New Object() {…}` → `New Object(1) {…}` 的既有形式差异（语义等价）。
+`verify-all` `hardFail=0 softFail=1`（剩余 soft 数字逐字节相同）；
+C# 语义编译无 `CS0221`（1415 文件 / 1142 real errors）。

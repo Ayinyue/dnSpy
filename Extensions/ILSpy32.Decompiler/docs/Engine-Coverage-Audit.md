@@ -322,12 +322,15 @@ C#/VB 残余差异中最大一类是局部名（2.3 有 PDB 名 `sharedPaths/inf
 | **控制流塑形** | 2.3 `bool flag; try { flag = X; } catch { flag = false; } return flag;` vs 3.2 直接 `return`；`A \|\| !B` vs 提前返回 | 引擎 transform 层，**未修** |
 | **可空枚举比较** | 2.3 `e.ChangedButton == null` vs 3.2 `e.ChangedButton == 0` | **2.3 更差**：`ChangedButton` 是非空 `MouseButton`，IL 是 `callvirt get_ChangedButton(); brfalse.s`（零值判断）；2.3 把它读成 null 判断，输出的 `== null` **无法编译**（CS0037）。3.2 的 `== 0` 正确。见 §8.94 |
 | **方法体内枚举命名** | 2.3 `LayoutKind.Auto` vs 3.2 `3`？ | **两引擎一致，非 3.2 缺陷**：实测 2.3 与 3.2 都印 `layoutKind = 3;` / `charSet = 1;`（外部枚举），模块内枚举两边都命名（`SearchColumnCommandParser.TokenKind.Text`）。端口是刻意照 2.3 的规则实现的（`TypeSystemAstBuilder.cs:669`）。见 §8.95 |
-| **索引器语法** | 2.3 `word.get_Chars(0)` vs 3.2 `word[0]` | 语料约 27 处，**未修** |
-| **委托构造显式类型** | 2.3 `new Thread(new ThreadStart(this.M))` vs 3.2 省略 | 仅 `--all` 口径可见（325 处），需逐类型复核，**未修** |
+| **索引器语法** | 2.3 `word.get_Chars(0)` vs 3.2 `word[0]` | **2.3 更差，不对齐**：`string` 的索引器在元数据里叫 `get_Chars`，但 C# 源码**不可能**写 `word.get_Chars(0)`（`String` 没有这个 public 成员），源码只能是 `word[0]`。2.3 直接印 accessor 名，属反编译器 artifact |
+| **委托构造显式类型** | 2.3 `new Thread(new ThreadStart(this.M))` vs 3.2 省略 | **需逐类型复核，暂不改判**：C# 两种写法都合法，源码可能任一种。抽样（`ProgressVM` / `AsyncNodeProvider`）里 2.3 同时带 `this.`（§8.17 里 3.2 省略 `this.` 更贴源码），因此 2.3 的显式 `new ThreadStart(...)` 不能单独判定为「2.3 更差」 |
 | **数组初始化器** | 2.3 `[Nullable(new byte[] { 2, 1 })]` 内联 | 见 §8.31，渲染路径未定位 |
 
 **结论**：剩余差异不再是「接线/设置缺口」，而是**引擎输出层与 transform 语义**的差异；
-其中控制流塑形是最大类，需逐个对齐 `AstMethodBodyBuilder` 系列 transform，建议单独立项。
+其中控制流塑形是最大类，需逐个对齐 `AstMethodBodyBuilder` 系列 transform，建议单独立项
+（见 §8.92）。2026-11-20 复核：**索引器语法**一项改判为「2.3 更差、不对齐」
+（源码不可能写 `word.get_Chars(0)`），**委托构造显式类型**因 C# 两种写法都合法、
+且 2.3 同时多带 `this.`，暂不改判。
 
 **更正（抽样实测，历史）**：原表「局部常量内联」一桶**不成立** —— 抽样类型中 `const ` 两边各 1 处且内容相同。
 
@@ -993,7 +996,11 @@ obj.IsVisibleChanged -= new DependencyPropertyChangedEventHandler(UIUtilities.se
 **(5) 索引器语法 —— 责任点已定位**
 3.2 在 `CallBuilder.cs:686/780` 无条件生成 `IndexerExpression`；2.3 在
 `AstMethodBodyBuilder.cs:1278-1283` 要求 `prop.GetMethod == methodDef`，
-corlib 未解析时落回 `get_Chars(...)`。改法：在 `HandleAccessorCall:780` 加同一门控。**未实施**（约 27 处）。
+corlib 未解析时落回 `get_Chars(...)`。改法：在 `HandleAccessorCall:780` 加同一门控。
+
+**2026-11-20 改判：不要按上面的改法实施。** 源码不可能写 `word.get_Chars(0)`
+（`String` 没有这个 public 成员），所以 3.2 的 `word[0]` 才贴源码，2.3 的
+`get_Chars(...)` 是 artifact。已记入 §8.13 的「2.3 更差、不对齐」。
 
 ### 8.38 方法体内「值与 0 比较」的枚举命名：已修（2026-11-17）
 
@@ -2832,6 +2839,11 @@ Debugger C# 1200→1199、VB 1523→1522；Logic 与 IL 全同）；`verify-all`
 而在比较里它是 `UnknownType`（那里正是 `(ulong)long.MaxValue + 1` 被折叠成
 `0x8000000000000000` 的地方，改了就会报错）。`IsSafeExtreme` 因此只在有符号
 TypeHint 下放行负极值。`ulong.MaxValue`（IL 上是 `-1L`）有歧义，仍不处理。
+
+**2026-11-20 补记**：§8.44 四续的期望类型下推（`HandleBinaryNumeric` 把 TypeHint
+传给操作数）落地后，`TranslationContext.TypeHint` 在更多位置有值，实测
+`ReferenceInfo` 构造里的 `-2147483648` 已回到 `int.MinValue`（贴源码）。
+只有 TypeHint 为 `UnknownType` 的纯比较上下文仍拿不到类型，那一半仍留字面量。
 
 **验证**：语料 diffLines 下降（DnSpy C# 8952→8943、VB 11088→11082、
 Logic C# 6216→6212、VB 6275→6270；Debugger 与三套 IL 全同），identical 不变；

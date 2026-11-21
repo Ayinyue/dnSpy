@@ -1,4 +1,4 @@
-// Copyright (c) AlphaSierraPapa for the SharpDevelop Team (for details please see \doc\copyright.txt)
+﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team (for details please see \doc\copyright.txt)
 // This code is distributed under MIT X11 license (for details please see \doc\license.txt)
 
 using System;
@@ -447,10 +447,20 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		/// they keep their original name — C# forbids shadowing there, parallel lambdas reuse the
 		/// same name, and the member-level rename map cannot express per-lambda scopes.
 		/// </summary>
-		string RegisterParameterName(string name) {
+		string RegisterParameterName(string name, string parameterTypeName = null) {
 			if (blocks.Count != 0)
 				return name;
-			bool conflicts = memberTypeNames.Contains(name) || methodLocalNames.Contains(name) || variableTypes.ContainsKey(name);
+			// "action As Action" is legal VB: after "As" the identifier is a type context, so a
+			// parameter does not collide with its own type. Only *other* referenced types shadow it
+			// (VB resolves identifiers case-insensitively) - see audit 8.98.
+			string ownTypeIdentifier = null;
+			if (!string.IsNullOrEmpty(parameterTypeName)) {
+				int p = parameterTypeName.LastIndexOfAny(new[] { '.', '+' });
+				ownTypeIdentifier = p >= 0 ? parameterTypeName.Substring(p + 1) : parameterTypeName;
+			}
+			bool conflicts = memberTypeNames.Any(t => !string.Equals(t, ownTypeIdentifier, StringComparison.OrdinalIgnoreCase)
+				&& string.Equals(t, name, StringComparison.OrdinalIgnoreCase))
+				|| methodLocalNames.Contains(name) || variableTypes.ContainsKey(name);
 			if (!conflicts) {
 				methodLocalNames.Add(name);
 				return name;
@@ -4994,7 +5004,7 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				block.Attributes.Add(new VB.Ast.Attribute() { Type = CreateType(attrRef) });
 				param.Attributes.Add(block);
 			}
-			var emittedParamName = RegisterParameterName(parameterDeclaration.Name);
+			var emittedParamName = RegisterParameterName(parameterDeclaration.Name, parameterDeclaration.Type?.ToString());
 			var paramAnnotations = ComposeAnnotations(
 				ResolveParameterAnnotation(parameterDeclaration), parameterDeclaration.NameToken.Annotations);
 			param.Name = Identifier.Create(paramAnnotations, emittedParamName);

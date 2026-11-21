@@ -2895,7 +2895,7 @@ VB 11083→11092（+9），经查全部来自 `XamlGeneratedNamespace.GeneratedI
 `verify-all` `hardFail=0 softFail=1`（剩余 soft 数字逐字节相同）；
 C# 语义编译无 `CS0221`（1415 文件 / 1142 real errors）。
 
-### 8.98 VB 参数名被改（`action` → `action2`）：发现未修（2026-11-20）
+### 8.98 VB 参数名被改（`action` → `action2`）：2026-11-20 发现，当日已修
 
 `dnSpy.Contracts.Utilities.DelayedAction` 的构造函数，源码/元数据里参数叫
 `action`，2.3 也印 `action`，3.2 的 VB 输出却是
@@ -2906,11 +2906,24 @@ C# 语义编译无 `CS0221`（1415 文件 / 1142 real errors）。
 第一遍开始时该函数的参数是 `[this, milliseconds, action]`（名字正确），
 所以改名发生在 **VB 输出层**，不是 `AssignVariableNames`/`SplitVariables`。
 
-**未修**：VB 输出层不在引擎仓（引擎只有 `CSharp/ IL/ TypeSystem/ ...`，
-没有 VB 目录），扩展工程里也只有 `CSharp/`、`IL/`、`ILAst/`、`Mixed/`，
-也没找到 VB writer；VB 提供者疑似依赖 `ICSharpCode.NRefactory.VB`
-（`baseline dump --impl core` 报过 `Could not load ICSharpCode.NRefactory.VB`）。
-定位成本高于收益，先记录。
+**定位（当日续）**：VB 输出层其实**在扩展工程里**，只是 csproj 默认不编译——
+`dnSpy.Decompiler.ILSpy32.csproj` 有
+`Compile Remove="VisualBasic\**\*.cs" Condition=" '$(EnableILSpy32VB)' != 'true' "`，
+另有 `ICSharpCode.NRefactory.VB32/OutputVisitor.cs`（VB AST 打印）。
+改名点在 `VisualBasic/CSharpToVBConverter32.cs` 的 `RegisterParameterName`（`:450`）：
+`memberTypeNames` 收集**成员声明里所有** `SimpleType`/`MemberType` 标识符
+（含字段类型、参数类型），而 VB 大小写不敏感，于是参数 `action` 与字段类型
+`Action` 被判为冲突 → `MakeUniqueLocalName("action", 2)` → `action2`。
+注释里写的理由（`searchLocation As String` 会吞掉 `SearchLocation`）是真实的，
+但**参数自身的类型不该算进去**。
+
+**修法**：`RegisterParameterName` 增加 `parameterTypeName` 参数，冲突检查时排除
+**该参数自身的类型名**——`action As Action` 在 VB 里合法（`As` 之后是类型上下文）。
+
+**验证**：`DelayedAction..ctor` 现在印 `Public Sub New(milliseconds As Integer, action As Action)`，
+与 2.3 一致。语料 **VB 大幅改善**：DnSpy identical 730→824、diffLines 11083→10669；
+Debugger 203→214、1522→1487；Logic 54→56、6270→6214；**C# 与 IL 全同**（无回归）。
+`verify-all` `hardFail=0 softFail=1`，lang-diff 的 VB 项 37→33，C# 项已归零。
 
 **顺带**：同一方法里 3.2 的 `AddressOf Me.StartIt`（VB）比 2.3 的
 `New EventHandler(Me.StartIt)` 更地道，这一处 3.2 更好；C# 侧

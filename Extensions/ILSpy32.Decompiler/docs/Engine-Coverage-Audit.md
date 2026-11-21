@@ -2894,3 +2894,24 @@ VB 11083→11092（+9），经查全部来自 `XamlGeneratedNamespace.GeneratedI
 `New Object() {…}` → `New Object(1) {…}` 的既有形式差异（语义等价）。
 `verify-all` `hardFail=0 softFail=1`（剩余 soft 数字逐字节相同）；
 C# 语义编译无 `CS0221`（1415 文件 / 1142 real errors）。
+
+### 8.98 VB 参数名被改（`action` → `action2`）：发现未修（2026-11-20）
+
+`dnSpy.Contracts.Utilities.DelayedAction` 的构造函数，源码/元数据里参数叫
+`action`，2.3 也印 `action`，3.2 的 VB 输出却是
+`Public Sub New(milliseconds As Integer, action2 As Action)`，方法体里的
+`If action2 Is Nothing Then` / `Me.action = action2` 跟着一起改。
+
+**已排除引擎层**：`DNSPY_ILSPY32_DIAG=1` 下 `AssignVariableNames.PerformAssignment`
+第一遍开始时该函数的参数是 `[this, milliseconds, action]`（名字正确），
+所以改名发生在 **VB 输出层**，不是 `AssignVariableNames`/`SplitVariables`。
+
+**未修**：VB 输出层不在引擎仓（引擎只有 `CSharp/ IL/ TypeSystem/ ...`，
+没有 VB 目录），扩展工程里也只有 `CSharp/`、`IL/`、`ILAst/`、`Mixed/`，
+也没找到 VB writer；VB 提供者疑似依赖 `ICSharpCode.NRefactory.VB`
+（`baseline dump --impl core` 报过 `Could not load ICSharpCode.NRefactory.VB`）。
+定位成本高于收益，先记录。
+
+**顺带**：同一方法里 3.2 的 `AddressOf Me.StartIt`（VB）比 2.3 的
+`New EventHandler(Me.StartIt)` 更地道，这一处 3.2 更好；C# 侧
+`(long)milliseconds` 是 2.3 多插的 cast，3.2 的 `milliseconds` 贴源码。

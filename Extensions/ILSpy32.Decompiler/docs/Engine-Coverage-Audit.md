@@ -2451,6 +2451,8 @@ py baseline/token-check.py <dumpDir>
 而不是复用被实现方法的 token。**已定位，未修**（`TypeSystemAstBuilder` 的 `.override` 合成处）。
 剩下 ~23 个重复类型需要逐个看是不是同一模式。
 
+**2026-11-20 复测：`types_with_duplicates` 58 → 0，本条已闭环。** `AstAnnotationBinder.AttachMembers`（`:281`）已按 `SyntheticExplicitImplementationMarker` 跳过 `.override` 合成方法（不绑 MethodDef，`InsertTokenComments` 也就不会印 token）；接口匹配的泛型区分（`MatchProperty`/`MatchMethod`）也已修好，语料 `diffLines` 未回退。
+
 **用法**：改完 token 相关的东西跑一遍，`types_with_duplicates` 应当只下降不上升；
 配合 `source-check.py`（成员不丢）与 `lang-diff-all`（兼容收敛）构成三个信号。
 

@@ -2975,3 +2975,26 @@ Debugger 203→214、1522→1487；Logic 54→56、6270→6214；**C# 与 IL 全
 **残余**：`New ThreadStart(AddressOf ...)` 的外层 `New ThreadStart(...)` 仍保留
 （`VisitObjectCreateExpression` 的简化只认「参数已经是 AddressOf」，而该参数在转换后
 才是 AddressOf，触发时机对不上）。2.3 是 `New Thread(AddressOf M)`。
+
+### 8.101 C#/VB：可空参数默认值印成 `default(T?)` 而非 `null`（2026-11-20 发现并修复）
+
+MVVM 一族（`NullableByteVM`/`NullableInt16VM`/…）的构造函数，源码是
+`bool? useDecimal = null`，2.3 也印 `= null`，3.2 却印 `= default(bool?)`。
+全语料 `--all` 口径：`= Default(` 2.3 = **45**、3.2 = **91**（其中 33 来自 MVVM 一族）。
+
+**责任点**：`TypeSystemAstBuilder.ConvertConstantValue`（`:655`）——`constantValue == null` 时
+只对 `type.IsReferenceType == true` 返回 `NullReferenceExpression`，`Nullable<T>` 是值类型，
+于是落到 `DefaultValueExpression(Nullable<T>)` → 输出 `default(T?)`。
+参数默认值走 `TypeSystemAstBuilder.cs:912`
+（`decl.DefaultExpression = ConvertConstantValue(parameter.Type, parameter.ConstantValue)`）。
+（§8.42 记的责任点 `DeclareVariables.cs:449` 是**局部**初始化器，那条早已修好；
+参数默认值是另一条路径。）
+
+**修法**：`ConvertConstantValue` 的 null 分支同时接受 `Nullable<T>`
+（`type.GetDefinition()?.KnownTypeCode == KnownTypeCode.NullableOfT`）。
+
+**验证**：`NullableByteVM..ctor` 现在印
+`public NullableByteVM(Action<DataFieldVM> onUpdated, bool? useDecimal = null)`，与 2.3 一致。
+`= Default(` 91 → **39**（2.3 是 45，差的 6 处是 3.2 更贴源码）。语料 C# 改善：
+DnSpy identical 977→980、diffLines 8938→8886；Debugger 238→240、1199→1197；
+VB 与 Logic 全同。`verify-all` `hardFail=0 softFail=1`（lang-diff VB 37→33、C# 归零）。

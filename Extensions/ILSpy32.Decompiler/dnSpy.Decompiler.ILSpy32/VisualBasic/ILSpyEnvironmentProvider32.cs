@@ -1,4 +1,4 @@
-// Copyright (c) 2011 AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2011 AlphaSierraPapa for the SharpDevelop Team
 // Copyright (c) 2014-2019 de4dot@gmail.com
 //
 // ILSpyEnvironmentProvider adapted for the ILSpy 3.2 engine. The 3.2 engine
@@ -103,6 +103,11 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 				return GetTypeNameText(typeReference.Type);
 			case CS.IdentifierExpression identifier:
 				return identifier.Identifier;
+				// 'this.M' / 'base.M': the type name is the enclosing type, and VB needs
+				// AddressOf for such method groups (audit 8.100).
+			case CS.ThisReferenceExpression _:
+			case CS.BaseReferenceExpression _:
+				return GetEnclosingTypeName(node);
 			case CS.MemberReferenceExpression reference:
 				return reference.MemberName;
 			default:

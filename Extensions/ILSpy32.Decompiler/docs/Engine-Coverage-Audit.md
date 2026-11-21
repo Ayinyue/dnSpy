@@ -2951,3 +2951,25 @@ Debugger 203→214、1522→1487；Logic 54→56、6270→6214；**C# 与 IL 全
 实测 `Public MustOverride Property Name As String` 和
 `Public MustOverride Default Property Item(i As Integer) As String` 都能编译通过
 （0 警告 0 错误）。所以 3.2 是**逐成员类型正确**的，不存在系统性误删 `Abstract`。
+
+### 8.100 VB：`this.M` / `base.M` 方法组没转成 `AddressOf`（2026-11-20 发现并修复）
+
+`AsyncNodeProvider`（VB，diffLines 155）里 3.2 印
+`Me.thread = New Thread(New ThreadStart(Me.ThreadMethodImpl))`：内层参数
+`Me.ThreadMethodImpl` 没有 `AddressOf`，而 2.3 印 `AddressOf Me.ThreadMethodImpl`
+（VB 的方法组转换需要 `AddressOf`，缺了可能编译不过）。
+
+**根因**：`ILSpyEnvironmentProvider32.IsMethodGroup` 对 `MemberReferenceExpression` 走
+`GetTypeNameText(member.Target)`，而 `GetTypeNameText` 的 switch 只认
+`SimpleType/MemberType/TypeReferenceExpression/IdentifierExpression/MemberReferenceExpression`，
+**没有 `ThisReferenceExpression` / `BaseReferenceExpression`** → 返回 null →
+`IsMethodGroup` 返回 false → `CSharpToVBConverter32.VisitMemberReferenceExpression`（`:1313`）
+不包 `AddressOf`。于是 `new ThreadStart(this.M)` 的参数保持裸成员访问，
+`VisitObjectCreateExpression` 的「new Delegate(M) → AddressOf M」简化也随之不触发。
+
+**修法**：`GetTypeNameText` 补两个分支，`this`/`base` 返回所在类型名
+（`methodNames` 的 key 是 `typeDef.Name` 与 `FullName`，与 `GetEnclosingTypeName` 一致）。
+
+**残余**：`New ThreadStart(AddressOf ...)` 的外层 `New ThreadStart(...)` 仍保留
+（`VisitObjectCreateExpression` 的简化只认「参数已经是 AddressOf」，而该参数在转换后
+才是 AddressOf，触发时机对不上）。2.3 是 `New Thread(AddressOf M)`。

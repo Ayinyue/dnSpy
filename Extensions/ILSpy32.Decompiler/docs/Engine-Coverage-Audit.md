@@ -2928,3 +2928,19 @@ Debugger 203→214、1522→1487；Logic 54→56、6270→6214；**C# 与 IL 全
 **顺带**：同一方法里 3.2 的 `AddressOf Me.StartIt`（VB）比 2.3 的
 `New EventHandler(Me.StartIt)` 更地道，这一处 3.2 更好；C# 侧
 `(long)milliseconds` 是 2.3 多插的 cast，3.2 的 `milliseconds` 贴源码。
+
+### 8.99 VB 抽象事件：2.3 的 `MustOverride` 编译不过（2026-11-20 改判）
+
+`DbgManager`（VB，diffLines 32）等抽象类里，源码是 `public abstract event EventHandler<T> Message;`：
+2.3 印 `Public MustOverride Event Message As EventHandler(Of DbgMessageEventArgs)`，3.2 印
+`Public Event Message As ...`（`CSharpToVBConverter32.VisitEventDeclaration` 第 3437 行
+显式 `Modifiers &= ~CS.Modifiers.Abstract`，注释说「VB has no abstract events (BC30243)」）。
+
+**实测判定：3.2 是对的，2.3 的输出编译不过。** 用 `dotnet build` 编一个最小 VB 工程
+（`MustInherit Class C : Public MustOverride Event Foo() : End Class`），Roslyn 报
+`error BC30243: “MustOverride”在事件声明中无效`。所以 VB 不允许抽象事件，3.2 丢掉
+`Abstract` 才能编译通过。
+
+**代价**：3.2 把抽象事件变成具体事件，语义上偏离源码（派生类不能再实现/重写该事件），
+但这是 VB 语言的硬限制，没有可编译的等价写法。**结论：2.3 更差（输出不可编译），
+按 §8.69 判据不对齐。**

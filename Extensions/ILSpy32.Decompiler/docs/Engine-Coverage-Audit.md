@@ -2944,3 +2944,10 @@ Debugger 203→214、1522→1487；Logic 54→56、6270→6214；**C# 与 IL 全
 **代价**：3.2 把抽象事件变成具体事件，语义上偏离源码（派生类不能再实现/重写该事件），
 但这是 VB 语言的硬限制，没有可编译的等价写法。**结论：2.3 更差（输出不可编译），
 按 §8.69 判据不对齐。**
+
+**同一逻辑的其他成员类型（2026-11-20 一并验证，3.2 是对的）**：属性
+（`VisitPropertyDeclaration:5058`）和索引器（`VisitIndexerDeclaration:3792`）都走
+`ConvertModifiers`，**保留** `Abstract` → VB `MustOverride`；只有事件被特殊处理。
+实测 `Public MustOverride Property Name As String` 和
+`Public MustOverride Default Property Item(i As Integer) As String` 都能编译通过
+（0 警告 0 错误）。所以 3.2 是**逐成员类型正确**的，不存在系统性误删 `Abstract`。

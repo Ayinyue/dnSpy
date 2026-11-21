@@ -991,7 +991,26 @@ obj.IsVisibleChanged -= new DependencyPropertyChangedEventHandler(UIUtilities.se
 复制到各 `stloc` 赋值点，再经 `ILInlining` 变成「提前 return」；2.3 用
 `ILAst/SimpleControlFlow.cs:69/254` 的 ret-ternary→`&&`/`||`。
 改法：给 `InlineReturnTransform` 加守卫（返回局部被 ≥2 个分支赋值时不复制）。
-**未实施**（停用会影响 try/catch、循环内 return 的定位，需整体回归）。
+
+**2026-11-20 试验结果：守卫已试过，结果混合，未采用。** 在 `Run` 里
+`CanModifyInstructions` 成功后加 `if (list.Count > 1) continue;`（只在唯一赋值点内联），
+重建后逐站点对照 2.3（`Compare-Object` 计数）：
+
+| 站点 | 无守卫 vs 2.3 | 有守卫 vs 2.3 | 结论 |
+|---|---|---|---|
+| `XmlDoc.XmlDocKeyProvider` | 371 | 381 | 有守卫更差（+10） |
+| `Utilities.DotNetPathProvider` | 152 | 157 | 更差（+5） |
+| `DotNetPathProvider.GetDotNetBaseDirCandidates` | 138 | 137 | 更好（−1） |
+| `DotNetPathProvider.GetDotNetBaseDirs` | 48 | 47 | 更好（−1） |
+| `Utilities.FrameworkPaths` | 48 | 45 | 更好（−3） |
+| `GacInfo.FindMonoPrefixes` | 62 | 61 | 更好（−1） |
+
+总量上语料是净改善（Logic C# 6212→6170，Debugger C# 1199→1205，DnSpy C# 持平），
+但**两个最大的站点反而退步**，且源码判据也分裂：`XmlDocKeyProvider` 里守卫版
+（提前 `return null` + `switch`）更贴源码，`DotNetPathProvider.GetBitness` 里
+无守卫版（直接 `return 32; return 64; return -1;`）更贴源码。所以这条**不是单向改进**，
+真正要做的是 2.3 的 ret-ternary 还原（`SimpleControlFlow` 的 `&&`/`||` 合并），
+而不是简单加守卫。**保持未实施。**
 
 **(5) 索引器语法 —— 责任点已定位**
 3.2 在 `CallBuilder.cs:686/780` 无条件生成 `IndexerExpression`；2.3 在

@@ -1221,7 +1221,10 @@ C# 视图对 `HexBytes` 看到 **170** 个 `CheckedUncheckedAnnotation`（VB 视
 与 2.3 的 `(int)(checked((IntPtr)index))` 只差外层一对括号。
 语料不变（Contracts.DnSpy 16041，无回归）；`verify-all` hardFail=0。
 
-**另两类已计数但未修**：`.Invoke()`（2.3 印 `handler.Invoke(...)`，3.2 省略，2.3 有 21 处/3.2 3 处）；
+**另两类**：`.Invoke()` —— **2026-11-20 重测口径后差异极小**：`--all` 全语料
+2.3=60 / 3.2=63，只有 2 个类型不同（`Scripting.UIUtils` +2、其 `UIIter` 状态机 +1），
+且 3.2 把闭包还原成局部 `f`（2.3 是 `CS$<>8__Locals1.f`），**3.2 更贴源码**。
+旧记录的「2.3=21/3.2=3」是旧口径，已作废；
 `= default(...)` 局部初始化器（3.2 比 2.3 多 31 处，责任点 `DeclareVariables.cs:449`）。
 
 ### 8.44 显式转换插入：2.3 明显更多（2026-11-18；2026-11-20 源码仲裁方向被推翻，3.2 侧已修）

@@ -3058,3 +3058,23 @@ VB 与 Logic 全同。`verify-all` `hardFail=0 softFail=1`（lang-diff VB 37→3
 **未修**：这是布尔逻辑塑形问题（没有 De Morgan transform，反向形式直接来自 IL 的
 `brtrue` 链）。改成正向需要「把一连串 `!(A || B)` 重新组装成 `A || B`」的塑形，
 风险中等、收益是这一个类型（`U` 后缀差 8 处但 diffLines 主要来自这段）。
+
+### 8.106 VB：`a ?? (a = new D(...))` 的赋值被无条件提升（2026-11-20 发现并修复）
+
+VB 输出把缓存委托的 `??` 右操作数提升成了独立语句——
+`UIUtilities.__O._0___selector_IsVisibleChanged = AddressOf UIUtilities.selector_IsVisibleChanged`
+然后 `AddHandler selector.IsVisibleChanged, If(field, (field = AddressOf ...))`。
+C# 侧是 `a ?? (a = new D(...))` 内联的，2.3 也是内联。**提升后赋值无条件执行，缓存永远不命中。**
+
+**根因**：`CSharpToVBConverter32.VisitAssignmentExpression` 有一个 hoist 分支——赋值作为子表达式
+且 `CanHoistAssignment` 为真时，把它提升为独立语句并返回 `left.Clone()`。`CanHoistAssignment`
+只排除了 lambda 和循环条件/迭代器，**没排除 `??`**：`??` 的赋值是短路的（仅左侧为 null 时执行），
+提升后变成无条件。插桩实测（修复后）`HOISTDBG parent=ParenthesizedExpression canHoist=False`。
+
+**修法**：`CanHoistAssignment` 增加一条——父链中出现
+`CS.BinaryOperatorExpression { Operator = BinaryOperatorType.NullCoalescing }` 时不提升。
+
+**验证**：`UIUtilities.FocusSelector` 现在印
+`AddHandler selector.IsVisibleChanged, If(UIUtilities.__O._0___selector_IsVisibleChanged, (UIUtilities.__O._0___selector_IsVisibleChanged = AddressOf UIUtilities.selector_IsVisibleChanged))`，
+与 C# 侧一致；语料 VB DnSpy 10669→10673、Debugger 1487→1486、Logic 6214→6210（C#/IL 全同）；
+`verify-all` `hardFail=0 softFail=1`。

@@ -341,7 +341,12 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 		// another scope, and a loop condition/iterator is re-evaluated on every iteration
 		// (hoisting "while ((line = Read()) != null)" would read only once).
 		static bool CanHoistAssignment(CS.AstNode node) {
+
 			for (var parent = node.Parent; parent != null; parent = parent.Parent) {
+				// "a ?? (a = new D(...))" must not be hoisted: the assignment only runs when the
+				// left side is null, hoisting it would assign unconditionally (and kill the cache).
+				if (parent is CS.BinaryOperatorExpression { Operator: CS.BinaryOperatorType.NullCoalescing })
+					return false;
 				if (parent is CS.LambdaExpression || parent is CS.AnonymousMethodExpression)
 					return false;
 				if (parent is CS.WhileStatement || parent is CS.DoWhileStatement

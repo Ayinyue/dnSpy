@@ -3005,3 +3005,13 @@ MVVM 一族（`NullableByteVM`/`NullableInt16VM`/…）的构造函数，源码�
 `= Default(` 91 → **39**（2.3 是 45，差的 6 处是 3.2 更贴源码）。语料 C# 改善：
 DnSpy identical 977→980、diffLines 8938→8886；Debugger 238→240、1199→1197；
 VB 与 Logic 全同。`verify-all` `hardFail=0 softFail=1`（lang-diff VB 37→33、C# 归零）。
+
+### 8.102 C# top offenders 逐项判过（2026-11-20）：都是「2.3 更差」
+
+| 类型 | diffLines | 差异内容 | 判定 |
+|---|---|---|---|
+| `Utilities.FrameworkFileUtils` | 438 | 2.3 把 `frameworkAssemblyNamePrefixes` 的字段初始化展开成静态构造器 + **400+ 行 `hashSet.Add(...)`**；3.2 保留字段初始化 | **2.3 更差**（§8.69「静态构造器」行） |
+| `Utilities.DotNetPathProvider` | 373 | ① 2.3 印 `Enumerable.ToArray(Enumerable.Select(...))`，3.2 还原成查询表达式（更贴源码）；② `foreach` 变量名 2.3 用 PDB 名 `info`，3.2 推断成 `dotNetBaseDir`；③ `TryGetBestMatchingPaths` 里三个 `info`/`info2`/`info3` 是同一槽位被 `SplitVariables` 拆开（§8.93） | **3.2 更贴源码**（LINQ 还原）；②③ 属命名细节 |
+
+**结论**：C# 侧两个最大的 offender 都不是 3.2 的缺陷方向，不需要对齐 2.3。
+真正剩下的 3.2 侧差异集中在 VB：`AsyncNodeProvider` 155 / `UIUtilities` 149。

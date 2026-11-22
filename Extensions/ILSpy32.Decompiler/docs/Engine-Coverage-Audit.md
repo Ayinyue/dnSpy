@@ -1483,8 +1483,12 @@ right = PrepareArithmeticArgument(right, inst.RightInputType, inst.Sign, inst.Is
 **✅ 已实施**：不需要额外的结果类型字段 —— `ResolveBinaryOperator` 返回的 `rr.Type` 就是结果类型。
 在 `HandleBinaryNumeric` 解析出 `rr` 之后，把**编译期常量**操作数重定到 `rr.Type`
 （`RetypeConstantToResultType` → `ConvertConstantValue`，后者已含整型重定）。
-实测 `HexBytes` 的 `index + 1` 现在印 `index + 1L`（3 处）。语料 15761 → 15760 —— 幅度小是因为
-`HexBytes` 的 400 行差异主要由其它项贡献；`L`/`U` 后缀的总体缺口（130 vs 38、199 vs 61）主体仍未解。
+实测 `HexBytes` 的 `index + 1` 现在印 `index + 1L`（3 处）。
+
+**2026-11-20 复测：`L`/`U` 后缀的总体缺口已基本消失。** `--all` 全语料实测
+`L` 后缀 2.3=130 / 3.2=**140**（3.2 反而略多），`U` 后缀 2.3=199 / 3.2=**194**；
+逐类型只有 30 个不同，最大的 `WpfUnicodeUtils` 是 `U` +8（见 §8.105）。
+旧记录的「130 vs 38、199 vs 61」是 2026-11-18 的口径，已作废。
 
 **同一规则也解释 B 类（显式转换）**：`ldelem.u1` 的结果在 IL 栈上是 I4，2.3 按目标类型定型后
 会补 `(int)`；3.2 不补。两者是同一条「按目标类型定型」规则的两个面。
@@ -3042,3 +3046,15 @@ VB 与 Logic 全同。`verify-all` `hardFail=0 softFail=1`（lang-diff VB 37→3
 对齐或更好；剩下的都是输出风格差异，且多数判定为「2.3 更差、不对齐」。
 继续压缩 diffLines 的边际收益已明显下降，建议转向 **§8.92 循环塑形** 这个唯一的
 大语义类，或按 §8.69 的判据把剩余风格项正式归为「不对齐」。
+
+### 8.105 `WpfUnicodeUtils`：同一区间表的两种写法（语义等价，不贴源码）
+
+`Text.WPF.WpfUnicodeUtils` 判定「组合用码位」的那张大表：
+2.3 印 `cp >= 768U && (cp <= 879U || (cp >= 1155U && cp <= 1161U) || ...)`（正向区间），
+3.2 印 `cp > 879U && (cp < 1155U || cp > 1161U) && ... && cp != 1648 && ...`
+（「不在任何区间」的反向形式）。两者语义等价，但**源码是正向区间**（Unicode 范围表），
+所以 2.3 贴源码、3.2 不贴，且 3.2 的反向形式明显更冗长。
+
+**未修**：这是布尔逻辑塑形问题（没有 De Morgan transform，反向形式直接来自 IL 的
+`brtrue` 链）。改成正向需要「把一连串 `!(A || B)` 重新组装成 `A || B`」的塑形，
+风险中等、收益是这一个类型（`U` 后缀差 8 处但 diffLines 主要来自这段）。

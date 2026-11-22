@@ -2972,9 +2972,16 @@ Debugger 203→214、1522→1487；Logic 54→56、6270→6214；**C# 与 IL 全
 **修法**：`GetTypeNameText` 补两个分支，`this`/`base` 返回所在类型名
 （`methodNames` 的 key 是 `typeDef.Name` 与 `FullName`，与 `GetEnclosingTypeName` 一致）。
 
-**残余**：`New ThreadStart(AddressOf ...)` 的外层 `New ThreadStart(...)` 仍保留
-（`VisitObjectCreateExpression` 的简化只认「参数已经是 AddressOf」，而该参数在转换后
-才是 AddressOf，触发时机对不上）。2.3 是 `New Thread(AddressOf M)`。
+**残余**：`New ThreadStart(AddressOf ...)` 的外层 `New ThreadStart(...)` 仍保留。
+插桩查清了原因：`VisitObjectCreateExpression` 的简化要求
+`typeResolver.IsDelegateType(objectCreateExpression.Type.ToString())`，而
+`ExpressionTypeResolver.IsDelegateType` 走 `LookupLocalTypeDef`/`LookupExternalType`/
+`GetRuntimeType`——它们都按**全名**查（`LookupExternalType` 用 `cecilModule.GetType(name)`
+并遍历 `AssemblyReferences`），而 C# 树里只有简单名 `ThreadStart`/`Action`，所以
+`IsDelegateType` 对这些常见委托一律返回 **false**（实测 `VOCE type=[ThreadStart]
+isDel=False`、`[Action] isDel=False`），简化逻辑基本从不触发。
+要修得让 `LookupExternalType` 支持简单名回退（按 `Type.Name` 在引用程序集里找），
+有同名类型误判的风险，**暂不做**。2.3 是 `New Thread(AddressOf M)`。
 
 ### 8.101 C#/VB：可空参数默认值印成 `default(T?)` 而非 `null`（2026-11-20 发现并修复）
 

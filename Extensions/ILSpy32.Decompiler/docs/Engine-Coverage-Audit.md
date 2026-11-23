@@ -3085,9 +3085,17 @@ Lfalse: ldc.i4.0; ret
 变换里就被推进去了，所以**语法树层面的 De Morgan 复原拿不回 2.3 的形式**
 （实测：对 `IsBadWpfFormatterChar` 加 AST 变换后输出一字未变——条件里根本没有 `!` 节点）。
 
-**结论**：这一项必须在 **ILAst/StatementBuilder 层**做（识别「多个 brtrue 指向同一个
-`return true` 块、最后一个操作数走 fall-through」这一形态并组装 `OrElse`），
+**结论**：这一项必须在 **ILAst 优化阶段之前/之中**做（识别「多个 brtrue 指向同一个
+`return true` 块、最后一个操作数走 fall-through」并组装 `OrElse`），
 不能靠事后 AST 整形。已实现的 AST 版试验已回滚，仓库无残留。
+
+**插桩补记（2026-11-24）**：给 `ExpressionBuilder.VisitIfInstruction` 打日志看实际拿到的 ILAst，
+只有一层：`cond=[comp.unsigned(cp > 879)] true=comp(cp != 1648) false=ldc.i4.0`。
+也就是说**到 ExpressionBuilder 时已经没有任何「析取链」可还原了**——`cp <= 879` 被反转成
+`cp > 879`、真目标块变成常量 0，扁平化的发生地是更早的 ILAst 优化/内联阶段
+（`HighLevelLoopTransform`/`InlineReturnTransform`/`ControlFlowSimplification` 一类）。
+这同时排除了「在 ExpressionBuilder/VisitIfInstruction 里放宽 `MatchLogicOr`」的路子：
+那里看到的 `TrueInst` 已不是常量 1，而是另一条比较指令。
 同类可复用的机制是 `StatementBuilder.TryTranslateShortCircuitReturn`
 （它只合并最后一条 `return`，覆盖不到这条链）。
 

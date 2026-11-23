@@ -68,6 +68,13 @@ namespace dnSpy.Decompiler.ILSpy32.VisualBasic {
 			// reference to a method must become AddressOf in VB, a field/property must not.
 			if (expression.Parent is CS.InvocationExpression invocation && invocation.Target == expression)
 				return false;
+			// The resolver's results do exist on the 3.2 tree (unlike the dnlib member
+			// annotations): a method reference used as a delegate value carries a
+			// MethodGroupResolveResult. This covers static methods on external types
+			// ('New Func(Of String, Boolean)(File.Exists)'), which the per-type method-name
+			// table below cannot see because it only knows the enclosing type's own members.
+			if (expression.Annotation<ICSharpCode.Decompiler.CSharp.Resolver.MethodGroupResolveResult>() is not null)
+				return true;
 			var tree = expression.Ancestors.OfType<CS.SyntaxTree>().FirstOrDefault();
 			var methodNames = tree?.Annotation<Dictionary<string, HashSet<string>>>();
 			if (methodNames is null)

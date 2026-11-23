@@ -933,9 +933,41 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 							break;
 					}
 				}
+				// BCL facades type-forward most of the framework: 'ThreadStart' and 'Action' are
+				// defined in System.Private.CoreLib and show up as ExportedTypes (not Types) in
+				// every facade dnSpy references, so the scans above never see them. Follow the
+				// forwarder to its target; the full name must match exactly and a bare name that
+				// reaches more than one definition stays unknown rather than guessing.
+				if (result is null && name.IndexOf('.') < 0)
+					result = LookupForwardedType(name, genericName, cecilModule);
 			}
 			externalTypes[cacheKey] = result;
 			return result;
+		}
+
+		Mono.Cecil.TypeDefinition LookupForwardedType(string name, string genericName, Mono.Cecil.ModuleDefinition cecilModule) {
+			var found = new List<Mono.Cecil.TypeDefinition>();
+			try {
+				foreach (var assemblyRef in cecilModule.AssemblyReferences) {
+					var referenced = ResolveAssembly(assemblyRef);
+					var module = referenced?.MainModule;
+					if (module is null)
+						continue;
+					foreach (var exported in module.ExportedTypes) {
+						if (exported.Name != name && (genericName == null || exported.Name != genericName))
+							continue;
+						var targetModule = ResolveAssembly(exported.Scope as Mono.Cecil.AssemblyNameReference)?.MainModule;
+						var targetType = targetModule?.GetType(exported.FullName);
+						if (targetType != null)
+							found.Add(targetType);
+					}
+				}
+			}
+			catch {
+				return null;
+			}
+			var fullNames = found.Select(t => t.FullName).Distinct().ToList();
+			return fullNames.Count == 1 ? found[0] : null;
 		}
 
 		Mono.Cecil.AssemblyDefinition ResolveAssembly(Mono.Cecil.AssemblyNameReference name) {

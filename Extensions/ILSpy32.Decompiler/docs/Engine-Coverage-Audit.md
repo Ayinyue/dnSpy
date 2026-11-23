@@ -3080,6 +3080,14 @@ C# 侧是 `a ?? (a = new D(...))` 内联的，2.3 也是内联。**提升后赋�
 与 C# 侧一致；语料 VB DnSpy 10669→10673、Debugger 1487→1486、Logic 6214→6210（C#/IL 全同）；
 `verify-all` `hardFail=0 softFail=1`。
 
+**附记（未修）**：同一个文件里另一类差异来自 `ExpressionTypeResolver.IsDelegateType`——它走
+`LookupLocalTypeDef`/`LookupExternalType`/`GetRuntimeType`，三者都按**全名**查
+（`LookupExternalType` 的简单名回退也要求 `ResolveAssembly` 成功），而本仓引用的 BCL 程序集
+（`ThreadStart`/`Action` 等）不在探测目录里，解析不到，于是 `IsMethodGroup` 返回 false，
+输出退化成 `New Thread(New ThreadStart(Me.ThreadMethodImpl))`（2.3 是 `New Thread(AddressOf ...)`）。
+§8.100 的「外层委托构造仍冗余」就是这一处，需要让 `LookupExternalType` 支持简单名回退
+（有同名误判风险），暂不做。
+
 ### 8.107 循环出口点：循环头落到函数 return 时不再把「返回块」当出口（2026-11-23，部分修复 §8.92）
 
 §8.92 的定位是对的（出口点选错），但「在 `SimplifyBranchChains` 处窄化」走不通（那是函数级变换、

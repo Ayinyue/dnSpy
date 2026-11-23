@@ -3249,7 +3249,16 @@ diffLines 的微增全部来自 `BookmarkSettings` 变得比 2.3 **更精确**�
 三份语料重新 dump + 语义编译：`realBadFiles` 280/86/97 不变，**诊断集合无新增**，
 BC30452 下降（DnSpy 2→1、Debugger 3→1）。`verify-all` `hardFail=0 softFail=1`。
 
-**仍未做**：**嵌套类型声明**的委托（`SimpleTypeConverter.ParseListCallBack(Of Char, Integer)`）
-仍带外层构造——dnlib/cecil 的 `FullName` 用 `/` 分隔嵌套（`SimpleTypeConverter/ParseListCallBack\`2`），
-而语法树印点号，简单名/全名两条路都命中不了；要做得引入「最后一个点换成斜杠」的候选名。
+**嵌套类型声明的委托——已补（2026-11-24）**：`SimpleTypeConverter.ParseListCallBack(Of Char, Integer)`
+原先命中不了，是因为 dnlib/cecil 的 `FullName` 用 `/` 分隔嵌套
+（`SimpleTypeConverter/ParseListCallBack\`2`），而语法树只带**外层类型前缀 + 点号**
+（`SimpleTypeConverter.ParseListCallBack`），简单名/全名两条路都对不上。
+`LookupLocalTypeDef` 增加一条「按元数据全名后缀匹配」的兜底：把 `/` 归一成 `.` 后要求
+`EndsWith("." + 请求名)`，且**必须唯一**，否则保持未解析（不猜）。同一个兜底也让
+`Classify`/`MemberTypeOf` 等受益（嵌套值类型的引用/值判定不再靠运气）。
+为避免热点路径上重复全表扫描，`LookupLocalTypeDef` 加了与 `externalTypes` 同构的结果缓存。
+
+**效果**：`SimpleTypeConverter.ParseList(s, [error], If(field, (field = AddressOf SimpleTypeConverter.ParseCharPart)), 0)`
+等两处不再套 `New ...ParseListCallBack(...)`；三份语料的编译诊断集合与
+`realBadFiles`（280/86/97）、VB diffLines（10668/1488/6207）**均无变化**——纯等价改写。
 `Thread` 这类**非委托**的构造调用继续保留（也不该简化）。

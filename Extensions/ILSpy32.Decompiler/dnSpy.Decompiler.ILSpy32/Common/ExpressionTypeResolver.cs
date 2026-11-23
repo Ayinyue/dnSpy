@@ -37,6 +37,7 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		readonly Dictionary<string, bool?> referenceCache = new Dictionary<string, bool?>(StringComparer.Ordinal);
 		readonly Dictionary<string, bool> implicitStringCache = new Dictionary<string, bool>(StringComparer.Ordinal);
 		readonly Dictionary<string, Mono.Cecil.TypeDefinition> externalTypes = new Dictionary<string, Mono.Cecil.TypeDefinition>(StringComparer.Ordinal);
+		readonly Dictionary<string, TypeDef> localTypeDefs = new Dictionary<string, TypeDef>(StringComparer.Ordinal);
 		readonly Dictionary<string, Mono.Cecil.AssemblyDefinition> resolvedAssemblies = new Dictionary<string, Mono.Cecil.AssemblyDefinition>(StringComparer.Ordinal);
 
 		/// <summary>Type definition of the member whose body is being converted.</summary>
@@ -886,6 +887,15 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		}
 
 		TypeDef LookupLocalTypeDef(string name, int arity = 0) {
+			var cacheKey = arity > 0 ? name + "`" + arity : name;
+			if (localTypeDefs.TryGetValue(cacheKey, out var cached))
+				return cached;
+			var result = LookupLocalTypeDefCore(name, arity);
+			localTypeDefs[cacheKey] = result;
+			return result;
+		}
+
+		TypeDef LookupLocalTypeDefCore(string name, int arity) {
 			var genericName = arity > 0 ? name + "`" + arity : null;
 			foreach (var type in module.GetTypes()) {
 				if (type.FullName == name || type.Name == name)
@@ -894,7 +904,22 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 				if (genericName != null && (type.FullName == genericName || type.Name == genericName))
 					return type;
 			}
-			return null;
+			// Nested types are spelled 'Outer/Inner' in metadata but 'Outer.Inner' in the syntax
+			// tree, and the tree only carries the enclosing-type prefix ('SimpleTypeConverter.
+			// ParseListCallBack'), never the namespace. Match by suffix; an ambiguous match is
+			// reported as "not found" rather than guessed.
+			if (name.IndexOf('.') < 0)
+				return null;
+			var suffix = (genericName ?? name).Replace('/', '.');
+			TypeDef found = null;
+			foreach (var type in module.GetTypes()) {
+				if (!type.FullName.Replace('/', '.').EndsWith("." + suffix, StringComparison.Ordinal))
+					continue;
+				if (found != null)
+					return null;
+				found = type;
+			}
+			return found;
 		}
 
 		Mono.Cecil.TypeDefinition LookupExternalType(string name, int arity = 0) {

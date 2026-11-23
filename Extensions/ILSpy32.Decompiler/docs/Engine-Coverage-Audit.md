@@ -449,13 +449,14 @@ ColorConverter、DbgExceptionId、DbgCodeBreakpointSettings…），**3.2 为 0*
 - `verify-all`：hardFail=0、skip=0；唯一 softFail 仍是既有的单类型 `lang-diff`（数字未变）；
   IL 语料保持 1310/303/114 全 identical。
 
-**仍未对齐（待查项）**：**嵌套类型名**的限定。2.3 印 `DbgEngineModule.UpdateOptions.IsExe`、
-`DbgExceptionId.Flags.KindMask`、`(DbgExceptionId.Flags)0`，3.2 印 `UpdateOptions.IsExe`、
-`Flags.KindMask`、`(Flags)0`。这些出现在**枚举常量 / 枚举转换**上下文（`ConvertEnumValue` →
-`TypeReferenceExpression(ConvertType(type))`），而同一类型作为字段声明类型时 3.2 已经是限定的
-（`private readonly DbgExceptionId.Flags flags;`），两者相矛盾，说明决策点不在 `ConvertTypeHelper`
-的短名分支（`AlwaysUseShortTypeNames=true` 时该分支恒命中）。曾试在 `ConvertTypeHelper` 加
-`DeclaringType == null` 门槛：语料仅 -14 行、枚举路径完全未变，**已回退**，待定位真实决策点。
+**仍未对齐（原「待查项」，2026-11-24 复核：已消失）**：~~嵌套类型名的限定~~
+`DbgEngineModule.UpdateOptions.IsExe` / `DbgExceptionId.Flags.KindMask` / `(DbgExceptionId.Flags)0`
+这类写法。复核方式：同一编译产物下用 `m3probe text` 分别出 2.3 / 3.2 的 C#，
+`DbgEngineModule` 全文 **逐行相同**（243/243），且 3.2 现在印的就是
+`DbgEngineModule.UpdateOptions.IsExe`、`(DbgExceptionId.Flags)0`；
+说明该残留在后续轮次（§8.19 的静态成员一律限定 + 之后的输出层修补）中已一并解决，
+条目关闭。`DbgExceptionId` 剩下的 19 行差异是 §8.92 那类守卫塑形
+（`== null` vs `!= null` 的反转结构），与类型限定无关。
 
 ### 8.20 全解决方案构建：抓到并修复 net48 目标缺口（2026-11-17）
 

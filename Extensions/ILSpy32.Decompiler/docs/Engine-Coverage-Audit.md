@@ -2700,7 +2700,7 @@ fallback，即 `ParameterTypesMatch` 对泛型参数**全部失败**。
 结论：3.2 的命名更稳健（避免与参数/作用域冲突），对齐 2.3 只会把输出变差（参 §8.67/§8.70
 的判据）。保留为 soft，不作对齐。
 
-### 8.92 循环塑形的根因：`SimplifyBranchChains` 的 leave 折叠抹掉了 CFG 边（2026-11-20，**未修**）
+### 8.92 循环塑形的根因：`SimplifyBranchChains` 的 leave 折叠抹掉了 CFG 边（2026-11-20，**无已知语义缺陷可修，2026-11-24 复核关闭**）
 
 §8.72/§8.77 的彻底定位。结论：**不是 `MatchLeave` 的判据问题，而是循环出口点选错了**。
 
@@ -2769,8 +2769,19 @@ continuation 块强制为循环出口（这样 `break` 的目标 `Append` 会被
 
 **结论**：这是一个**循环感知**的重构（要么让 `SimplifyBranchChains` 拿到 CFG 并识别循环头，
 要么把出口点选择修得更鲁棒），不是判据放宽。已确认「放宽 `MatchLeave`」会得到语义错误的循环
-（`Append` 会在条件失败路径上执行），§8.77 的判断成立。**未修**，需要单独的回归方案。
+（`Append` 会在条件失败路径上执行），§8.77 的判断成立。
 （后续：§8.107 用「循环头落到 return 时跳过返回块」的窄化出口点选择部分修复了这一形态。）
+
+**复核关闭（2026-11-24）**：两个具体实例现在都不再是缺陷。
+`HtmlClipboardFormatWriter.WriteString` 已由 §8.107 修好（`Append` 回到 `if (wsi < 0)` 里，
+循环恢复成条件控制）；`ProfileOptimizationHelper.StartProfile` 当天逐行对比显示
+3.2 输出就是源码形态 `lock (hasInitialized) { ... }`，而 **2.3 反而多出临时量**
+（`List<string> list = ...; lock (list)`），即这一项上 3.2 更好。
+剩下的只有风格差异：§8.107 记录的 `for` vs `while`（`MatchForLoop` 把
+`i = wsi + 1 - index` 收进 for 头）与 `wsi` 提升出循环——两者语义等价。
+按 §8.69 的判据（逐类型比对源码后判定「2.3 更差 / 不对齐」）归为**不对齐**，条目关闭；
+若将来要做，正确切口仍是让 `SimplifyBranchChains`/`LoopDetection` 拿到 CFG，
+且必须自带回归方案（本仓已有 `verify-all` 语料门禁可复用）。
 
 ### 8.93 拆分变量的命名被 `ILVariableEqualityComparer` 合并（2026-11-20 发现并修复）
 
@@ -3198,17 +3209,21 @@ for (int j = 0; j < length; j = wsi + 1 - index) { ... if (wsi < 0) { sb.Append(
 | VB Debugger 1 | `DbgCollectionChangedEventArgs\`1` (59) | 自动属性展开成 `<X>k__BackingField` + `[CompilerGenerated] get` | **2.3 更差**（§8.69 已记） |
 | VB Logic 1 | `Utilities.FrameworkFileUtils` (437) | 同 C# 侧：2.3 的静态构造器展开 | **2.3 更差** |
 
-未修的只剩一处「可选优化」；另一处于 2026-11-24 修复（§8.109）：
+未修项在 2026-11-24 全部收尾：
 
 1. ~~**`IsDelegateType` 只认全名**~~ **已修（§8.109）**：当时的判断（探测目录里没有 BCL 程序集）
    是错的——32 个引用全部解析成功，缺的是**类型转发**这一步（`ThreadStart`/`Action` 定义在
    `System.Private.CoreLib`，被引用程序集只导出 `ExportedTypes`）。补上 `LookupForwardedType`
    与 `IsMethodGroup` 的 `MethodGroupResolveResult` 判定后，VB 语料的 BC32008 从 15 处降到 **0**。
-2. **循环塑形**（§8.92）：`SimplifyBranchChains` 的 leave 折叠需要 CFG 才能窄化，§8.107 只修了
-   「循环头落到函数 return」这一种。
+2. ~~**循环塑形**（§8.92）~~ **复核关闭**：两个具体实例中 `HtmlClipboardFormatWriter.WriteString`
+   已由 §8.107 修好，`ProfileOptimizationHelper.StartProfile` 逐行对比显示 3.2 就是源码形态、
+   2.3 反而多临时量；剩下的只有语义等价的 `for`/`while` 与变量提升风格差异（§8.69 判据：不对齐）。
+3. **`WpfUnicodeUtils` 布尔区间表**（§8.105）**已修（§8.111）**：新增
+   `ReconstructBooleanDisjunctionTransform`，把共享真目标 brtrue 链压出来的反向守卫还原成
+   正向析取；C# DnSpy diffLines 8886→8831、VB 10668→10631，编译诊断不变。
 
-第 2 条不再计入「待修语义缺陷」，仅作为后续可选优化记录；第 1 条修复后也不再有已知的
-编译级（可复现诊断号）输出错误。
+至此**没有已知的语义缺陷或编译级输出错误待修**；余下 diffLines 均为逐类型比对源码后的
+「不对齐」风格差异（§8.69 判据）。
 
 ### 8.109 VB 委托构造缺 `AddressOf`（BC32008）：类型转发解析 + 方法组注解（2026-11-24，已修 §8.100/§8.106 残余）
 

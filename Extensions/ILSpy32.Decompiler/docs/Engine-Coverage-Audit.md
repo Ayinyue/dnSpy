@@ -2761,6 +2761,7 @@ continuation 块强制为循环出口（这样 `break` 的目标 `Append` 会被
 **结论**：这是一个**循环感知**的重构（要么让 `SimplifyBranchChains` 拿到 CFG 并识别循环头，
 要么把出口点选择修得更鲁棒），不是判据放宽。已确认「放宽 `MatchLeave`」会得到语义错误的循环
 （`Append` 会在条件失败路径上执行），§8.77 的判断成立。**未修**，需要单独的回归方案。
+（后续：§8.107 用「循环头落到 return 时跳过返回块」的窄化出口点选择部分修复了这一形态。）
 
 ### 8.93 拆分变量的命名被 `ILVariableEqualityComparer` 合并（2026-11-20 发现并修复）
 
@@ -3078,3 +3079,48 @@ C# 侧是 `a ?? (a = new D(...))` 内联的，2.3 也是内联。**提升后赋�
 `AddHandler selector.IsVisibleChanged, If(UIUtilities.__O._0___selector_IsVisibleChanged, (UIUtilities.__O._0___selector_IsVisibleChanged = AddressOf UIUtilities.selector_IsVisibleChanged))`，
 与 C# 侧一致；语料 VB DnSpy 10669→10673、Debugger 1487→1486、Logic 6214→6210（C#/IL 全同）；
 `verify-all` `hardFail=0 softFail=1`。
+
+### 8.107 循环出口点：循环头落到函数 return 时不再把「返回块」当出口（2026-11-23，部分修复 §8.92）
+
+§8.92 的定位是对的（出口点选错），但「在 `SimplifyBranchChains` 处窄化」走不通（那是函数级变换、
+没有 CFG）。这次把窄化挪到 `LoopDetection`：**当循环头本身的最后一条指令就是函数级 `Leave`
+（循环的自然出口是 return）时，返回块不能当 `break` 目标**。
+
+**机制**。§8.92 的折叠把循环头 `IL_00F6` 的 `br ret块` 变成 `Leave(root)`，`ret` 块被删。
+`FindExitPoint` Case 1 的 `PickExitPoint` 于是在支配树里挑中 `Append` 块（`IL_001D`，最后一条
+也是函数级 `Leave`），`ConstructLoop` 把它当循环出口，循环条件就丢了。关键观察：`Append` 块是
+**返回路径**，不是 `break` 目标——控制流只能「return」到它、不能「break」到它；把它当出口，
+等于把循环的 `break` 语义错赋给一条返回路径。
+
+**修法**（`IL/ControlFlow/LoopDetection.cs`）：`FindExitPoint` Case 1 计算
+`headFallsThroughToReturn`（循环头最后一条是 `Leave && IsLeavingFunction`）并传给 `PickExitPoint`；
+为真时跳过 `IsFunctionReturnBlock` 的候选。这样 `exitPoint` 为空，`ExtendLoopHeuristic` 把返回块
+收回循环内，`MatchForLoop`/`MatchWhileLoop` 才有机会成形。
+
+**A/B**（`DnSpy.dll` 语料，`lang-diff-all`）：
+
+| 模式 | C# identical / diffLines | VB identical / diffLines |
+| --- | --- | --- |
+| 基线 | 980 / 8886 | 824 / 10673 |
+| 本修法 | 980 / 8886 | 824 / 10670 |
+
+C# 语料聚合**不变**（只影响「循环头落到 return」的少数类型），VB −3。`WriteString` 从
+
+```csharp
+int j = 0;
+while (true) { if (j >= length) return; ... if (wsi < 0) break; ... j = wsi + 1 - index; }
+sb.Append(...);   // ← 被提升到循环外
+```
+
+变成
+
+```csharp
+int wsi;
+for (int j = 0; j < length; j = wsi + 1 - index) { ... if (wsi < 0) { sb.Append(...); break; } ... }
+```
+
+`Append` 回到 `if (wsi < 0)` 里，循环恢复成条件控制，与 2.3 的 `while (i < length)` 语义一致
+（`break` 后方法即返回，等价于 2.3 的 `return`）。
+
+**仍未做**：`for` vs `while`（`MatchForLoop` 把 `i = wsi + 1 - index` 收进 for 头）、`wsi` 提升出
+循环、以及 §8.92 里「`while(true)` + 循环外 `Append`」的其余实例。`verify-all` `hardFail=0 softFail=1`。

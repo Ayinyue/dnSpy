@@ -3100,6 +3100,19 @@ Lfalse: ldc.i4.0; ret
 同类可复用的机制是 `StatementBuilder.TryTranslateShortCircuitReturn`
 （它只合并最后一条 `return`，覆盖不到这条链）。
 
+**第二次尝试（AST 变换含比较翻转）与结论**：把「取反映射」做完整——`!!x→x`、
+`!(p&&q)→!p||!q`、`!(x<y)→x>=y`（比较算子一并翻转）——之后，三操作数复现
+**能**还原成源码形态：`return cp >= 768U && (cp <= 879U || cp == 1648 || cp == 3328);`。
+但 `IsBadWpfFormatterChar` 仍差一层：它的守卫块里除了「返回最后一个区间」还嵌着
+`if (cp >= 917760U) { return cp <= 917999U; } return false;`，
+要把它并进去就必须允许通用的 `if (C) { return E; } return false;` → `return C && E`
+合并——那正是 §8.69/§8.104 记录过「+77 diffLines（Logic）」的宽口径守卫合并。
+实测这次变换对三份语料 C# 的 identical/diffLines **一项未变**
+（DnSpy 980/8886、Debugger 240/1197、Logic 66/6147），说明它在现有代码库里
+几乎不触发；换言之：**收益仅限人造复现，代价是给引擎加一条宽口径改写**，不划算。
+已回滚（文件、csproj 条目、`CSharpDecompiler` 注册三处都撤销），仓库无残留。
+若将来要做，正确切口仍是 ILAst 优化阶段（见上），且必须连守卫合并的语料代价一起评估。
+
 ### 8.106 VB：`a ?? (a = new D(...))` 的赋值被无条件提升（2026-11-20 发现并修复）
 
 VB 输出把缓存委托的 `??` 右操作数提升成了独立语句——

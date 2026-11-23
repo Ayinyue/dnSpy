@@ -3140,3 +3140,29 @@ for (int j = 0; j < length; j = wsi + 1 - index) { ... if (wsi < 0) { sb.Append(
 
 **仍未做**：`for` vs `while`（`MatchForLoop` 把 `i = wsi + 1 - index` 收进 for 头）、`wsi` 提升出
 循环、以及 §8.92 里「`while(true)` + 循环外 `Append`」的其余实例。`verify-all` `hardFail=0 softFail=1`。
+
+### 8.108 剩余 diffLines 的逐类型判定（2026-11-20 收尾）
+
+本轮把 `lang-diff-all` 榜单上的类型逐个对照源码判过一遍。结论：**没有已知的语义缺陷可修**，
+剩余差异全部是输出风格，且绝大多数应判「2.3 更差、不对齐」。
+
+| 榜单位次 | 类型 | 差异 | 判定 |
+|---|---|---|---|
+| C# Logic 1 | `Utilities.FrameworkFileUtils` (438) | 2.3 把 `frameworkAssemblyNamePrefixes` 的字段初始化展开成静态构造器 + **400+ 行 `hashSet.Add(...)`** | **2.3 更差**（§8.69 已记） |
+| C# Logic 2 | `Utilities.DotNetPathProvider` (373) | 3.2 把 `Enumerable.ToArray(Enumerable.Select(...))` 还原成查询表达式；foreach 变量名 3.2 推断 `dotNetBaseDir` vs 2.3 PDB `info`；同槽位拆成 `info`/`info2`/`info3` | **3.2 更贴源码**（LINQ 还原）；命名属细节 |
+| C# DnSpy 1/2 | `Utilities.UIUtilities` (152) | 缓存委托的展开方式（§8.106）+ guard shaping；参数默认值 `default(T?)` vs `null`（§8.101） | 均已定位，前者残余属 §8.100 |
+| VB DnSpy 1 | `TreeView.AsyncNodeProvider` (155) | 2.3 的 `Dim obj As Object = Me.lockObj; SyncLock obj` 多了临时量；3.2 委托构造冗余（§8.100 残余） | **3.2 更好**（少一个临时量） |
+| VB DnSpy 2 | `Scripting.UIUtils` (149) | 闭包还原（3.2 还原成局部 `f`，2.3 用 `CS$<>8__Locals1.f`）+ `New ThreadStart(AddressOf ...)` vs `AddressOf ...`（§8.100 残余） | **3.2 更贴源码**（闭包还原） |
+| VB Debugger 1 | `DbgCollectionChangedEventArgs\`1` (59) | 自动属性展开成 `<X>k__BackingField` + `[CompilerGenerated] get` | **2.3 更差**（§8.69 已记） |
+| VB Logic 1 | `Utilities.FrameworkFileUtils` (437) | 同 C# 侧：2.3 的静态构造器展开 | **2.3 更差** |
+
+未修的只剩两处「可选优化」，都影响很小且没有安全的收敛路径：
+
+1. **`IsDelegateType` 只认全名**（`ExpressionTypeResolver.cs:495`）：`LookupLocalTypeDef`/`LookupExternalType`
+   对 `ThreadStart`/`Action` 这类 BCL 委托返回 null，于是 `IsMethodGroup` false → 不简化
+   `new XxxDelegate(M)`。探测目录里没有这些 BCL 程序集（`[System.Object].Assembly.Location` 指向
+   PowerShell 的运行时目录，不含 `System.Private.CoreLib`/`System.Runtime`），给搜索目录也没用。
+2. **循环塑形**（§8.92）：`SimplifyBranchChains` 的 leave 折叠需要 CFG 才能窄化，§8.107 只修了
+   「循环头落到函数 return」这一种。
+
+两者都不再计入「待修语义缺陷」，仅作为后续可选优化记录。

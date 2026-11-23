@@ -3063,9 +3063,8 @@ VB 与 Logic 全同。`verify-all` `hardFail=0 softFail=1`（lang-diff VB 37→3
 （「不在任何区间」的反向形式）。两者语义等价，但**源码是正向区间**（Unicode 范围表），
 所以 2.3 贴源码、3.2 不贴，且 3.2 的反向形式明显更冗长。
 
-**未修（2026-11-24 做了根因定位与一次引擎级尝试，见下）**：这是布尔逻辑塑形问题。
-改正向需要「把一连串 `!(A || B)` 重新组装成 `A || B`」，收益是这一个类型
-（`U` 后缀差 8 处，但 diffLines 主要来自这段）。
+**已修（2026-11-24，见 §8.111；此前两次定位与失败记录保留在下方，作为根因证据）**：
+这是布尔逻辑塑形问题。改正向需要「把一连串 `!(A || B)` 重新组装成 `A || B`」。
 
 **最小复现与 IL 结构**（`Repro.dll`，`R.F3(uint cp) => cp >= 768U && (cp <= 879U || cp == 1648U || cp == 3328U)`）：
 Roslyn 不生成单个「或」表达式，而是生成一条**共享真目标的 brtrue 链**：
@@ -3086,9 +3085,8 @@ Lfalse: ldc.i4.0; ret
 变换里就被推进去了，所以**语法树层面的 De Morgan 复原拿不回 2.3 的形式**
 （实测：对 `IsBadWpfFormatterChar` 加 AST 变换后输出一字未变——条件里根本没有 `!` 节点）。
 
-**结论**：这一项必须在 **ILAst 优化阶段之前/之中**做（识别「多个 brtrue 指向同一个
-`return true` 块、最后一个操作数走 fall-through」并组装 `OrElse`），
-不能靠事后 AST 整形。已实现的 AST 版试验已回滚，仓库无残留。
+**当时的结论（已被 §8.111 推翻，保留作根因记录）**：这一项必须在 **ILAst 优化阶段之前/之中**做，
+不能靠事后 AST 整形。
 
 **插桩补记（2026-11-24）**：给 `ExpressionBuilder.VisitIfInstruction` 打日志看实际拿到的 ILAst，
 只有一层：`cond=[comp.unsigned(cp > 879)] true=comp(cp != 1648) false=ldc.i4.0`。
@@ -3260,7 +3258,7 @@ for (int j = 0; j < length; j = wsi + 1 - index) { ... if (wsi < 0) { sb.Append(
 **仍未做**：泛型委托（`EventHandler(Of T)`/`Func(Of T,...)`）的**冗余外层构造**仍在
 （如 `AddHandler ev, New EventHandler(Of E)(AddressOf M)`）——`IsDelegateType` 收到的是
 `EventHandler<EditCompletedEventArgs>` 这类构造名，`type.Name` 匹配不上。语义等价、可编译，
-属可选风格项；`WpfUnicodeUtils` 的布尔塑形（§8.105）同理保留。
+属可选风格项；`WpfUnicodeUtils` 的布尔塑形（§8.105）**已于 §8.111 修复**。
 **泛型委托这一条已于 2026-11-24 修复，见 §8.110。**
 
 ### 8.110 VB：泛型委托的外层构造也简化成 `AddressOf`（2026-11-24，已修 §8.109「仍未做」）
@@ -3295,6 +3293,54 @@ for (int j = 0; j < length; j = wsi + 1 - index) { ... if (wsi < 0) { sb.Append(
 diffLines 的微增全部来自 `BookmarkSettings` 变得比 2.3 **更精确**（见上第 3 点），不是回退。
 三份语料重新 dump + 语义编译：`realBadFiles` 280/86/97 不变，**诊断集合无新增**，
 BC30452 下降（DnSpy 2→1、Debugger 3→1）。`verify-all` `hardFail=0 softFail=1`。
+
+### 8.111 C#：还原布尔区间表——共享真目标 brtrue 链的正向析取（2026-11-24，已修 §8.105）
+
+§8.105 定位到根因后，剩下的问题是「在哪一层还原」。前两次尝试（纯 De Morgan、含比较翻转的
+De Morgan）分别因为触发面太窄和守卫层数不够而放弃；这次把**嵌套守卫**也纳入模式，一次成型。
+
+**实现**：引擎新增 `CSharp/Transforms/ReconstructBooleanDisjunctionTransform.cs`
+（注册在 `CSharpDecompiler.astTransforms` 的 `PatternStatementTransform` 之后），
+在语法树层做两条语义恒等的改写：
+
+1. `if (K) { return E; } return true;` → `return !K || E;`
+   以及嵌套变体 `if (K) { if (C) { return E; } return false; } return true;`
+   → `return !K || (C && E);`
+2. `if (A) { return D || E; } return false;` → `return A && (D || E);`
+
+其中 `!K` 不是简单加个 `!`，而是**把取反推到底**：`!!x→x`、
+`!(p&&q)→!p||!q`、`!(p||q)→!p&&!q`，并且**翻转比较算子**
+（`>↔<=`、`<↔>=`、`==↔!=`）。最后一条正是 §8.105 复现实验的关键：
+Roslyn 早已把 `cp <= 879` 反转成 `cp > 879`，只有连比较一起翻才能拿回正向区间表。
+
+**触发条件（刻意收窄）**：只改带常量 `return true/false` 收尾的守卫；
+且要求取反推到底后 `!` 的个数严格减少（否则保持原样，2.3 对普通守卫也是保持原样的）；
+所有参与运算的子表达式都必须是 `bool`（用节点上的 `ResolveResult` 判定），
+避免对非布尔表达式生成非法的 `&&`/`||`。
+
+**结果**：`IsBadWpfFormatterChar` 现在与源码一致：
+
+```csharp
+return cp >= 768U && (cp <= 879U || (cp >= 1155U && cp <= 1161U) || ... || (cp >= 917760U && cp <= 917999U));
+```
+
+三操作数最小复现同样还原成 `return cp >= 768U && (cp <= 879U || cp == 1648 || cp == 3328);`。
+
+**A/B**（`lang-diff-all`）：
+
+| 语料 | C# identical / diffLines（前→后） | VB identical / diffLines（前→后） |
+| --- | --- | --- |
+| DnSpy | 980 / 8886 → 980 / **8831** | 824 / 10668 → 824 / **10631** |
+| Debugger | 240 / 1197 → 240 / 1197 | 214 / 1488 → 214 / 1488 |
+| Logic | 66 / 6147 → 66 / 6147 | 56 / 6207 → 56 / 6207 |
+
+**验证**：C# 与 VB 语料各自 dump + 语义编译，诊断集合与 `realBadFiles` **逐项不变**
+（VB 280/86/97；C# Logic 190 文件 / 172 real errors，与改前完全一致）；
+`verify-all` `hardFail=0 softFail=1`。
+
+**代价与风险**：改动集中在引擎语法树变换层，靠 `ResolveResult` 类型门禁 + 「取反后否定数必须
+变少」的收敛条件限定作用面；三份真实语料除目标形态外无回退。若日后发现误改写，
+回滚点单一（删掉该 transform 类与其两处注册即可）。
 
 **嵌套类型声明的委托——已补（2026-11-24）**：`SimpleTypeConverter.ParseListCallBack(Of Char, Integer)`
 原先命中不了，是因为 dnlib/cecil 的 `FullName` 用 `/` 分隔嵌套

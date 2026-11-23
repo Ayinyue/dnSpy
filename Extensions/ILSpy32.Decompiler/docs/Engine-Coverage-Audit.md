@@ -3214,3 +3214,42 @@ for (int j = 0; j < length; j = wsi + 1 - index) { ... if (wsi < 0) { sb.Append(
 （如 `AddHandler ev, New EventHandler(Of E)(AddressOf M)`）——`IsDelegateType` 收到的是
 `EventHandler<EditCompletedEventArgs>` 这类构造名，`type.Name` 匹配不上。语义等价、可编译，
 属可选风格项；`WpfUnicodeUtils` 的布尔塑形（§8.105）同理保留。
+**泛型委托这一条已于 2026-11-24 修复，见 §8.110。**
+
+### 8.110 VB：泛型委托的外层构造也简化成 `AddressOf`（2026-11-24，已修 §8.109「仍未做」）
+
+§8.109 收尾后 VB 里仍剩 `New EventHandler(Of E)(AddressOf M)`、`New Func(Of A, B)(AddressOf M)`
+这类**冗余外层构造**——可编译、语义等价，但 2.3 直接印 `AddressOf M`。三处原因叠加：
+
+1. `IsDelegateType` 收到的是**构造名**（`EventHandler<EditCompletedEventArgs>`），元数据只有泛型定义
+   （`EventHandler\`1`）。先 `StripGenericArgs` 拿 bare+arity 再查。
+2. 转发扫描对带 arity 的名字有歧义：`EventHandler\`1` 会同时命中导出的 `System.EventHandler`
+   与 `System.EventHandler\`1`，两个不同全名 → 「不唯一，返回 null」。改为匹配条件必须带上 arity
+   （`FullName == genericName || Name == genericName`），泛型/非泛型不再互相污染。
+3. 转发扫描的准入原本是「无点名字」，放宽为「无点 **或 `System.` 开头**」。副作用是
+   `Classify("System.Collections.ObjectModel.ReadOnlyCollection\`1<...>")` 也能解析了：
+   `BookmarkSettings.LabelsEquals` 的 `a == b`（源码 `ReadOnlyCollection<string>?`，C# 走引用比较）
+   现在译成 `a Is b`，而 2.3 译成 `=`（VB 默认对象比较，这里碰巧等价）。BC30452 因此减少。
+
+**位点**（VB 文本前后）：
+
+- `EditValueControl`/`EditValueImpl`/`EditValueImpl_UIControl`：`AddHandler ev, New EventHandler(Of E)(AddressOf Me.M)` → `AddHandler ev, AddressOf Me.M`。
+- `FontUtilities`：`__O._0___IsMonospacedFont = New Func(Of FontFamily, Boolean)(AddressOf ...)` → `= AddressOf ...`。
+- `XmlDocLoader`：`New Lazy(Of XmlDocumentationProvider)(New Func(Of XmlDocumentationProvider)(AddressOf ...))` → `New Lazy(Of XmlDocumentationProvider)(AddressOf ...)`。
+
+**A/B**（`lang-diff-all`，VB identical / diffLines）：
+
+| 语料 | §8.109 后 | 本修法 |
+| --- | --- | --- |
+| DnSpy | 824 / 10667 | 824 / 10668 |
+| Debugger | 214 / 1486 | 214 / 1488 |
+| Logic | 56 / 6207 | 56 / 6207 |
+
+diffLines 的微增全部来自 `BookmarkSettings` 变得比 2.3 **更精确**（见上第 3 点），不是回退。
+三份语料重新 dump + 语义编译：`realBadFiles` 280/86/97 不变，**诊断集合无新增**，
+BC30452 下降（DnSpy 2→1、Debugger 3→1）。`verify-all` `hardFail=0 softFail=1`。
+
+**仍未做**：**嵌套类型声明**的委托（`SimpleTypeConverter.ParseListCallBack(Of Char, Integer)`）
+仍带外层构造——dnlib/cecil 的 `FullName` 用 `/` 分隔嵌套（`SimpleTypeConverter/ParseListCallBack\`2`），
+而语法树印点号，简单名/全名两条路都命中不了；要做得引入「最后一个点换成斜杠」的候选名。
+`Thread` 这类**非委托**的构造调用继续保留（也不该简化）。

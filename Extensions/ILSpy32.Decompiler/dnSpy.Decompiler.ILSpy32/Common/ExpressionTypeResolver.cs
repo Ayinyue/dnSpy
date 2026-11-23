@@ -499,13 +499,18 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 			if (string.IsNullOrEmpty(typeName))
 				return false;
 			var name = Normalize(typeName);
-			var local = LookupLocalTypeDef(name);
+			// The syntax tree names constructed delegates ('EventHandler<E>', 'Func<A, B>');
+			// the metadata only has the generic definition ('EventHandler`1'). StripGenericArgs
+			// yields both the bare name and the arity so every lookup below can match.
+			var bare = StripGenericArgs(name, out var arity);
+			var local = LookupLocalTypeDef(bare, arity) ?? LookupLocalTypeDef(name);
 			if (local != null)
 				return IsMulticastDelegate(local.BaseType?.FullName);
-			var external = LookupExternalType(name);
+			var external = LookupExternalType(bare, arity) ?? LookupExternalType(name);
 			if (external != null)
 				return IsMulticastDelegate(external.BaseType?.FullName);
-			for (var type = GetRuntimeType(name)?.BaseType; type != null; type = type.BaseType) {
+			var runtimeType = GetRuntimeType(bare) ?? GetRuntimeType(name);
+			for (var type = runtimeType?.BaseType; type != null; type = type.BaseType) {
 				if (type.FullName == "System.MulticastDelegate")
 					return true;
 			}
@@ -936,9 +941,12 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 				// BCL facades type-forward most of the framework: 'ThreadStart' and 'Action' are
 				// defined in System.Private.CoreLib and show up as ExportedTypes (not Types) in
 				// every facade dnSpy references, so the scans above never see them. Follow the
-				// forwarder to its target; the full name must match exactly and a bare name that
-				// reaches more than one definition stays unknown rather than guessing.
-				if (result is null && name.IndexOf('.') < 0)
+				// forwarder to its target; the exported full name must match exactly and a bare
+				// name that reaches more than one definition stays unknown rather than guessing.
+				// The qualified form is what constructed BCL delegates arrive as
+				// ('System.EventHandler`1'); restricting it to 'System.*' keeps the extra scan
+				// off the hot path of ordinary unknown application types.
+				if (result is null && (name.IndexOf('.') < 0 || name.StartsWith("System.", StringComparison.Ordinal)))
 					result = LookupForwardedType(name, genericName, cecilModule);
 			}
 			externalTypes[cacheKey] = result;
@@ -946,6 +954,10 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 		}
 
 		Mono.Cecil.TypeDefinition LookupForwardedType(string name, string genericName, Mono.Cecil.ModuleDefinition cecilModule) {
+			// An arity-bearing request ('EventHandler`1') also matches the non-generic
+			// 'EventHandler' by simple name, which used to make the answer ambiguous and cost
+			// the whole lookup. The arity must therefore be part of the match; either side may
+			// be qualified ('System.EventHandler`1') or bare ('EventHandler`1').
 			var found = new List<Mono.Cecil.TypeDefinition>();
 			try {
 				foreach (var assemblyRef in cecilModule.AssemblyReferences) {
@@ -954,7 +966,10 @@ namespace dnSpy.Decompiler.ILSpy32.Common {
 					if (module is null)
 						continue;
 					foreach (var exported in module.ExportedTypes) {
-						if (exported.Name != name && (genericName == null || exported.Name != genericName))
+						var matches = genericName != null
+							? exported.FullName == genericName || exported.Name == genericName
+							: exported.FullName == name || exported.Name == name;
+						if (!matches)
 							continue;
 						var targetModule = ResolveAssembly(exported.Scope as Mono.Cecil.AssemblyNameReference)?.MainModule;
 						var targetType = targetModule?.GetType(exported.FullName);

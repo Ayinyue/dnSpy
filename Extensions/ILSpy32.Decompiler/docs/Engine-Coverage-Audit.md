@@ -3062,9 +3062,34 @@ VB 与 Logic 全同。`verify-all` `hardFail=0 softFail=1`（lang-diff VB 37→3
 （「不在任何区间」的反向形式）。两者语义等价，但**源码是正向区间**（Unicode 范围表），
 所以 2.3 贴源码、3.2 不贴，且 3.2 的反向形式明显更冗长。
 
-**未修**：这是布尔逻辑塑形问题（没有 De Morgan transform，反向形式直接来自 IL 的
-`brtrue` 链）。改成正向需要「把一连串 `!(A || B)` 重新组装成 `A || B`」的塑形，
-风险中等、收益是这一个类型（`U` 后缀差 8 处但 diffLines 主要来自这段）。
+**未修（2026-11-24 做了根因定位与一次引擎级尝试，见下）**：这是布尔逻辑塑形问题。
+改正向需要「把一连串 `!(A || B)` 重新组装成 `A || B`」，收益是这一个类型
+（`U` 后缀差 8 处，但 diffLines 主要来自这段）。
+
+**最小复现与 IL 结构**（`Repro.dll`，`R.F3(uint cp) => cp >= 768U && (cp <= 879U || cp == 1648U || cp == 3328U)`）：
+Roslyn 不生成单个「或」表达式，而是生成一条**共享真目标的 brtrue 链**：
+
+```
+ldarg.0; ldc.i4 768; blt.un.s Lfalse      // if (cp < 768) return false
+ldarg.0; ldc.i4 879; ble.un.s Ltrue       // if (cp <= 879) goto true
+ldarg.0; ldc.i4 1648; beq.s Ltrue         // if (cp == 1648) goto true
+ldarg.0; ldc.i4 3328; ceq; ret            // return cp == 3328   ← 最后一个操作数落在 fall-through
+Ltrue: ldc.i4.1; ret
+Lfalse: ldc.i4.0; ret
+```
+
+3.2 的 `StatementBuilder` 只能还原**fall-through 一侧**，于是得到
+`if (cp >= 768) { if (!(r1 || r2)) { return rn; } return true; } return false;`
+；2.3 的 ILAst 在表达式位置保留了 `&&`/`||`，能整条组装回正向区间表。
+注意 AST 上不存在 `Not(OrElse)` 可供反转：比较运算的极性（`<=` vs `>`）在更早的
+变换里就被推进去了，所以**语法树层面的 De Morgan 复原拿不回 2.3 的形式**
+（实测：对 `IsBadWpfFormatterChar` 加 AST 变换后输出一字未变——条件里根本没有 `!` 节点）。
+
+**结论**：这一项必须在 **ILAst/StatementBuilder 层**做（识别「多个 brtrue 指向同一个
+`return true` 块、最后一个操作数走 fall-through」这一形态并组装 `OrElse`），
+不能靠事后 AST 整形。已实现的 AST 版试验已回滚，仓库无残留。
+同类可复用的机制是 `StatementBuilder.TryTranslateShortCircuitReturn`
+（它只合并最后一条 `return`，覆盖不到这条链）。
 
 ### 8.106 VB：`a ?? (a = new D(...))` 的赋值被无条件提升（2026-11-20 发现并修复）
 

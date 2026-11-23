@@ -2272,6 +2272,14 @@ Block IL_0000 (incoming: 1) {
 > 且 3.2 的写法更贴源码（2.3 印 `CS$<>8__locals1.<>4__this`，3.2 直接 `context`）。
 > 机制与修复见 §8.74 末段（§8.80 / §8.82 / §8.83 / §8.84）。
 
+**另一处显式接口实现的差异（2026-11-20 复核发现，仍存在）**：同一个编译器生成的迭代器类
+`Scripting.UIUtils+<UIIter>d__2<T>` 的状态机方法，2.3 印
+`bool IEnumerator.MoveNext()`，3.2 印 `private bool MoveNext()`。源码是 `[CompilerGenerated]`
+状态机（源码文件里只有 `IEnumerable<T> UIIter(...)`），Roslyn 生成的就是 `private bool MoveNext()`，
+所以 **3.2 贴源码、2.3 多了 `IEnumerator.` 前缀**。两种写法都是合法 C#（前者显式实现、后者隐式
+实现），所以 C# 语义编译报告区分不出来，得直接对照源码/生成模式。要收敛成 2.3 那样需要给
+编译器生成的成员补接口前缀，收益仅限可读性，**未修**。
+
 **发现时的实测（2026-11-18）**：`MenuItemBase\`1`（`lang-diff`，`C# diffLines=146`）：
 
 **2.3**（纯元数据序，token 各不相同）

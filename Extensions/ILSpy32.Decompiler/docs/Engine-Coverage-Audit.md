@@ -2995,16 +2995,14 @@ Debugger 203→214、1522→1487；Logic 54→56、6270→6214；**C# 与 IL 全
 **修法**：`GetTypeNameText` 补两个分支，`this`/`base` 返回所在类型名
 （`methodNames` 的 key 是 `typeDef.Name` 与 `FullName`，与 `GetEnclosingTypeName` 一致）。
 
-**残余**：`New ThreadStart(AddressOf ...)` 的外层 `New ThreadStart(...)` 仍保留。
-插桩查清了原因：`VisitObjectCreateExpression` 的简化要求
-`typeResolver.IsDelegateType(objectCreateExpression.Type.ToString())`，而
-`ExpressionTypeResolver.IsDelegateType` 走 `LookupLocalTypeDef`/`LookupExternalType`/
-`GetRuntimeType`——它们都按**全名**查（`LookupExternalType` 用 `cecilModule.GetType(name)`
-并遍历 `AssemblyReferences`），而 C# 树里只有简单名 `ThreadStart`/`Action`，所以
-`IsDelegateType` 对这些常见委托一律返回 **false**（实测 `VOCE type=[ThreadStart]
-isDel=False`、`[Action] isDel=False`），简化逻辑基本从不触发。
-要修得让 `LookupExternalType` 支持简单名回退（按 `Type.Name` 在引用程序集里找），
-有同名类型误判的风险，**暂不做**。2.3 是 `New Thread(AddressOf M)`。
+**残余（已于 2026-11-24 修复，见 §8.109）**：`New ThreadStart(AddressOf ...)` 的外层
+`New ThreadStart(...)` 仍保留。当时的判断是「`LookupExternalType` 只认全名」；更准确的根因
+是它只扫 `MainModule.Types`，而 BCL 的 `ThreadStart`/`Action` 定义在 `System.Private.CoreLib`，
+dnSpy 引用的门面程序集（`System.Runtime`、`System.Threading.Thread`…）里只有类型转发
+（`ExportedTypes`），所以 `IsDelegateType` 对这些常见委托一律返回 false（实测
+`DELEGDBG name=[ThreadStart] ext=[<null>]`），简化逻辑基本从不触发。
+另外 VB 的输出本身还缺 `AddressOf`（编译报错 BC32008），那是 `IsMethodGroup` 认不出外部类型的
+静态方法组所致，同 §8.109 一并修掉。现在本类型印 `New Thread(AddressOf Me.ThreadMethodImpl)`，与 2.3 一致。
 
 ### 8.101 C#/VB：可空参数默认值印成 `default(T?)` 而非 `null`（2026-11-20 发现并修复）
 
@@ -3049,7 +3047,7 @@ VB 与 Logic 全同。`verify-all` `hardFail=0 softFail=1`（lang-diff VB 37→3
 | 控制流塑形 | §8.92/§8.72/§8.77：`SimplifyBranchChains` 的 leave 折叠，需循环感知重构，之前试过并踩到 `BlockContainer.CheckInvariant`，**未修** |
 | 变量/参数命名 | 3.2 与 2.3 各有胜负：§8.97（栈上值推断，已修）、§8.101（可空默认值，已修）；剩余是 foreach 变量推断名 vs PDB 名（如 `dotNetBaseDir` vs `info`）、拆分槽位（`info`/`info2`/`info3`）。**注意**：用「归一化标识符后比对行」来统计命名差异会被重复行放大，实测 1056 行里含大量误配 |
 | 操作符 / 扩展方法 | §8.50 的 `L`/`U` 后缀总体缺口（130 vs 38）主体仍未解 |
-| VB 侧 | `AsyncNodeProvider` 155 / `UIUtilities` 149：已修的 §8.100（this/base 方法组）、§8.98（参数名）、§8.99（抽象事件）之后，剩下的是委托构造外层（§8.100 残余，`IsDelegateType` 对简单名返回 false）与缓存委托展开 |
+| VB 侧 | `AsyncNodeProvider` 155 / `UIUtilities` 149：已修的 §8.100（this/base 方法组）、§8.98（参数名）、§8.99（抽象事件）之后，剩下的是委托构造外层（§8.100 残余，`IsDelegateType` 对简单名返回 false，**§8.109 已修**）与缓存委托展开 |
 
 **结论**：引擎在语义层面（内联、cast、checked、可空、命名推断、VB 修饰符）已经与 2.3
 对齐或更好；剩下的都是输出风格差异，且多数判定为「2.3 更差、不对齐」。
@@ -3088,13 +3086,12 @@ C# 侧是 `a ?? (a = new D(...))` 内联的，2.3 也是内联。**提升后赋�
 与 C# 侧一致；语料 VB DnSpy 10669→10673、Debugger 1487→1486、Logic 6214→6210（C#/IL 全同）；
 `verify-all` `hardFail=0 softFail=1`。
 
-**附记（未修）**：同一个文件里另一类差异来自 `ExpressionTypeResolver.IsDelegateType`——它走
-`LookupLocalTypeDef`/`LookupExternalType`/`GetRuntimeType`，三者都按**全名**查
-（`LookupExternalType` 的简单名回退也要求 `ResolveAssembly` 成功），而本仓引用的 BCL 程序集
-（`ThreadStart`/`Action` 等）不在探测目录里，解析不到，于是 `IsMethodGroup` 返回 false，
-输出退化成 `New Thread(New ThreadStart(Me.ThreadMethodImpl))`（2.3 是 `New Thread(AddressOf ...)`）。
-§8.100 的「外层委托构造仍冗余」就是这一处，需要让 `LookupExternalType` 支持简单名回退
-（有同名误判风险），暂不做。
+**附记（已于 2026-11-24 修复，见 §8.109）**：同一个文件里另一类差异来自 `ExpressionTypeResolver.IsDelegateType`——它走
+`LookupLocalTypeDef`/`LookupExternalType`/`GetRuntimeType`，而 BCL 的 `ThreadStart`/`Action`
+定义在 `System.Private.CoreLib`、只以类型转发形式出现在被引用程序集的 `ExportedTypes` 里，
+于是 `IsMethodGroup` / `IsDelegateType` 都返回 false，输出退化成
+`New Thread(New ThreadStart(Me.ThreadMethodImpl))`（2.3 是 `New Thread(AddressOf ...)`），
+且缺 `AddressOf` 直接触发 BC32008 编译错误。现在两处都已修（§8.109）。
 
 ### 8.107 循环出口点：循环头落到函数 return 时不再把「返回块」当出口（2026-11-23，部分修复 §8.92）
 
@@ -3150,19 +3147,70 @@ for (int j = 0; j < length; j = wsi + 1 - index) { ... if (wsi < 0) { sb.Append(
 |---|---|---|---|
 | C# Logic 1 | `Utilities.FrameworkFileUtils` (438) | 2.3 把 `frameworkAssemblyNamePrefixes` 的字段初始化展开成静态构造器 + **400+ 行 `hashSet.Add(...)`** | **2.3 更差**（§8.69 已记） |
 | C# Logic 2 | `Utilities.DotNetPathProvider` (373) | 3.2 把 `Enumerable.ToArray(Enumerable.Select(...))` 还原成查询表达式；foreach 变量名 3.2 推断 `dotNetBaseDir` vs 2.3 PDB `info`；同槽位拆成 `info`/`info2`/`info3` | **3.2 更贴源码**（LINQ 还原）；命名属细节 |
-| C# DnSpy 1/2 | `Utilities.UIUtilities` (152) | 缓存委托的展开方式（§8.106）+ guard shaping；参数默认值 `default(T?)` vs `null`（§8.101） | 均已定位，前者残余属 §8.100 |
-| VB DnSpy 1 | `TreeView.AsyncNodeProvider` (155) | 2.3 的 `Dim obj As Object = Me.lockObj; SyncLock obj` 多了临时量；3.2 委托构造冗余（§8.100 残余） | **3.2 更好**（少一个临时量） |
-| VB DnSpy 2 | `Scripting.UIUtils` (149) | 闭包还原（3.2 还原成局部 `f`，2.3 用 `CS$<>8__Locals1.f`）+ `New ThreadStart(AddressOf ...)` vs `AddressOf ...`（§8.100 残余） | **3.2 更贴源码**（闭包还原） |
+| C# DnSpy 1/2 | `Utilities.UIUtilities` (152) | 缓存委托的展开方式（§8.106）+ guard shaping；参数默认值 `default(T?)` vs `null`（§8.101） | 均已定位，前者残余已修（§8.109） |
+| VB DnSpy 1 | `TreeView.AsyncNodeProvider` (155) | 2.3 的 `Dim obj As Object = Me.lockObj; SyncLock obj` 多了临时量；3.2 委托构造冗余（§8.100 残余，§8.109 已修） | **3.2 更好**（少一个临时量） |
+| VB DnSpy 2 | `Scripting.UIUtils` (149) | 闭包还原（3.2 还原成局部 `f`，2.3 用 `CS$<>8__Locals1.f`）+ `New ThreadStart(AddressOf ...)` vs `AddressOf ...`（§8.100 残余，§8.109 已修） | **3.2 更贴源码**（闭包还原） |
 | VB Debugger 1 | `DbgCollectionChangedEventArgs\`1` (59) | 自动属性展开成 `<X>k__BackingField` + `[CompilerGenerated] get` | **2.3 更差**（§8.69 已记） |
 | VB Logic 1 | `Utilities.FrameworkFileUtils` (437) | 同 C# 侧：2.3 的静态构造器展开 | **2.3 更差** |
 
-未修的只剩两处「可选优化」，都影响很小且没有安全的收敛路径：
+未修的只剩一处「可选优化」；另一处于 2026-11-24 修复（§8.109）：
 
-1. **`IsDelegateType` 只认全名**（`ExpressionTypeResolver.cs:495`）：`LookupLocalTypeDef`/`LookupExternalType`
-   对 `ThreadStart`/`Action` 这类 BCL 委托返回 null，于是 `IsMethodGroup` false → 不简化
-   `new XxxDelegate(M)`。探测目录里没有这些 BCL 程序集（`[System.Object].Assembly.Location` 指向
-   PowerShell 的运行时目录，不含 `System.Private.CoreLib`/`System.Runtime`），给搜索目录也没用。
+1. ~~**`IsDelegateType` 只认全名**~~ **已修（§8.109）**：当时的判断（探测目录里没有 BCL 程序集）
+   是错的——32 个引用全部解析成功，缺的是**类型转发**这一步（`ThreadStart`/`Action` 定义在
+   `System.Private.CoreLib`，被引用程序集只导出 `ExportedTypes`）。补上 `LookupForwardedType`
+   与 `IsMethodGroup` 的 `MethodGroupResolveResult` 判定后，VB 语料的 BC32008 从 15 处降到 **0**。
 2. **循环塑形**（§8.92）：`SimplifyBranchChains` 的 leave 折叠需要 CFG 才能窄化，§8.107 只修了
    「循环头落到函数 return」这一种。
 
-两者都不再计入「待修语义缺陷」，仅作为后续可选优化记录。
+第 2 条不再计入「待修语义缺陷」，仅作为后续可选优化记录；第 1 条修复后也不再有已知的
+编译级（可复现诊断号）输出错误。
+
+### 8.109 VB 委托构造缺 `AddressOf`（BC32008）：类型转发解析 + 方法组注解（2026-11-24，已修 §8.100/§8.106 残余）
+
+**这不是风格问题**。VB 的 `New XxxDelegate(M)` 要求唯一实参是 `AddressOf`/lambda，
+否则一律报 **BC32008**（实测最小工程 3 处全错：`ThreadStart`/`Action`，`Option Strict` 开关无关）。
+语料实测（`baseline compile`）：DnSpy VB **13** 处、Logic **2** 处、Debugger **0** 处——
+即这些反编译结果根本编译不过。
+
+两个独立根因（都在 app 层，与引擎无关）：
+
+1. **`IsDelegateType` 认不出 BCL 委托**（`Common/ExpressionTypeResolver.cs`）。
+   `LookupExternalType` 只扫 `MainModule.Types`；而 .NET Core 里 `ThreadStart`/`Action`/
+   `Func<,>` 都定义在 `System.Private.CoreLib`，dnSpy 引用的 32 个程序集全部解析成功，
+   但 `System.Runtime`、`System.Threading.Thread` 等门面只把它们列为 **ExportedTypes（类型转发）**
+   （插桩实证：`FORWARD System.Threading.Thread -> System.Threading.ThreadStart`）。
+   于是 `VisitObjectCreateExpression` 的「`new D(AddressOf M)` → `AddressOf M`」简化永不触发，
+   即使参数已有 `AddressOf`，外层 `New XxxDelegate(...)` 也保留（这种还能编译）。
+   **修法**：新增 `LookupForwardedType`——简单名兜底时按 `ExportedTypes` 的 `Scope` 把转发
+   解析到目标程序集再取定义；要求解析到的元数据全名唯一，否则保持未知（不猜）。
+2. **`IsMethodGroup` 认不出外部类型的静态方法组**（`VisualBasic/ILSpyEnvironmentProvider32.cs`）。
+   名字回退表只记录**本类型**的成员名，`File.Exists` 这类「外部类型.方法」查不到，
+   参数保持裸成员访问，于是连 `AddressOf` 都没有 → BC32008。
+   **修法**：先看 3.2 树上的 `MethodGroupResolveResult` 注解——C# 解析器对「用作委托值的
+   方法引用」就打这个注解，有就判真（仍保留「调用目标不转」的既有排除）。
+
+**A/B**（`lang-diff-all`，本轮前后）：
+
+| 语料 | VB identical / diffLines | C# identical / diffLines |
+| --- | --- | --- |
+| 基线（§8.107 收尾时） | DnSpy 824 / 10670；Debugger 214 / 1486；Logic 56 / 6210 | DnSpy 980 / 8886；Debugger 240 / 1197；Logic 66 / 6147 |
+| 本修法 | DnSpy 824 / 10667；Debugger 214 / 1486；Logic 56 / 6207 | 同上（逐字段未变） |
+
+**具体位点**（VB 文本前后）：
+
+- `TreeView.AsyncNodeProvider..ctor`：`New Thread(New ThreadStart(Me.ThreadMethodImpl))` →
+  `New Thread(AddressOf Me.ThreadMethodImpl)`（= 2.3）。
+- `MVVM.Dialogs.ProgressVM`：`Call New Thread(New ThreadStart(Me.ThreadProc)).Start()` →
+  `Call New Thread(AddressOf Me.ThreadProc).Start()`。
+- `Decompiler.XmlDoc.XmlDocLoader`：`New Func(Of String, Boolean)(File.Exists)` →
+  `New Func(Of String, Boolean)(AddressOf File.Exists)`。
+
+**验证**：三份 VB 语料重新 dump + 语义编译，**BC32008 13/2/0 → 0/0/0**；
+`realBadFiles` DnSpy 281→280、Debugger 86→86、Logic 97→97；
+两两 A/B（只加第 2 条修法）除 Logic 少 1 个 BC32008 外**诊断集合零变化**，没有引入新诊断号。
+`verify-all` `hardFail=0 softFail=1`。
+
+**仍未做**：泛型委托（`EventHandler(Of T)`/`Func(Of T,...)`）的**冗余外层构造**仍在
+（如 `AddHandler ev, New EventHandler(Of E)(AddressOf M)`）——`IsDelegateType` 收到的是
+`EventHandler<EditCompletedEventArgs>` 这类构造名，`type.Name` 匹配不上。语义等价、可编译，
+属可选风格项；`WpfUnicodeUtils` 的布尔塑形（§8.105）同理保留。

@@ -3482,3 +3482,26 @@ long→native int 转换。C# 编译器对数组下标的 long 索引正是发�
   与「保留完整 3.2 结构」的我们相反，集成模型不可直接互换。
 - 其余四条（`ilspyv3-old` / `ilspyv2` / `newdecompiler` / `master`）要么冻结、要么属于另一套 2.3 体系或更老，
   没有合并价值；merge-base 普遍在 2016–2018 年，硬合并不现实。
+
+### 8.116 对齐 upstream/master（dnSpyEx/dnSpy，23 提交）到本分支（2026-11-25）
+
+**合并**：`upstream/master` (`bb09d2c54`) → `feature/ilspy32`，合并提交 `b23e2d858`（merge-base
+`ae4df33be`）。带入 .slnx 取代 .sln、`DnSpyCommon.props` 升到 net48;net11.0-windows、
+`runtime-async=on`、x86 apphost LAA 补丁、legacy 子模块指针三连跳等。
+
+**冲突与处置**：
+- `dnSpy.sln` modify/delete：接受删除，改用 `dnSpy.slnx` 并把 ILSpy32 扩展与引擎两个项目加回
+  解决方案（上游 slnx 原本只列 legacy `dnSpy.Decompiler.ILSpy(.Core)`）。
+- legacy 子模块：**不采用**上游的 dnSpyEx/ILSpy `bba34e856`，保持本 fork `ilspyv2` `04a711db`。原因：
+  `ICSharpCode.NRefactory.VB32` 以链接文件方式编译该树 `NRefactory.VB` 的 AST 源码，而 dnSpyEx 侧
+  已无 TupleExpression / CallStatement / RaiseEventStatement 这些节点（其 `Ast/Generated.cs` 整段被注释），
+  换过去会直接编译失败。这是有意偏离，需长期保留。
+- `netcorefiles` 与 `Roslyn.ExpressionCompiler` 两个子模块：上游指针比本 fork 主仓更旧
+  （`919e8396d`/`6e3e699b`），合并时回退为上游值；已改回本 fork 的 `9b9caf348`/`3bf7481ef`。
+
+**工具链适配**：本机安装 .NET 11 SDK（11.0.100）；probe/sp-test TFM → net11(.0|-windows)，
+`verify-all.ps1` 路径与 `-f` 参数、CI workflow（setup-dotnet 11、solution 改 slnx、advisory 产物路径）同步；
+`verify-all` 在设置了 `DOTNET_ROOT` 时优先用其中的 dotnet，避免命中系统 SDK 10。
+
+**验证**：`dotnet build dnSpy.slnx -c Release -m:1` 0 错误；`verify-all` `hardFail=0 softFail=1 skip=0`
+（report `baseline/out/verify-20261125-004754.txt`），语料数字与合并前一致。

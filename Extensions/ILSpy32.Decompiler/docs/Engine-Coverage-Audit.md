@@ -3442,3 +3442,18 @@ DnSpy VB 824/10631→**848/10570**，Debugger/Logic 四项完全不变（240/119
   当时的「未生效」是 probe 引擎副本过期造成的误判。
 - §8.34 缓存事件委托内联早已修复（见该节）。仍未闭合的只剩 §8.55 的 `checked((IntPtr)x)`：
   `HexBytes` 2.3 有 84 处 `checked(`、3.2 有 104 处，另有 `(int)` 包裹缺失，待后续处理。
+
+### 8.114 §8.55/§8.50 残留裁决：`checked((IntPtr)x)` 属「2.3 更差」，不对齐
+
+**IL 实证**：`HexBytes.get_Item(long)` 的方法体 IL 是 `conv.ovf.signed i8->i`——带 ovf 前缀的
+long→native int 转换。C# 编译器对数组下标的 long 索引正是发这条指令，源语义包含溢出检查。
+2.3 输出 `(int)((IntPtr)index)`（丢掉 checked），3.2 输出 `(int)checked((IntPtr)index)`（保留）。
+所以这不是 3.2 凭空多标注，而是 2.3 丢掉了 IL 里的溢出语义。
+
+**VB 旁证**：同类型构造函数里，2.3 打印 `CLng(validBytes.Length) <> CLng(bytes.Length)`，
+3.2 打印 `validBytes.Length <> bytes.LongLength`；源码第 84 行写的是 `bytes.LongLength`——2.3 把属性
+解析成了 `Length` 并额外套 `CLng`，说明该处 2.3 连源码都未对上。
+
+**结论**：按 §8.69 判据「若 2.3 更差/风格差异则不对齐」，本项关闭，引擎不动。
+量级参考：DnSpy 语料 C# `checked(` 2.3 有 84 处、3.2 有 104 处（多为 2.3 漏标）；
+`HexBytes` 单类型两侧计数其实相同（各 16 处），差异只在放置位置与 `(int)` 包裹。

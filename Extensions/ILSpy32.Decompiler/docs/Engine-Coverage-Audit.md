@@ -3056,7 +3056,7 @@ VB 与 Logic 全同。`verify-all` `hardFail=0 softFail=1`（lang-diff VB 37→3
 
 | 类别 | 状态 |
 |---|---|
-| 控制流塑形 | §8.92/§8.72/§8.77：`SimplifyBranchChains` 的 leave 折叠，需循环感知重构，之前试过并踩到 `BlockContainer.CheckInvariant`，**未修** |
+| 控制流塑形 | §8.92/§8.72/§8.77：`SimplifyBranchChains` 的 leave 折叠，需循环感知重构，之前试过并踩到 `BlockContainer.CheckInvariant`。**2026-11-24 复核关闭**：§8.77 的实例已由 §8.107 修好，`ProfileOptimizationHelper` 逐行比对显示 3.2 就是源码形态、2.3 反而多临时量；剩余为语义等价的 `for`/`while` 与变量提升（§8.69 判据：不对齐） |
 | 变量/参数命名 | 3.2 与 2.3 各有胜负：§8.97（栈上值推断，已修）、§8.101（可空默认值，已修）；剩余是 foreach 变量推断名 vs PDB 名（如 `dotNetBaseDir` vs `info`）、拆分槽位（`info`/`info2`/`info3`）。**注意**：用「归一化标识符后比对行」来统计命名差异会被重复行放大，实测 1056 行里含大量误配 |
 | 操作符 / 扩展方法 | §8.50 的 `L`/`U` 后缀总体缺口（130 vs 38）主体仍未解 |
 | VB 侧 | `AsyncNodeProvider` 155 / `UIUtilities` 149：已修的 §8.100（this/base 方法组）、§8.98（参数名）、§8.99（抽象事件）之后，剩下的是委托构造外层（§8.100 残余，`IsDelegateType` 对简单名返回 false，**§8.109 已修**）与缓存委托展开 |
@@ -3065,6 +3065,7 @@ VB 与 Logic 全同。`verify-all` `hardFail=0 softFail=1`（lang-diff VB 37→3
 对齐或更好；剩下的都是输出风格差异，且多数判定为「2.3 更差、不对齐」。
 继续压缩 diffLines 的边际收益已明显下降，建议转向 **§8.92 循环塑形** 这个唯一的
 大语义类，或按 §8.69 的判据把剩余风格项正式归为「不对齐」。
+（后续：两条都已执行——§8.92 于 2026-11-24 复核关闭，§8.105 于同日由 §8.111 修复。）
 
 ### 8.105 `WpfUnicodeUtils`：同一区间表的两种写法（语义等价，不贴源码）
 

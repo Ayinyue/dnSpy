@@ -87,9 +87,9 @@
 
 `.github/workflows/ilspy32-verify.yml` 已在每 push/PR 跑 `verify-all.ps1`（重建引擎/扩展/probe → 硬门 + 软门 → 归档报告），并把 `baseline/out/verify-*.txt` 作为 artifact。以下两点仍需在换机/换镜像时留意：
 
-1. **`build.ps1 net` 只构建 net10.0-windows**；`verify-all` 内部还会跑 `Build-NetFramework`（net48）。GitHub `windows-latest` 是否带 net48 引用集取决于镜像，若不可用，把 `verify-all` 里 `Build-NetFramework` 那一步在 CI 中跳过（本地仍需跑），只保留：
+1. **`build.ps1 net` 只构建 net11.0-windows**；`verify-all` 内部还会跑 `Build-NetFramework`（net48）。GitHub `windows-latest` 是否带 net48 引用集取决于镜像，若不可用，把 `verify-all` 里 `Build-NetFramework` 那一步在 CI 中跳过（本地仍需跑），只保留：
    ```
-   dotnet build -c Release -f net10.0-windows <扩展 csproj>
+   dotnet build -c Release -f net11.0-windows <扩展 csproj>
    dotnet build -c Release <引擎 csproj>
    dotnet build -c Release <probe csproj>
    probe engine-tests / ilast-verify / mixed-verify / settings-wiring

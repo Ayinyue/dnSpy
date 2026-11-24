@@ -4,10 +4,10 @@
 # feature/ilspy32（以及 master）上跑反编译质量门，是引擎升级的验收线。
 #
 # 顺序有讲究（审计 §8.60 / §8.63）：
-#   1) 先按手工命令构建引擎 + net10 扩展（verify-all 会复用这两份产物）；
+#   1) 先按手工命令构建引擎 + net11 扩展（verify-all 会复用这两份产物）；
 #   2) 再跑 verify-all（语料 + IL + bench），此时产物是干净的；
-#   3) 最后才构建 dnSpy.sln —— 它会激活引擎 DLL 里的 Debug.Assert，
-#      所以必须放在所有门禁之后，且必须 -m:1（并行构建会偶发把 net10 的
+#   3) 最后才构建 dnSpy.slnx —— 它会激活引擎 DLL 里的 Debug.Assert，
+#      所以必须放在所有门禁之后，且必须 -m:1（并行构建会偶发把 net11 的
 #      System.Runtime 解析进 net48 编译）。
 name: ILSpy 3.2 verify
 
@@ -36,7 +36,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v6.0.0
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
           dotnet-quality: ga
 
       - uses: actions/setup-python@v6.0.0
@@ -52,14 +52,14 @@ jobs:
 
       # 先构建解决方案：probe 的 compile-only 引用（dnlib / dnSpy.Contracts.* /
       # Mono.Cecil）都以 dnSpy bin 下的产物为 HintPath，必须先有那份产物。
-      # 必须 -m:1：dnSpy.sln 会激活引擎 DLL 里的 Debug.Assert（§8.63），并行构建
-      # 还会偶发把 net10 的 System.Runtime 解析进 net48 编译（§8.60）。
+      # 必须 -m:1：dnSpy.slnx 会激活引擎 DLL 里的 Debug.Assert（§8.63），并行构建
+      # 还会偶发把 net11 的 System.Runtime 解析进 net48 编译（§8.60）。
       - name: Build solution (-m:1)
-        run: dotnet build dnSpy.sln -c Release -m:1 --nologo -v q
+        run: dotnet build dnSpy.slnx -c Release -m:1 --nologo -v q
 
       # 语料门：9 道（IL 全一致 / C#+VB 三程序集 / bench 性能）。
-      # 不带 -NoBuild：verify-all 会按手工命令重建引擎 + net10 扩展 + probe，
-      # 这正是 §8.63 要求的「门禁前干净重构建」，避免复用到被 dnSpy.sln 污染的产物。
+      # 不带 -NoBuild：verify-all 会按手工命令重建引擎 + net11 扩展 + probe，
+      # 这正是 §8.63 要求的「门禁前干净重构建」，避免复用到被 dnSpy.slnx 污染的产物。
       - name: verify-all (corpus + IL + bench)
         run: |
           Extensions/ILSpy32.Decompiler/baseline/verify-all.ps1
@@ -124,7 +124,7 @@ jobs:
           $dump = "$env:TEMP\ilspy32-verify-dump"
           $log = "$env:TEMP\ilspy32-src-check.log"
           Remove-Item $log -ErrorAction SilentlyContinue
-          $out = dotnet run -c Release --project Extensions/ILSpy32.Decompiler/baseline -- dump --asm "dnSpy/dnSpy/bin/Release/net10.0-windows/dnSpy.Contracts.DnSpy.dll" --impl ilspy32 --lang cs --out $dump --dnspy-dir "dnSpy/dnSpy/bin/Release/net10.0-windows" --all 2>&1 | Out-String
+          $out = dotnet run -c Release --project Extensions/ILSpy32.Decompiler/baseline -- dump --asm "dnSpy/dnSpy/bin/Release/net11.0-windows/dnSpy.Contracts.DnSpy.dll" --impl ilspy32 --lang cs --out $dump --dnspy-dir "dnSpy/dnSpy/bin/Release/net11.0-windows" --all 2>&1 | Out-String
           $dumpCode = $LASTEXITCODE
           $out | Tee-Object -FilePath $log
           if ($dumpCode -ne 0) { Write-Host "dump failed: $dumpCode"; exit $dumpCode }

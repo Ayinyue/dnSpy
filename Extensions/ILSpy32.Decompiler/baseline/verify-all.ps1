@@ -17,13 +17,16 @@ $ErrorActionPreference = 'Stop'
 $baseline = $PSScriptRoot
 $extDir = (Resolve-Path "$baseline\..").Path
 $repo = (Resolve-Path "$baseline\..\..\..").Path
-$dnspyBin = "$repo\dnSpy\dnSpy\bin\$Configuration\net10.0-windows"
+$dnspyBin = "$repo\dnSpy\dnSpy\bin\$Configuration\net11.0-windows"
 $probeDir = "$baseline\probe"
-$probe = "$probeDir\bin\$Configuration\net10.0-windows\m3probe.dll"
-$spTest = "$probeDir\sp-test\bin\Debug\net10.0\SpTestAssembly.dll"
+$probe = "$probeDir\bin\$Configuration\net11.0-windows\m3probe.dll"
+$spTest = "$probeDir\sp-test\bin\Debug\net11.0\SpTestAssembly.dll"
 $logic = "$dnspyBin\dnSpy.Contracts.Logic.dll"
 $path23 = "$baseline\ilspy23"
 $outDir = "$baseline\out"
+# 统一 dotnet 解析：优先用 DOTNET_ROOT 指定的 SDK（本分支对齐上游后为 .NET 11）。
+$dotnetExe = 'dotnet'
+if ($env:DOTNET_ROOT -and (Test-Path (Join-Path $env:DOTNET_ROOT 'dotnet.exe'))) { $dotnetExe = Join-Path $env:DOTNET_ROOT 'dotnet.exe' }
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $report = "$outDir\verify-$(Get-Date -Format 'yyyyMMdd-HHmmss').txt"
 
@@ -47,7 +50,7 @@ function Invoke-Probe([string[]]$ProbeArgs, [string]$Name, [switch]$Soft, [switc
 	# 探针会把诊断写到 stderr；在 Stop 模式下那会变成终止性 NativeCommandError。
 	$prev = $ErrorActionPreference
 	$ErrorActionPreference = 'Continue'
-	$out = & dotnet $probe @ProbeArgs 2>&1
+	$out = & $dotnetExe $probe @ProbeArgs 2>&1
 	$code = $LASTEXITCODE
 	$ErrorActionPreference = $prev
 	$code = $LASTEXITCODE
@@ -80,7 +83,7 @@ if (-not $NoBuild) {
 	Write-Report "--- build ---"
 	$buildSteps = @(
 		@("$extDir\ICSharpCode.Decompiler\ICSharpCode.Decompiler\ICSharpCode.Decompiler.csproj", '-c', $Configuration),
-		@("$extDir\dnSpy.Decompiler.ILSpy32\dnSpy.Decompiler.ILSpy32.csproj", '-c', $Configuration, '-f', 'net10.0-windows'),
+		@("$extDir\dnSpy.Decompiler.ILSpy32\dnSpy.Decompiler.ILSpy32.csproj", '-c', $Configuration, '-f', 'net11.0-windows'),
 		@("$probeDir\m3probe.csproj", '-c', $Configuration),
 		# engine-tests 需要这个测试程序集；它的 bin 输出不入库，CI 干净环境必须现场构建。
 		@("$probeDir\sp-test\SpTest.csproj", '-c', 'Debug')
@@ -89,7 +92,7 @@ if (-not $NoBuild) {
 		$proj = $step[0]
 		$args = $step[1..($step.Length - 1)]
 		Write-Report ("build {0}" -f (Split-Path $proj -Leaf))
-		& dotnet build $proj @args --nologo -v q 2>&1 | Write-Host
+		& $dotnetExe build $proj @args --nologo -v q 2>&1 | Write-Host
 		if ($LASTEXITCODE -ne 0) {
 			Write-Report "FAIL build $(Split-Path $proj -Leaf)"
 			$script:hard++
@@ -139,12 +142,12 @@ foreach ($corpusAsm in @('dnSpy.Contracts.DnSpy.dll', 'dnSpy.Contracts.Debugger.
 	Invoke-Probe @('lang-diff-all', "$dnspyBin/$corpusAsm", $dnspyBin, $path23, 'Visual') "corpus VB: $corpusAsm" -Soft
 }
 
-# 双 TFM 门禁：net10.0-windows + net48 都要 0 错误。审计 §8.60 记录过并行构建会偶发把
-# net10 的 System.Runtime 解析进 net48 编译（错误数在 0/2/8/10 之间跳），必须 -m:1。
-# 另外 §8.63：本脚本前面的手工重构建会覆盖掉 dnSpy.sln 的产物，所以这道门跑之前
-# 不要在本进程外再跑 dnSpy.sln（跑了就再手工重构建一次引擎+扩展）。
-Write-Host "gate: solution build (net10.0-windows + net48, -m:1)" -ForegroundColor Cyan
-$buildOutput = & dotnet build "$repo\dnSpy.sln" -c $Configuration -m:1 --nologo -v q 2>&1
+# 双 TFM 门禁：net11.0-windows + net48 都要 0 错误。审计 §8.60 记录过并行构建会偶发把
+# net11 的 System.Runtime 解析进 net48 编译（错误数在 0/2/8/10 之间跳），必须 -m:1。
+# 另外 §8.63：本脚本前面的手工重构建会覆盖掉 dnSpy.slnx 的产物，所以这道门跑之前
+# 不要在本进程外再跑 dnSpy.slnx（跑了就再手工重构建一次引擎+扩展）。
+Write-Host "gate: solution build (net11.0-windows + net48, -m:1)" -ForegroundColor Cyan
+$buildOutput = & $dotnetExe build "$repo\dnSpy.slnx" -c $Configuration -m:1 --nologo -v q 2>&1
 $buildErrorCount = @($buildOutput | Select-String -Pattern ': error ' ).Count
 if ($buildErrorCount -eq 0) {
 	Write-Report "PASS solution build (-m:1)"
@@ -152,20 +155,20 @@ if ($buildErrorCount -eq 0) {
 	$script:hard++
 	Write-Report "FAIL solution build (-m:1) : errors=$buildErrorCount"
 }
-# dnSpy.sln 的产物会把引擎 DLL 换成激活 Debug.Assert 的那份（§8.63），之后任何
+# dnSpy.slnx 的产物会把引擎 DLL 换成激活 Debug.Assert 的那份（§8.63），之后任何
 # -NoBuild 的门都会崩。这里把引擎+扩展重构建回来，把工作区恢复成可门禁状态。
 Write-Host "gate: restore engine after solution build" -ForegroundColor Cyan
 # 解决方案构建的 MSBuild 节点会继续占着引擎 DLL，先关掉再重构建。
-& dotnet build-server shutdown 2>&1 | Write-Host
+& $dotnetExe build-server shutdown 2>&1 | Write-Host
 foreach ($proj in @(
 		"$extDir\ICSharpCode.Decompiler\ICSharpCode.Decompiler\ICSharpCode.Decompiler.csproj",
 		"$extDir\dnSpy.Decompiler.ILSpy32\dnSpy.Decompiler.ILSpy32.csproj")) {
 		$args = @('-c', $Configuration)
-		if ($proj -like '*dnSpy.Decompiler.ILSpy32*') { $args += @('-f', 'net10.0-windows') }
-		# 紧跟在 dnSpy.sln 之后跑，MSBuild 节点可能还占着文件，重试。
+		if ($proj -like '*dnSpy.Decompiler.ILSpy32*') { $args += @('-f', 'net11.0-windows') }
+		# 紧跟在 dnSpy.slnx 之后跑，MSBuild 节点可能还占着文件，重试。
 		$ok = $false
 		for ($try = 1; $try -le 3; $try++) {
-			$restoreOut = & dotnet build $proj @args --nologo -v q 2>&1
+			$restoreOut = & $dotnetExe build $proj @args --nologo -v q 2>&1
 			$restoreErr = @($restoreOut | Select-String -Pattern ': error ').Count
 			if ($restoreErr -eq 0) { $ok = $true; break }
 			$restoreOut | Select-Object -First 12 | ForEach-Object { Write-Host "    $_" }

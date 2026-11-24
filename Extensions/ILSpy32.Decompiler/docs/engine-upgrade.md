@@ -2,15 +2,18 @@
 
 状态：**手册**（2026-11-16 建立）。目的：把「换引擎版本」从一次性手工工程变成可重复流程。
 
+> 2026-11-24 更新：§0 的可克隆性问题已按方案 A 解决（提交已进远端分支）；子仓提交数从 8 增至 73。
+
 ## 0. 现状与硬伤
 
 - 3.2 引擎子模块 `Extensions/ILSpy32.Decompiler/ICSharpCode.Decompiler/` pin 在 `v3.2.0` 之上，
-  dnSpy 侧改动**已提交进子模块**：`git log v3.2.0..HEAD` 共 8 个提交（见下表），
-  主仓库通过 submodule 指针 pin 住（当前 `48953af`）。
-- **硬伤**：这 8 个提交**不在任何远端分支上**（`git branch -r --contains <sha>` 为空），
-  子模块还是 shallow（本地只有 `v3.2.0` 一个标签）。因此
-  「`git submodule update` 即可拿到完整补丁状态」**对新克隆不成立**——新克隆只会拿到
-  pristine `v3.2.0`，缺全部 dnSpy 改动。
+  主仓库通过 submodule 指针 pin 住（当前 `fe050fd07`）。`git log v3.2.0..HEAD` 共 **73** 个提交
+  （2026-11-16 起，含审计文档 §8.x 各轮反编译修复）。
+- **可克隆性（方案 A 已完成）**：dnSpy 侧提交已全部推到 fork 分支
+  `origin/feature/ilspy32-upstream-port`（HEAD = `fe050fd07`），`.gitmodules` 也已配
+  `branch = feature/ilspy32-upstream-port`，所以新克隆 `git submodule update --init` 能拿到补丁态。
+  遗留：本地子模块仍是 shallow；需要完整历史时执行
+  `git -C Extensions/ILSpy32.Decompiler/ICSharpCode.Decompiler fetch --unshallow`。
 - `engine.patch` / `apply-engine-patch.ps1` 是**过渡产物**：patch 只是 pristine `v3.2.0` 的引导
   （含构建配置与 `IntroduceUsingDeclarations` 的一小部分），脚本仅在 HEAD==`v3.2.0` 时应用。
 
@@ -18,11 +21,11 @@
 
 | 方案 | 做法 | 代价 |
 |---|---|---|
-| A（推荐） | 把子模块的 dnSpy 提交推到 fork 分支（如 `Ayinyue/ILSpy` 的 `dnspy32`），`.gitmodules` 加 `branch = dnspy32`，并 `git fetch --unshallow` | 需要远端权限；一次配置长期受益 |
+| A（已采用） | 把子模块的 dnSpy 提交推到 fork 分支 `Ayinyue/ILSpy` 的 `feature/ilspy32-upstream-port`，`.gitmodules` 加 `branch = feature/ilspy32-upstream-port`，本地按需 `git fetch --unshallow` | 已完成（2026-11-24） |
 | B | 改为 vendored 源码：把引擎源码复制进仓库（不用 submodule），patch 队列用 `git format-patch` 管理 | 仓库变大；丢失上游 diff 视图 |
 | C | 保留 submodule，但把 8 个提交导出为 `patches/*.patch` 入库，并写脚本在 pristine 标签上按序 `git am` | 每次升级要维护 patch 队列 |
 
-## 1. 现有 8 个提交（按主题）
+## 1. 提交构成（v3.2.0..HEAD 共 73 个，下表为首批 8 个）
 
 | 提交 | 主题 | 类别 | 升级时 |
 |---|---|---|---|
@@ -71,16 +74,18 @@
 
 对拍（2.3 归档可用时）：`dnSpy.Console -l "IL"` vs `-l "IL (ILSpy 3.2)"`，`--md`/`-t` 逐字 diff = 0。
 
-## 4. 建议新增的验证资产（尚未做）
-
-- `verify-all` 编排脚本：一条命令跑完上表并归档报告。
-- 黄金基线入库（`baseline/out/` 目前被 gitignore）。
-- 把 `run-regression*.cmd` 接进 CI（`.github/workflows/build.yml` 目前只 build）。
+## 4. 验证资产现状（2026-11-24 更新）
+- ✅ `verify-all` 编排脚本：`baseline/verify-all.ps1` 一条命令跑完硬门/软门并归档
+`  `baseline/out/verify-<ts>.txt`；已接进 CI（`.github/workflows/ilspy32-verify.yml`，
+  job `ilspy32-verify` 每 push/PR 运行）。
+- ⬜ 黄金基线入库：`baseline/out/` 目前仍被 gitignore，跨机对比需要固定快照。
+- ⬜ `run-regression*.cmd` 接入 CI：CI 目前只跑 `verify-all`，回归脚本仍靠手动。
+- ⬜ 统一基线数字来源：`run-regression.cmd` / audit / VB-Action-Plan 三处数字仍有漂移。
 - 统一基线数字来源（`run-regression.cmd` / audit / VB-Action-Plan 三处数字漂移）。
 
-## 8. CI 验收（建议接线方式）
+## 8. CI 验收（已接线，保留注意事项）
 
-仓库已有 `verify-all.ps1`（重建引擎/扩展/probe → 硬门 + 软门 → 归档报告）。接进 CI 时注意两点：
+`.github/workflows/ilspy32-verify.yml` 已在每 push/PR 跑 `verify-all.ps1`（重建引擎/扩展/probe → 硬门 + 软门 → 归档报告），并把 `baseline/out/verify-*.txt` 作为 artifact。以下两点仍需在换机/换镜像时留意：
 
 1. **`build.ps1 net` 只构建 net10.0-windows**；`verify-all` 内部还会跑 `Build-NetFramework`（net48）。GitHub `windows-latest` 是否带 net48 引用集取决于镜像，若不可用，把 `verify-all` 里 `Build-NetFramework` 那一步在 CI 中跳过（本地仍需跑），只保留：
    ```

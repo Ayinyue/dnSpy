@@ -3412,3 +3412,33 @@ VB 版同病（`Dim __c__DisplayClass14_ As ...` 之后直接 `__c__DisplayClass
 
 **风险**：改动只在「原本会泄漏容器访问」的分支上生效（`MatchesTargetOrCopyLoad` + `translatedDisplayClasses` 双重门禁），
 正常已转换路径不变。
+
+### 8.113 C#/VB：数值字面量不再被强加显式用户定义转换（`(HexPosition)16` / `CType(16, HexPosition)`）
+
+**现象**：dnSpy.Hex 语料里 3.2 给每个与 `HexPosition` 运算的整数字面量都加了显式转换，
+例如 `span.Length != (HexPosition)16`、`pos + (HexPosition)4`、`new BufferField((HexPosition)10) { ... }`；
+VB 同形（`CType(16, HexPosition)`）。2.3 只打印裸字面量。语料统计：C# 全库 2.3 有 2 处、
+3.2 有 111 处 `(HexPosition)`（多 109）；VB 对应 `CType(N, HexPosition)` 为 1 对 109。
+这些位置都是 `HexSpan.Length`（类型即 `HexPosition`）与 int 常量比较/运算。
+
+**根因**：`TranslatedExpression.ConvertTo` 用 `resolver.ResolveCast` 判定，而该调用把
+`HexPosition.op_Implicit` 报成 **explicit**（rrConst=False），于是既进不了「编译期常量跳过 cast」
+的捷径，又走 fall-through 生成 `CastExpression`。对比 `conversions.ImplicitConversion` 则认为
+这是合法的隐式用户定义转换——两处判定口径不一致才是问题所在。
+
+**修法**：在 `ConvertTo` 开头增加一条窄门禁——当源是 `ConstantResolveResult` 且
+`conversions.ImplicitConversion(...)` 有效且 `IsUserDefined` 时直接返回原表达式，不生成 cast。
+只影响「字面量 + 隐式用户定义转换」这一类；非字面量操作数（`(int)d[i]` 之类）与内置数值转换
+（`1L` 后缀路径）行为不变。
+
+**A/B**：`GuidData` C# diffLines 11→0、VB 12→1；三语料六项中 DnSpy C# 980/8831→**1008/8767**、
+DnSpy VB 824/10631→**848/10570**，Debugger/Logic 四项完全不变（240/1197、214/1488、66/6147、56/6207）。
+`verify-all`：`hardFail=0 softFail=1 skip=0`（report `baseline/out/verify-20261124-162950.txt`）。
+
+**顺带复核的三条旧记录（避免继续挂账）**：
+- §8.31/§8.37(2) 数组初始化器换行打包**已修**（提交 `e7f58c94c`「Match 2.3 array/collection
+  initializer wrapping」），当时漏记；实测 `[Nullable(new byte[] { 2, 1 })]` 三处样本两侧完全一致。
+- §8.37(1) `in` 调用点**已生效**：Iced 语料 C# 声明/调用点计数两侧相同（`in <小写变量>` 各 3467 处）；
+  当时的「未生效」是 probe 引擎副本过期造成的误判。
+- §8.34 缓存事件委托内联早已修复（见该节）。仍未闭合的只剩 §8.55 的 `checked((IntPtr)x)`：
+  `HexBytes` 2.3 有 84 处 `checked(`、3.2 有 104 处，另有 `(int)` 包裹缺失，待后续处理。

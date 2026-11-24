@@ -3457,3 +3457,28 @@ long→native int 转换。C# 编译器对数组下标的 long 索引正是发�
 **结论**：按 §8.69 判据「若 2.3 更差/风格差异则不对齐」，本项关闭，引擎不动。
 量级参考：DnSpy 语料 C# `checked(` 2.3 有 84 处、3.2 有 104 处（多为 2.3 漏标）；
 `HexBytes` 单类型两侧计数其实相同（各 16 处），差异只在放置位置与 `(int)` 包裹。
+
+### 8.115 引擎仓库分支图谱（2026-11-24 盘点）
+
+`Ayinyue/ILSpy` 共 7 个远端分支，分属三条互不相干的线；本节记录它们的 tip、定位与相互差异，
+供后续选线 / cherry-pick 参考。除注明外，差异均以本地 `feature/ilspy32-upstream-port` HEAD `8e3d0d7`
+为基准做树级 diff（`+` 为对方多出、`-` 为我们多出）。
+
+| 分支 | tip | 时间 / 作者 | 定位 | 与我们的关系 | 树级差异 |
+|---|---|---|---|---|---|
+| `feature/ilspy32-upstream-port` | `8e3d0d7` | 2026-11 momei | **本分支**：v3.2.0 + 桥接 + §8.x 补丁（C# 7.3） | — | — |
+| `ilspyv3-dnSpy` | `016db56f` | 2026-06 ElektroKill | dnSpy 现役引擎（ILSpy v10 系），dnSpy 仓内 engine-only | 对方多 5357 / 我们多 74 | 1578 files，+134k / -421k |
+| `ilspyv3` | `8dc5f01d` | 2026-04 ElektroKill | 上游 ILSpy v10 主线（engine-only + Cmd/TestRunner） | 对方多 5311 / 我们多 74 | 1584 files，+129k / -414k |
+| `ilspyv3-old` | `5380a1d5` | 2022-01 ElektroKill | 冻结的旧移植快照（含 ReadyToRun/PowerShell） | 分叉 | 911 files，+72k / -358k |
+| `ilspyv2` | `04a711db` | 2026-11 momei | 2.3 系引擎延续（NRefactory.VB / WPF），含 VB AST 工作 | 对方多 228 / 我们多 1992 | 1333 files，+64k / -494k |
+| `newdecompiler` | `d5366140` | 2016-07 Siegfried Pammer | 极早期「新反编译器」实验线 | 我们领先 1551 / 落后 0 | 1758 files，+136k / -465k |
+| `master` | `4aafcc179` | （未取到，网络故障） | 旧主线 | 我们领先 1992 / 落后 0 | 未测 |
+
+**要点**：
+- 唯一有现实参考价值的是 `ilspyv3` / `ilspyv3-dnSpy`：语言支持到 C# 14、设置类约 94KB（我们 21KB）、
+  含独立 `Semantics/`、`Metadata/` 模块，且近半年修了 #3671（集合初始化器误收尾部变量）、#3684
+  （accessor 判定）等与我们 §8.x 同类的问题，适合按语义 cherry-pick 参考。
+- `ilspyv3-dnSpy` 比 `ilspyv3` 多 46 个提交，是给 dnSpy 6.6 适配的版本；两条线都裁掉了 WPF/Baml/AddIn，
+  与「保留完整 3.2 结构」的我们相反，集成模型不可直接互换。
+- 其余四条（`ilspyv3-old` / `ilspyv2` / `newdecompiler` / `master`）要么冻结、要么属于另一套 2.3 体系或更老，
+  没有合并价值；merge-base 普遍在 2016–2018 年，硬合并不现实。

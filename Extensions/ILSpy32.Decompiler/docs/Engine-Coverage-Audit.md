@@ -3371,3 +3371,37 @@ return cp >= 768U && (cp <= 879U || (cp >= 1155U && cp <= 1161U) || ... || (cp >
 等两处不再套 `New ...ParseListCallBack(...)`；三份语料的编译诊断集合与
 `realBadFiles`（280/86/97）、VB diffLines（10668/1488/6207）**均无变化**——纯等价改写。
 `Thread` 这类**非委托**的构造调用继续保留（也不该简化）。
+
+### 8.112 C#/VB：显示类「先读后写」的缓存委托字段泄漏成未初始化容器（2026-11-24）
+
+**现象**：`DnSpy.Contracts.TreeView.AsyncNodeProvider.AddNodes_UI(List<TreeNodeData>, int)` 的反编译结果里出现
+```csharp
+AsyncNodeProvider.<>c__DisplayClass14_0 <>c__DisplayClass14_;
+Action action;
+this.UI(<>c__DisplayClass14_.<>9__0 ?? (action = delegate { this.AddNodes_UI(nodes, index + 1); }));
+```
+`<>c__DisplayClass14_` 只有声明、没有任何 `newobj`/赋值，运行到这里必然 NullReferenceException；
+VB 版同病（`Dim __c__DisplayClass14_ As ...` 之后直接 `__c__DisplayClass14_.__9__0`）。
+源码里 `<>9__0` 是编译器为缓存 lambda 生成的**实例字段**，其 `newobj` 容器与 `stfld` 在 IL 里都存在。
+
+**根因**：`DelegateConstruction.TransformDisplayClassUsages.VisitLdObj` 只处理「`initValues` 已有该字段」的情况，
+没有像同类的 `VisitLdFlda` 那样兜底新建局部；而缓存委托的 IL 形态是 `ldfld <>9__0`（读）在前、
+`stfld <>9__0`（写）在后，遍历到读时 `initValues` 为空，于是原样保留；随后 `stfld` 才注册出新局部 `action`，
+两者对不上，容器局部就此泄漏（`stloc = newobj` 已被 `orphanedVariableInits` 删除，声明却留在 `function.Variables`）。
+
+**修法**：`VisitLdObj` 在 `initValues` 未命中时，仿照 `VisitLdFlda`：要求目标命中容器/副本（`MatchesTargetOrCopyLoad`）、
+且字段所属显示类在 `translatedDisplayClasses` 中，然后 `RegisterVariable` 新建局部并登记 `initValues`，把读替换成
+`LdLoc(v)`。后续的缓存写复用同一个局部，语义等价（未写即 null）。
+
+**A/B**：
+- `AsyncNodeProvider` C# 6356→6272 chars、VB 6431→6342 chars；输出变为
+  `Action action; this.UI(action ?? (action = delegate {...}));` / `Dim action2 As Action; Me.UI(If(action2, ...))`，与源码一致。
+- 三语料 `lang-diff-all` 与 §8.111 完全一致（C# 980/8831、240/1197、66/6147；VB 824/10631、214/1488、56/6207），identical/errors 不变。
+- 全量 dump 扫描：修复前先有 `AsyncNodeProvider` 一处残留 `DisplayClass` 引用（C# 与 VB），修复后三语料 0 处。
+- `verify-all`：`hardFail=0 softFail=1 skip=0`（report `baseline/out/verify-20261124-093913.txt`）。
+
+**影响面**：需同时满足 (a) lambda 缓存在**实例**显示类字段（`<>9__N`）、(b) 读指令排在写指令之前。
+静态 `<>c` 单例的缓存委托不受影响（`<>9` 由 cctor 保证非空），语料中其余 `<>c.<>9__N` 形态保持原样。
+
+**风险**：改动只在「原本会泄漏容器访问」的分支上生效（`MatchesTargetOrCopyLoad` + `translatedDisplayClasses` 双重门禁），
+正常已转换路径不变。

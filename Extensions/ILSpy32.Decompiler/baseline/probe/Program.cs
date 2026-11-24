@@ -305,6 +305,12 @@ class Probe {
 					if (samples.Count < 25)
 						samples.Add(type.FullName + " (" + DiffLineCount(a, b) + ")");
 				}
+				var dumpDir = System.Environment.GetEnvironmentVariable("PROBE_DUMP_DIR");
+				if (!string.IsNullOrEmpty(dumpDir)) {
+					var safeName = kv32.Key.Replace(' ', '_').Replace('/', '_') + "__" + type.FullName.Replace('<', '_').Replace('>', '_').Replace('+', '_').Replace('.', '_');
+					File.WriteAllText(Path.Combine(dumpDir, "v32__" + safeName + ".txt"), b ?? "");
+					File.WriteAllText(Path.Combine(dumpDir, "v23__" + safeName + ".txt"), a ?? "");
+				}
 			}
 			Console.WriteLine($"{kv32.Key,-24} types={types} identical={identical} diffLines={diffLines} errors={errors}");
 			foreach (var s in samples)

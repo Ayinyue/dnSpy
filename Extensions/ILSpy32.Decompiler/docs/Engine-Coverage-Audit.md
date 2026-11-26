@@ -3531,3 +3531,19 @@ long→native int 转换。C# 编译器对数组下标的 long 索引正是发�
 子节点类型）。
 
 **验证**：引擎重建通过；`verify-all` `hardFail=0 softFail=1 skip=0`（report `baseline/out/verify-20261126-092941.txt`）。
+
+### 8.119 新增门禁：反编译产物可编译率（语义编译软门）
+
+**动机**：§8.112 的显示类修复产出与 2.3 同款、但不可编译（CS0165）；原门禁只比文本，无法暴露
+「输出改坏了」这类问题。基线 harness 本有 `compile` 模式（Roslyn 逐类型真正语义编译 + 跨文件引用图 +
+噪音归类），本次把它接进 `verify-all`。
+
+**做法**：每个语料先 `baseline dump --impl ilspy32 --lang cs`，再 `baseline compile`；统计
+`realBadFiles`，超过分支基线即 **softFail**。基线值（2026-11-26 实测）：
+DnSpy 126/800（15.8%）、Debugger 31/236（13.1%）、Logic 21/84（25.0%）。
+harness 新增 `IsNullableAttributeNoise`：CS8335/CS8623（手写 Nullable 特性）与涉及 Nullable 的
+CS0592 归入噪声——那是 §8.104 明确选择的 2.3 风格输出，不是缺陷。
+
+**说明与代价**：dump+compile 使门禁增加约 90 秒；当前仍有相当数量真实编译错误（如枚举实参
+CS1503、少量语法错误），属于已知残差，软门只负责「不再变坏」。后续若要压低这些数字，需要单独一轮
+针对 CS1503/语法错误的清理。VB 侧暂未纳入该软门。

@@ -990,3 +990,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File Extensions\ILSpy32.Decompile
 
 `engine-tests`/`bench` 需要 2.3 对照程序集；存在时脚本会设 `PROBE_ILSPY23_DIR` 指向
 `baseline/ilspy23`，不存在则这些模式 SKIP（不影响退出码）。
+
+> 语义编译门禁：`verify-all.ps1` 会对三个语料跑 dump + compile，并校验 `realBadFiles` 不超过分支基线
+> （DnSpy 126 / Debugger 31 / Logic 21）。可访问性、跨文件类型不可见、状态机改名、以及 nullable 保留特性
+> （CS8335/CS8623/相关 CS0592）按噪声过滤。详见 Engine-Coverage-Audit §8.119。

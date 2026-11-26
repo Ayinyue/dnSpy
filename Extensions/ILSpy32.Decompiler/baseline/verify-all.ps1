@@ -86,7 +86,8 @@ if (-not $NoBuild) {
 		@("$extDir\dnSpy.Decompiler.ILSpy32\dnSpy.Decompiler.ILSpy32.csproj", '-c', $Configuration, '-f', 'net11.0-windows'),
 		@("$probeDir\m3probe.csproj", '-c', $Configuration),
 		# engine-tests 需要这个测试程序集；它的 bin 输出不入库，CI 干净环境必须现场构建。
-		@("$probeDir\sp-test\SpTest.csproj", '-c', 'Debug')
+		@("$probeDir\sp-test\SpTest.csproj", '-c', 'Debug'),
+		@("$baseline\Baseline.csproj", '-c', $Configuration)
 	)
 	foreach ($step in $buildSteps) {
 		$proj = $step[0]
@@ -177,6 +178,50 @@ foreach ($proj in @(
 		}
 		if (-not $ok) { Write-Report "FAIL restore $(Split-Path $proj -Leaf)"; $script:hard++ }
 	}
+
+# 语义编译软门（审计 §8.119）：把每个语料的 C# 输出 dump 下来，用 Roslyn 逐类型做真正的
+# 语义编译，统计 realBadFiles；超过本分支基线即 softFail。harness 已把「跨文件类型不可见 /
+# 可访问性 / 状态机改名 / nullable 保留特性」等度量噪声单独归类，不混入 realBadFiles。
+$baselineDll = "$baseline\bin\$Configuration\net11.0\baseline.dll"
+# 基线（2026-11-26 实测）：DnSpy 126/800、Debugger 31/236、Logic 21/84。
+$script:compileLimits = @{
+	'dnSpy.Contracts.DnSpy' = 126
+	'dnSpy.Contracts.Debugger' = 31
+	'dnSpy.Contracts.Logic' = 21
+}
+if (-not (Test-Path $baselineDll)) {
+	Write-Report "FAIL semantic-compile: baseline.dll 未构建"
+	$script:hard++
+} else {
+	foreach ($corpusAsm in @('dnSpy.Contracts.DnSpy', 'dnSpy.Contracts.Debugger', 'dnSpy.Contracts.Logic')) {
+		$swCompile = [System.Diagnostics.Stopwatch]::StartNew()
+		$dumpDir = "$outDir\gate-compile-$corpusAsm-cs"
+		if (Test-Path $dumpDir) { Remove-Item -Recurse -Force $dumpDir }
+		$dumpOut = & $dotnetExe $baselineDll dump --asm "$dnspyBin\$corpusAsm.dll" --impl ilspy32 --lang cs --out $dumpDir 2>&1
+		if ($LASTEXITCODE -ne 0) {
+			Write-Report "FAIL semantic-compile $corpusAsm : dump exit=$LASTEXITCODE"
+			$script:soft++
+			continue
+		}
+		$compileOut = & $dotnetExe $baselineDll compile --dir $dumpDir --lang cs --refs $dnspyBin --out "$dumpDir-report.md" 2>&1
+		$swCompile.Stop()
+		$line = ($compileOut | Where-Object { $_ -match '\[RESULT\] compile' } | Select-Object -Last 1)
+		$filesM = [regex]::Match(($line -join ' '), 'files=(\d+)')
+		$badM = [regex]::Match(($line -join ' '), 'realBadFiles=(\d+)')
+		$files = if ($filesM.Success) { [int]$filesM.Groups[1].Value } else { 0 }
+		$bad = if ($badM.Success) { [int]$badM.Groups[1].Value } else { -1 }
+		$limit = $script:compileLimits[$corpusAsm]
+		if ($bad -lt 0) {
+			Write-Report ("FAIL semantic-compile {0} : 无法解析 RESULT 行 : {1}" -f $corpusAsm, ($line -join ' '))
+			$script:soft++
+		} elseif ($bad -gt $limit) {
+			Write-Report ("FAIL semantic-compile {0} ({1:N0} ms) : realBadFiles={2} > 基线 {3}（files={4}，率 {5:P1}）" -f $corpusAsm, $swCompile.Elapsed.TotalMilliseconds, $bad, $limit, $files, ($bad / [Math]::Max(1, $files)))
+			$script:soft++
+		} else {
+			Write-Report ("PASS semantic-compile {0} ({1:N0} ms) : realBadFiles={2} <= 基线 {3}（files={4}，率 {5:P1}）" -f $corpusAsm, $swCompile.Elapsed.TotalMilliseconds, $bad, $limit, $files, ($bad / [Math]::Max(1, $files)))
+		}
+	}
+}
 
 Write-Report "=== summary: hardFail=$script:hard softFail=$script:soft skip=$script:skip ==="
 Write-Report "report: $report"

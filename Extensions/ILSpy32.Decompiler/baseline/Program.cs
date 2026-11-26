@@ -646,6 +646,16 @@ namespace EngineBaseline {
 		};
 		static bool IsAccessibilityNoise(string id) => accessibilityNoise.Contains(id);
 
+		// dnSpy 2.3-style output prints the compiler-reserved nullable attributes verbatim;
+		// Roslyn rejects their manual use (CS8335/CS8623) and misplacement of them
+		// (CS0592). This is a deliberate fidelity choice, not a decompiler defect.
+		static bool IsNullableAttributeNoise(Microsoft.CodeAnalysis.Diagnostic d)
+		{
+			if (d.Id == "CS8335" || d.Id == "CS8623")
+				return true;
+			return d.Id == "CS0592" && d.GetMessage().IndexOf("Nullable", StringComparison.Ordinal) >= 0;
+		}
+
 		// Compiler-generated names such as "<GetCustomAttributes>d__9" are rewritten to
 		// "_GetCustomAttributes_d__9" because VB cannot name them. The state-machine type itself
 		// is not part of the dump (it is a non-public nested type), so the reference cannot
@@ -889,7 +899,7 @@ namespace EngineBaseline {
 				var inaccessibleBases = CollectInaccessibleBases(errors, text);
 				var inaccessibleFriendNames = CollectInaccessibleFriendNames(errors);
 				bool IsNoise(Microsoft.CodeAnalysis.Diagnostic d) =>
-					IsAccessibilityNoise(d.Id) || IsRenamedStateMachineReference(d) || IsShadowedMemberNoise(d, e, entries) ||
+					IsAccessibilityNoise(d.Id) || IsNullableAttributeNoise(d) || IsRenamedStateMachineReference(d) || IsShadowedMemberNoise(d, e, entries) ||
 					IsInaccessibleFriendCascade(d, inaccessibleFriendNames) ||
 					(inaccessibleBases.Count > 0 && cascadeDiagnostics.Contains(d.Id));
 				bool noiseOnly = errors.All(IsNoise);

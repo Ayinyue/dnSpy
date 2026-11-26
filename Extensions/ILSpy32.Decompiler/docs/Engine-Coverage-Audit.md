@@ -3520,3 +3520,14 @@ long→native int 转换。C# 编译器对数组下标的 long 索引正是发�
 
 **影响**：该变换只影响「非 BeforeFieldInit 类型 + cctor 内对已有初始化器的成员再次赋值」这一组合，
 三语料门禁数字不变；`verify-all` `hardFail=0 softFail=1 skip=0`（report `baseline/out/verify-20261126-084947.txt`）。
+
+### 8.118 审核 P2 清理：比较翻转门禁 + 移除诊断输出（2026-11-26）
+
+**比较翻转防护**：`ReconstructBooleanDisjunctionTransform.Negate` 原先无条件把 `!(a &lt; b)` 翻成 `a &gt;= b`。
+新增 `CanFlipComparison`（对齐 `ExpressionBuilder.LogicNot` 的口径）：提升运算符（三值语义）、浮点比较（NaN）与
+自定义算子（不保证互补算子成对存在）三种情况放弃翻转，退回 `UnaryOperatorExpression(LogicalNot)`。
+
+**诊断清理**：删除 `IntroduceUsingDeclarations.cs` 中的 `DNSPY_ILSPY32_DIAG` 环境变量调试块（往 stderr 打印
+子节点类型）。
+
+**验证**：引擎重建通过；`verify-all` `hardFail=0 softFail=1 skip=0`（report `baseline/out/verify-20261126-092941.txt`）。

@@ -3505,3 +3505,18 @@ long→native int 转换。C# 编译器对数组下标的 long 索引正是发�
 
 **验证**：`dotnet build dnSpy.slnx -c Release -m:1` 0 错误；`verify-all` `hardFail=0 softFail=1 skip=0`
 （report `baseline/out/verify-20261125-004754.txt`），语料数字与合并前一致。
+
+### 8.117 修复：静态属性初始化器提升改为链式，保留前序副作用（2026-11-26）
+
+**问题（审核 P1）**：`ConvertConstructorCallIntoInitializer.HandleStaticFieldInitializers` 把 cctor 里的赋值
+直接覆盖到声明处 `Initializer`，会静默丢掉前一个表达式。样本（字段与自动属性都有初始化器、cctor 又重复赋值）：
+2.3 输出 `public static int P { get; } = T.F(10) = T.F(30);`（两次调用都保留），修复前我们输出 `= T.F(30);`，
+`F(10)` 丢失。同一样本的字段侧两版都是 `A = 5` / `B = 6`（覆盖初始值），属上游既有行为且与 2.3 一致。
+
+**修法**：字段分支维持覆盖语义；属性分支当 `pd.Initializer` 已存在时构造嵌套赋值链
+`oldValue = newRight`（自动属性的 Initializer 是左侧为空的 AssignmentExpression，取 `Right` 作为旧值表达式），
+从而同时保留两次求值。样例修复后：`Q { get; } = T.F(10) = T.F(30);`、`R { get; } = T.F(20) = T.F(40);`，
+与 2.3 完全一致。
+
+**影响**：该变换只影响「非 BeforeFieldInit 类型 + cctor 内对已有初始化器的成员再次赋值」这一组合，
+三语料门禁数字不变；`verify-all` `hardFail=0 softFail=1 skip=0`（report `baseline/out/verify-20261126-084947.txt`）。

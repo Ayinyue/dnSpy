@@ -3566,3 +3566,19 @@ CS1503、少量语法错误），属于已知残差，软门只负责「不再�
 netstandard2.0 引擎组合会互相污染 `project.assets.json`（NETSDK1004/1005）；改为由 slnx 解决方案与
 `build.ps1`（已显式构建两个引擎与扩展）负责构建，publish 只做复制。其 MC1000/RuntimeIdentifiers
 规避在本机 SDK 11 + net11 TFM 下复现不到，暂不引入。
+
+### 8.121 第三方「decompile-type-methods」修复的可借鉴性评估（2026-11-27）
+
+**第三方做了什么**：legacy `DecompileTypeMethods` 只反编译 `info.Methods` 选中的成员（+ 类型声明），
+`DelegateConstruction` 会把局部函数/匿名方法提升到显示类上；不把被引用到的这些提升方法体一起输出，
+结果就是引用缺失、编译报 CS0103。他们加了 `IncludeReachableCompilerGeneratedMethods` 递归收集被选
+方法 IL 引用的编译器生成方法补进集合，并在 `partialTypes` 里跳过 compiler-generated 类型。
+
+**我们是否适用**：宿主确实会用 `DecompilationType.TypeMethods` 三个入口——`AddMembersCodeVM`、
+`EditClassVM`、`EditMethodCodeVM`（后者 `options.Methods.Add(methodToEdit)`）。但我们的
+`CSharpDecompiler32/VBDecompiler32.DecompileTypeMethods` 是「整类型 `DecompilePartial`」：注释已写明
+dnSpy 目前只把类型放进 `info.Types`，`info.Methods` 仅 EditMethod 会带一个方法。整类型输出天然包含所有
+被提升的方法体，因此**不存在第三方修的这种缺失**；代价是 EditMethod 的输出比 legacy 冗长（多出未选中的成员）。
+
+**结论**：思路值得记录，但不直接移植；若将来要让 ILSpy32 支持「只输出选中成员」，应连带去实现成员级
+AST 过滤，并顺手照搬这套「递归纳入被引用的编译器生成方法」的完整性检查（可用 §8.119 语义编译软门验证）。

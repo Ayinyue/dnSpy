@@ -3547,3 +3547,22 @@ CS0592 归入噪声——那是 §8.104 明确选择的 2.3 风格输出，不�
 **说明与代价**：dump+compile 使门禁增加约 90 秒；当前仍有相当数量真实编译错误（如枚举实参
 CS1503、少量语法错误），属于已知残差，软门只负责「不再变坏」。后续若要压低这些数字，需要单独一轮
 针对 CS1503/语法错误的清理。VB 侧暂未纳入该软门。
+
+### 8.120 借鉴第三方快照：卫星资源与 publish 扩展复制（2026-11-27）
+
+**来源**：`D:\Codebase\dnSpyEx\dnSpy-src-20261116`（基于上游 `96000b6fe`，13 个文件改动）。
+其构建侧修复分三类：保留 zh-Hans 卫星资源、MC1000/NETSDK1047 构建规避、把 decompiler 扩展产物复制进
+`dotnet publish` 输出。本分支移植了前两类中仍适用且低风险的部分：
+- `DnSpyCommon.props`：`SatelliteResourceLanguages` 增加 `zh-Hans`（zh-CN 的父文化，且是若干 WPF/WinForms/
+  Roslyn 卫星资源的语言）。
+- `Directory.Build.targets`：从 `GarbageDir` 移除 `zh-Hans`，防止清理掉该目录。
+- `dnSpy.csproj` / `dnSpy-x86.csproj`：新增 `CopyDecompilerExtensionToPublishDir`，把两套反编译器扩展
+  （legacy `dnSpy.Decompiler.ILSpy.x.dll` 与 ILSpy32 `dnSpy.Decompiler.ILSpy32.x.dll`）、引擎 DLL
+  （`ICSharpCode.Decompiler.dll` / `ILSpy32.Decompiler.dll`）、依赖、`*.resources.dll` 与 `debug\*.ex.xml`
+  复制进 publish 目录。验证 `dotnet publish -c Release -r win-x64 -f net11.0-windows dnSpy/dnSpy`：
+  产物含两套扩展与引擎、zh-Hans/zh-CN 卫星程序集、ex.xml。
+
+**未移植及原因**：第三方的 `BuildDecompilerExtension` 会在 app 构建时连带还原/构建扩展，与我们的
+netstandard2.0 引擎组合会互相污染 `project.assets.json`（NETSDK1004/1005）；改为由 slnx 解决方案与
+`build.ps1`（已显式构建两个引擎与扩展）负责构建，publish 只做复制。其 MC1000/RuntimeIdentifiers
+规避在本机 SDK 11 + net11 TFM 下复现不到，暂不引入。

@@ -22,7 +22,9 @@
     <CopyLocalLockFileAssemblies Condition=" '$(IsDotNet)' == 'true' ">true</CopyLocalLockFileAssemblies>
     <!-- If this gets updated, also update .github/workflows/build.yml and build.ps1 -->
     <DnSpyRuntimeIdentifiers>win-x86;win-x64</DnSpyRuntimeIdentifiers>
-    <SatelliteResourceLanguages>cs;de;es;es-ES;fa;fr;hu;it;pt-BR;pt-PT;ru;tr;uk;zh-CN;vi</SatelliteResourceLanguages>
+    <!-- zh-Hans is kept because it is the parent culture of zh-CN and also the language
+         of several WPF/WinForms/Roslyn satellite assemblies. -->
+    <SatelliteResourceLanguages>cs;de;es;es-ES;fa;fr;hu;it;pt-BR;pt-PT;ru;tr;uk;zh-CN;zh-Hans;vi</SatelliteResourceLanguages>
 
     <!-- Allow compiling for windows on non-windows platforms -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>

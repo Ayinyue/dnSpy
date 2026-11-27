@@ -48,4 +48,57 @@
     <ProjectReference Include="..\dnSpy\dnSpy.csproj" />
   </ItemGroup>
 
+  <!--
+    Same logic as CopyDecompilerExtensionToPublishDir in dnSpy.csproj. That target only runs
+    when the dnSpy project itself is published; publishing dnSpy-x86 only Builds it, so without
+    this copy the x86 package has no extension (*.x.dll) at all.
+    $(ExtBaseDir) is the dnSpy project's output dir, since all extensions write there.
+  -->
+  <Target Name="CopyDecompilerExtensionToPublishDir" AfterTargets="Publish">
+    <PropertyGroup>
+      <RIDSubDir Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)\</RIDSubDir>
+      <RIDSubDir Condition="'$(RuntimeIdentifier)' == ''"></RIDSubDir>
+      <ExtBaseDir>$(MSBuildProjectDirectory)\..\dnSpy\bin\$(Configuration)\$(TargetFramework)\</ExtBaseDir>
+      <ExtSourceDir>$(ExtBaseDir)$(RIDSubDir)</ExtSourceDir>
+      <DecompilerExtDir>$(MSBuildProjectDirectory)\..\..\Extensions\ILSpy.Decompiler\</DecompilerExtDir>
+      <DecompilerBinDir>$(DecompilerExtDir)ICSharpCode.Decompiler\ICSharpCode.Decompiler\bin\$(Configuration)\$(TargetFramework)\$(RIDSubDir)</DecompilerBinDir>
+      <CoreBinDir>$(DecompilerExtDir)dnSpy.Decompiler.ILSpy.Core\bin\$(Configuration)\$(TargetFramework)\$(RIDSubDir)</CoreBinDir>
+      <NRefactoryBinDir>$(DecompilerExtDir)NRefactory\ICSharpCode.NRefactory\bin\$(Configuration)\$(TargetFramework)\$(RIDSubDir)</NRefactoryBinDir>
+      <NRefactoryCSharpBinDir>$(DecompilerExtDir)NRefactory\ICSharpCode.NRefactory.CSharp\bin\$(Configuration)\$(TargetFramework)\$(RIDSubDir)</NRefactoryCSharpBinDir>
+      <NRefactoryVBBinDir>$(DecompilerExtDir)ICSharpCode.Decompiler\NRefactory.VB\ICSharpCode.NRefactory.VB\bin\$(Configuration)\$(TargetFramework)\$(RIDSubDir)</NRefactoryVBBinDir>
+      <Ilspy32EngineDir>$(MSBuildProjectDirectory)\..\..\Extensions\ILSpy32.Decompiler\ICSharpCode.Decompiler\ICSharpCode.Decompiler\bin\$(Configuration)\netstandard2.0\</Ilspy32EngineDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <ExtensionBaseFiles Include="$(ExtBaseDir)*.x.dll" />
+      <ExtensionBaseFiles Include="$(ExtBaseDir)*.x.deps.json" />
+      <ExtensionSatelliteFiles Include="$(ExtBaseDir)**\dnSpy.*.x.resources.dll" />
+      <ExtensionSatelliteFiles Remove="$(ExtBaseDir)win-x86\**\dnSpy.*.x.resources.dll" />
+      <ExtensionSatelliteFiles Remove="$(ExtBaseDir)win-x64\**\dnSpy.*.x.resources.dll" />
+      <!-- Satellites of the RID-specific extension build (fresh builds only have these). -->
+      <ExtensionSatelliteFiles Include="$(ExtSourceDir)**\dnSpy.*.x.resources.dll" />
+      <ExtensionBaseFiles Include="$(ExtBaseDir)dnSpy.Contracts.Debugger.DotNet.CorDebug.dll" />
+      <ExtensionBaseFiles Include="$(ExtBaseDir)dnSpy.Contracts.Debugger.DotNet.Mono.dll" />
+      <ExtensionBaseFiles Include="$(ExtBaseDir)dnSpy.Debugger.DotNet.Interpreter.dll" />
+      <ExtensionBaseFiles Include="$(ExtBaseDir)Microsoft.CodeAnalysis.CSharp.Scripting.dll" />
+      <ExtensionBaseFiles Include="$(ExtBaseDir)Microsoft.Diagnostics.Runtime.dll" />
+      <ExtensionBaseFiles Include="$(ExtBaseDir)Mono.Debugger.Soft.dll" />
+      <ExtensionBaseFiles Include="$(ExtBaseDir)ICSharpCode.Decompiler.dll" />
+      <ExtensionBaseFiles Include="$(ExtBaseDir)ILSpy32.Decompiler.dll" />
+      <ExtensionDebugFiles Include="$(ExtBaseDir)debug\**\*.ex.xml" />
+      <ExtensionDebugFiles Include="$(ExtSourceDir)debug\**\*.ex.xml" />
+      <ExtensionRidFiles Include="$(ExtSourceDir)*.x.dll" />
+      <ExtensionRidFiles Include="$(ExtSourceDir)*.x.deps.json" />
+      <ExtensionRidFiles Include="$(DecompilerBinDir)ICSharpCode.Decompiler.dll" />
+      <ExtensionRidFiles Include="$(CoreBinDir)dnSpy.Decompiler.ILSpy.Core.dll" />
+      <ExtensionRidFiles Include="$(NRefactoryBinDir)ICSharpCode.NRefactory.dll" />
+      <ExtensionRidFiles Include="$(NRefactoryCSharpBinDir)ICSharpCode.NRefactory.CSharp.dll" />
+      <ExtensionRidFiles Include="$(NRefactoryVBBinDir)ICSharpCode.NRefactory.VB.dll" />
+      <ExtensionRidFiles Include="$(Ilspy32EngineDir)ILSpy32.Decompiler.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ExtensionBaseFiles)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="false" Condition="Exists('%(Identity)')" />
+    <Copy SourceFiles="@(ExtensionRidFiles)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="false" Condition="Exists('%(Identity)')" />
+    <Copy SourceFiles="@(ExtensionSatelliteFiles)" DestinationFolder="$(PublishDir)%(RecursiveDir)" SkipUnchangedFiles="false" Condition="Exists('%(Identity)')" />
+    <Copy SourceFiles="@(ExtensionDebugFiles)" DestinationFolder="$(PublishDir)debug\%(RecursiveDir)" SkipUnchangedFiles="false" Condition="Exists('%(Identity)')" />
+  </Target>
+
 </Project>
